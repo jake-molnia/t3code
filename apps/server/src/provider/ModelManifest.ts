@@ -295,7 +295,7 @@ export function manifestDefaultModel(
 
 /**
  * Moves `isDefault` to the manifest's chat default when the catalog carries
- * it. Providers that learn their default from the runtime (Antigravity takes
+ * it. Providers that learn their default from the runtime (ACP takes
  * Google's current model) can be overridden here without a release. Aliases
  * that pointed at the old default move with the flag so the shared
  * "provider default" alias keeps resolving.

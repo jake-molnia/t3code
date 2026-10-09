@@ -82,15 +82,9 @@ describe("RPC authorization scopes", () => {
     );
   });
 
-  it("separates ACP Registry discovery from provisioning", () => {
+  it("separates ACP Registry discovery from account authorization", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.serverSearchAcpRegistry)).toBe(
       AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverPrepareAcpRegistryAgent)).toBe(
-      AuthProvidersManageScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverUninstallAcpRegistryManagedBinary)).toBe(
-      AuthProvidersManageScope,
     );
     expect(requiredScopeForRpcMethod(WS_METHODS.serverAcceptAcpRegistryUrlAuth)).toBe(
       AuthProvidersManageScope,

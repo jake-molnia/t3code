@@ -90,7 +90,7 @@ describe("classifyModels", () => {
       ],
     );
   });
-  it.each(["codex", "antigravity"])(
+  it.each(["codex", "customDriver"])(
     "keeps newly discovered %s models current when the manifest has no catalog",
     (driverKind) => {
       const models = [model({ slug: "new-release", isLegacy: true })];
@@ -124,12 +124,12 @@ describe("applyManifestDefault", () => {
     );
   });
   it("moves the default flag and its aliases to the manifest's chat default", () => {
-    const driver = ProviderDriverKind.make("antigravity");
+    const driver = ProviderDriverKind.make("customDriver");
     const manifest: ModelManifest.ModelManifestData = {
       version: 1,
       currentModels: {},
       providers: {
-        antigravity: {
+        customDriver: {
           defaults: { chat: "gemini-new" },
           profiles: {},
           models: [{ slug: "gemini-new", name: "New", status: "current" }],
@@ -137,12 +137,12 @@ describe("applyManifestDefault", () => {
       },
     };
     const models = [
-      model({ slug: "gemini-old", isDefault: true, aliases: ["antigravity-default"] }),
+      model({ slug: "gemini-old", isDefault: true, aliases: ["runtime-default"] }),
       model({ slug: "gemini-new" }),
     ];
     assert.deepStrictEqual(ModelManifest.applyManifestDefault(models, manifest, driver), [
       model({ slug: "gemini-old" }),
-      model({ slug: "gemini-new", isDefault: true, aliases: ["antigravity-default"] }),
+      model({ slug: "gemini-new", isDefault: true, aliases: ["runtime-default"] }),
     ]);
     // The account does not offer the manifest default: keep the runtime's choice.
     assert.deepStrictEqual(

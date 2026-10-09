@@ -1,0 +1,77 @@
+import * as C from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import * as WorkspaceRouting from "./WorkspaceRouting.ts";
+
+export const layer = Layer.effect(
+  VcsStatusBroadcaster.VcsStatusBroadcaster,
+  Effect.gen(function* () {
+    const routes = yield* WorkspaceRouting.WorkspaceRouting;
+    const cache = new Map<string, C.VcsStatusResult>();
+    const failure = (cwd: string) => (cause: unknown) =>
+      new C.GitCommandError({
+        operation: "remote.status",
+        cwd,
+        command: "remote",
+        detail: "Sandbox Git status is unavailable.",
+        cause,
+      });
+    const observed = (cwd: string) =>
+      Effect.gen(function* () {
+        const raw = yield* routes.observeCall({ cwd, method: "git.status", input: {} });
+        if (raw === null) return null;
+        const status = yield* Schema.decodeUnknownEffect(Schema.toCodecJson(C.VcsStatusResult))(
+          raw,
+        );
+        cache.set(cwd, status);
+        return status;
+      }).pipe(Effect.mapError(failure(cwd)));
+    const refresh = (cwd: string) =>
+      Effect.gen(function* () {
+        const current = (yield* observed(cwd)) ?? cache.get(cwd);
+        if (!current)
+          return yield* failure(cwd)("Workspace has no running execution and no cached status.");
+        return current;
+      });
+    return VcsStatusBroadcaster.VcsStatusBroadcaster.of({
+      getStatus: (input) =>
+        routes.call({ cwd: input.cwd, method: "git.status", input }).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.toCodecJson(C.VcsStatusResult))),
+          Effect.tap((status) => Effect.sync(() => cache.set(input.cwd, status))),
+          Effect.mapError(failure(input.cwd)),
+        ),
+      refreshStatus: refresh,
+      refreshLocalStatus: refresh,
+      refreshPullRequestStatus: refresh,
+      streamStatus: (input) =>
+        Stream.callback<C.VcsStatusStreamEvent, C.GitCommandError>((queue) =>
+          Effect.gen(function* () {
+            let previous = "";
+            yield* Effect.forever(
+              Effect.gen(function* () {
+                const status = (yield* observed(input.cwd)) ?? cache.get(input.cwd);
+                if (status) {
+                  const encoded = yield* Schema.encodeEffect(
+                    Schema.fromJsonString(C.VcsStatusResult),
+                  )(status);
+                  if (encoded !== previous) {
+                    previous = encoded;
+                    yield* Queue.offer(queue, { _tag: "snapshot", local: status, remote: status });
+                  }
+                }
+                yield* Effect.sleep("2 seconds");
+              }),
+            ).pipe(
+              Effect.mapError(failure(input.cwd)),
+              Effect.catchCause((cause) => Queue.failCause(queue, cause)),
+              Effect.forkScoped,
+            );
+          }),
+        ),
+    });
+  }),
+);

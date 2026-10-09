@@ -1,3 +1,4 @@
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProjectId } from "@t3tools/contracts";
@@ -151,6 +152,7 @@ const layerRuntime = (dbPath: string) => {
         normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
       }),
     ),
+    Layer.provide(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
     Layer.provide(McpSessionRegistryTestkit.layer),
     Layer.provideMerge(SqlitePersistence.layerFromPath(dbPath)),
     Layer.provide(layerCheckpointStore),

@@ -1,3 +1,4 @@
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -60,6 +61,7 @@ const modelSelection = {
 const layerVcsDriverRegistryTest = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProcess.layer),
   Layer.provide(layerServerConfig),
+  Layer.provide(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
   Layer.provide(layerPlatformTest),
 );
 
@@ -135,6 +137,7 @@ const layerTest = Layer.mergeAll(RuntimeLayer.layer, RuntimeLayer.layerEventSink
   Layer.provide(layerServerConfig),
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
   Layer.provide(layerPlatformTest),
 );
 

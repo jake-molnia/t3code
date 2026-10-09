@@ -22,6 +22,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import type { ExecutionEvent } from "../../../../packages/contracts/src/execution.ts";
+import * as ExecutionBindings from "../agentRuntime/Bindings.ts";
 import { replayAndBufferProjectedLiveEvents } from "./LiveStreamBudget.ts";
 import type { UnsequencedProjectEvent } from "../persistence/OrchestrationEventStore.ts";
 import { projectDomainEventForWire } from "./WireProjection.ts";
@@ -72,17 +74,20 @@ export type EventSinkV2Error = typeof EventSinkV2Error.Type;
  */
 export interface EventSinkV2Shape {
   readonly write: (input: {
+    readonly executionDelivery?: ExecutionEvent;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, EventSinkV2Error>;
   readonly writeWithEffects: (input: {
+    readonly executionDelivery?: ExecutionEvent;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, EventSinkV2Error>;
   readonly writeIfRunCurrent: (input: {
+    readonly executionDelivery?: ExecutionEvent;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly threadId: ThreadId;
@@ -105,6 +110,7 @@ export interface EventSinkV2Shape {
    * a newer attempt that already claimed the thread.
    */
   readonly writeIfProviderThreadOwner: (input: {
+    readonly executionDelivery?: ExecutionEvent;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly providerThreadId: ProviderThreadId;
@@ -331,9 +337,22 @@ const layerBase: Layer.Layer<
 
     const applyStoredEvents = (storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>) =>
       Effect.gen(function* () {
-        yield* Effect.forEach(storedEvents, (stored) => projectionStore.apply(stored.event), {
-          concurrency: 1,
-        });
+        yield* Effect.forEach(
+          storedEvents,
+          (stored) =>
+            projectionStore
+              .apply(stored.event)
+              .pipe(
+                Effect.andThen(
+                  ExecutionBindings.apply(stored.event).pipe(
+                    Effect.provideService(SqlClient.SqlClient, sql),
+                  ),
+                ),
+              ),
+          {
+            concurrency: 1,
+          },
+        );
         const sequence = storedEvents.at(-1)?.sequence;
         if (sequence !== undefined) {
           const now = DateTime.formatIso(yield* DateTime.now);
@@ -359,6 +378,27 @@ const layerBase: Layer.Layer<
         }
       });
 
+    const received = (delivery: ExecutionEvent | undefined) =>
+      delivery === undefined
+        ? Effect.succeed(false)
+        : ExecutionBindings.cursor(
+            delivery.identity.workspaceId,
+            delivery.identity.incarnation,
+            delivery.sessionId,
+          ).pipe(
+            Effect.map((sequence) => sequence >= delivery.sequence),
+            Effect.provideService(SqlClient.SqlClient, sql),
+          );
+    const acknowledge = (delivery: ExecutionEvent | undefined) =>
+      delivery === undefined
+        ? Effect.void
+        : ExecutionBindings.acknowledge(
+            delivery.identity.workspaceId,
+            delivery.identity.incarnation,
+            delivery.sessionId,
+            delivery.sequence,
+          ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+
     const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (
       input: Parameters<EventSinkV2Shape["writeWithEffects"]>[0],
     ) {
@@ -370,6 +410,7 @@ const layerBase: Layer.Layer<
 
       return yield* commitThenPublish(
         Effect.gen(function* () {
+          if (yield* received(input.executionDelivery)) return [];
           const normalized = yield* normalizeEvents(
             input.guardPendingUserInputCancellations === true
               ? yield* guardUserInputCancellations(input.events)
@@ -380,6 +421,7 @@ const layerBase: Layer.Layer<
             events: normalized,
           });
           yield* applyStoredEvents(committed);
+          yield* acknowledge(input.executionDelivery);
           yield* effectOutbox.enqueue(input.effects);
           return committed;
         }),
@@ -404,6 +446,8 @@ const layerBase: Layer.Layer<
 
         return yield* commitThenPublish(
           Effect.gen(function* () {
+            if (yield* received(input.executionDelivery))
+              return { committed: false as const, storedEvents: [] };
             const rows = yield* sql<{
               readonly status: string;
               readonly active_attempt_id: string | null;
@@ -438,6 +482,7 @@ const layerBase: Layer.Layer<
               events: normalized,
             });
             yield* applyStoredEvents(storedEvents);
+            yield* acknowledge(input.executionDelivery);
             yield* effectOutbox.enqueue(input.effects ?? []);
             return { committed: true as const, storedEvents };
           }),
@@ -467,6 +512,8 @@ const layerBase: Layer.Layer<
 
       return yield* commitThenPublish(
         Effect.gen(function* () {
+          if (yield* received(input.executionDelivery))
+            return { committed: false as const, storedEvents: [] };
           const rows = yield* sql<{
             readonly active_attempt_id: string | null;
             readonly last_run_ordinal: number | null;
@@ -503,6 +550,7 @@ const layerBase: Layer.Layer<
             events: normalized,
           });
           yield* applyStoredEvents(storedEvents);
+          yield* acknowledge(input.executionDelivery);
           return { committed: true as const, storedEvents };
         }),
         (result) => (result.committed ? publishStoredEvents(result.storedEvents) : Effect.void),

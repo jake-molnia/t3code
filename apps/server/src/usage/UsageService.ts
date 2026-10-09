@@ -9,7 +9,7 @@
  * scans only reparse files that changed, and a file that merely grew resumes
  * from its cached parse position so only the appended bytes are read.
  * OpenCode's SQLite reader queries the live database each scan so WAL writes
- * remain visible. Antigravity databases are memoised in memory while the
+ * remain visible. Native databases are memoised in memory while the
  * database and its WAL keep the same `(size, mtime, ctime)`.
  *
  * Cursor's account API is slow, so its source answers from a cache and marks
@@ -38,7 +38,6 @@ import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hos
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -57,10 +56,8 @@ import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
-import { resolveAntigravityInstanceDirectories } from "../provider/antigravityAuthSupport.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { readOpenCodeUsage } from "./opencodeUsageReader.ts";
-import { makeAntigravityUsageCache, readAntigravityUsage } from "./antigravityUsageReader.ts";
 import {
   CURSOR_ACCOUNT_CACHE_FILE_NAME,
   CURSOR_ACCOUNT_TTL_MS,
@@ -209,7 +206,6 @@ const layerTest = Layer.succeed(
 );
 
 export const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
@@ -220,7 +216,6 @@ export const make = Effect.gen(function* () {
   const cursorAccountReader = yield* CursorUsageReader.CursorAccountReader;
 
   const fileCache: ScanCache = new Map();
-  const antigravityCache = makeAntigravityUsageCache();
   const sourceCache = new Map<string, typeof CachedSource.Type>();
   let cacheDirty = false;
   /** Cursor account caches by credential source. */
@@ -866,69 +861,6 @@ export const make = Effect.gen(function* () {
       );
     });
 
-    const antigravity = Effect.gen(function* () {
-      const antigravityRoots = yield* envRoots("ANTIGRAVITY_DATA_DIR", [
-        ...["antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup"].map((name) =>
-          path.join(home, ".gemini", name),
-        ),
-        path.join(home, ".config", "antigravity"),
-      ]);
-      for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
-        if (instance.driver === "antigravity") {
-          const directories = yield* resolveAntigravityInstanceDirectories(
-            config.stateDir,
-            ProviderInstanceId.make(instanceId),
-          ).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
-            Effect.provideService(Path.Path, path),
-            Effect.mapError(
-              (cause) =>
-                new UsageReadError({
-                  reason: "scanFailed",
-                  detail: "Antigravity profile directory could not be resolved.",
-                  cause,
-                }),
-            ),
-          );
-          antigravityRoots.push(path.join(directories.profile, "antigravity-acp"));
-        }
-      }
-      const antigravityDirs = new Set<string>();
-      for (const root of antigravityRoots) {
-        const resolvedRoot = yield* fileSystem
-          .realPath(root)
-          .pipe(Effect.orElseSucceed(() => root));
-        const nested = path.join(resolvedRoot, "conversations");
-        const dir = (yield* fileSystem
-          .exists(nested)
-          .pipe(Effect.catchCause(() => Effect.succeed(false))))
-          ? nested
-          : resolvedRoot;
-        antigravityDirs.add(yield* fileSystem.realPath(dir).pipe(Effect.orElseSucceed(() => dir)));
-      }
-      const result = yield* Effect.promise(() =>
-        readAntigravityUsage([...antigravityDirs], windowStartMs, antigravityCache),
-      );
-      const scanned: ScannedDir[] = [];
-      for (const dir of antigravityDirs) {
-        const exists = yield* fileSystem
-          .exists(dir)
-          .pipe(Effect.catchCause(() => Effect.succeed(false)));
-        const failed = result.errors.some(
-          (error) => error === dir || error.startsWith(`${dir}${path.sep}`),
-        );
-        scanned.push({
-          provider: "antigravity",
-          dir,
-          volumeId: yield* Effect.promise(() => readDirectoryVolumeId(dir)),
-          files: !exists && !failed ? null : result.files.filter((file) => file.root === dir),
-          status: failed ? "partial" : "ok",
-          ...(failed ? { message: "Some Antigravity history could not be read." } : {}),
-        });
-      }
-      return scanned;
-    });
-
     const cursor = Effect.gen(function* () {
       const cursorUserHome =
         (platform === "win32" ? hostEnvironment["USERPROFILE"] : hostEnvironment["HOME"]) || home;
@@ -987,21 +919,11 @@ export const make = Effect.gen(function* () {
     // Independent sources scan together. Transcript directories go one at a
     // time, so open files stay at `TRANSCRIPT_READ_CONCURRENCY`. The result
     // keeps this order, since aggregation keeps the first copy of a duplicate.
-    const [transcripts, openCodeDirs, antigravityDirs, cursorDirs] = yield* Effect.all(
-      [
-        Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs)),
-        openCode,
-        antigravity,
-        cursor,
-      ],
+    const [transcripts, openCodeDirs, cursorDirs] = yield* Effect.all(
+      [Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs)), openCode, cursor],
       { concurrency: "unbounded" },
     );
-    const scanned: readonly ScannedDir[] = [
-      ...transcripts,
-      ...openCodeDirs,
-      ...antigravityDirs,
-      ...cursorDirs,
-    ];
+    const scanned: readonly ScannedDir[] = [...transcripts, ...openCodeDirs, ...cursorDirs];
     return scanned;
   });
 

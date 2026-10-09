@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Base64 from "effect/encoding/Base64";
@@ -59,11 +59,11 @@ export const cascadeRebaseStack = Effect.fn("cascadeRebaseStack")(function* (inp
 }) {
   const api = yield* GitHubApi.GitHubApi;
   const process = yield* VcsProcess.VcsProcess;
-  const fileSystem = yield* FileSystem.FileSystem;
+  const repositoryFiles = yield* RepositoryFiles.RepositoryFiles;
   const { token } = yield* api.credential(input.host);
   const first = input.layers[0];
   if (first === undefined) return 0;
-  const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-stack-rebase-" }).pipe(
+  const directory = yield* repositoryFiles.temporaryDirectory.pipe(
     Effect.mapError(
       (cause) =>
         new GitHubStackRebaseGitError({

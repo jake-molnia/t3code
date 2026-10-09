@@ -1,3 +1,14 @@
+import * as Deferred from "effect/Deferred";
+import * as AgentRuntime from "../agentRuntime/RuntimeClient.ts";
+import {
+  closeRemoteProviderSession,
+  abortRemoteProviderSessionOpen,
+  isRemoteProviderSession,
+  remoteEventEnvelope,
+  ackRemoteEvent,
+  awaitRemoteTerminal,
+  completeRemoteTerminal,
+} from "../execution/RemoteProviderAdapter.ts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
@@ -165,6 +176,7 @@ export interface ProviderSessionManagerV2Shape {
     readonly resumeFromSession?: OrchestrationV2ProviderSession;
     readonly initialNativeThreadId?: string;
     readonly initialProviderItemIdentityVersion?: 2;
+    readonly deferEventPump?: boolean;
   }) => Effect.Effect<ProviderAdapterV2SessionRuntime, ProviderSessionManagerV2Error>;
   readonly get: (
     providerSessionId: ProviderSessionId,
@@ -200,6 +212,7 @@ export class ProviderSessionManagerV2 extends Context.Service<
 >()("t3/orchestration-v2/ProviderSessionManager/ProviderSessionManagerV2") {}
 
 interface LiveSessionEntry {
+  readonly eventPumpReady: Deferred.Deferred<void>;
   readonly attachedThreadIds: ReadonlySet<ThreadId>;
   readonly loadedProviderThreadKeyByThread: ReadonlyMap<ThreadId, string>;
   /**
@@ -392,6 +405,9 @@ export const layerWithOptions = (
         },
       );
       const layerScope = yield* Effect.scope;
+      const remoteExecution = Option.isSome(
+        yield* Effect.serviceOption(AgentRuntime.RuntimeClient),
+      );
       // Ctrl+C, or a stop that signals the whole process group, reaches the
       // provider CLIs with the server. They report their own background work
       // stopped before shutdown captures restart continuations, so provider
@@ -962,10 +978,27 @@ export const layerWithOptions = (
                       input.detail ?? `Provider session released: ${input.reason}.`,
                     );
                   }
+                  if (input.reason !== "server_shutdown")
+                    yield* closeRemoteProviderSession(input.providerSessionId).pipe(
+                      Effect.onError(() =>
+                        Ref.update(sessions, (current) => {
+                          const key = sessionKey(input.providerSessionId);
+                          if (current.has(key)) return current;
+                          const restored = new Map(current);
+                          restored.set(key, entry);
+                          return restored;
+                        }),
+                      ),
+                    );
                   const closeExit = yield* closeScopeWithin(entry.scope, {
                     providerSessionId: input.providerSessionId,
                     reason: input.reason,
                   });
+                  if (
+                    input.reason === "server_shutdown" &&
+                    isRemoteProviderSession(input.providerSessionId)
+                  )
+                    return;
                   const records = {
                     entry,
                     reason: input.reason,
@@ -997,40 +1030,44 @@ export const layerWithOptions = (
             Option.match(entry, {
               onNone: () => Effect.void,
               onSome: (entry) =>
-                // Revoke every credential this session recorded, including for
-                // threads that detached without re-attaching: the provider
-                // process is gone, so nothing holds them anymore. Skip threads
-                // a live replacement session took over, since credential reuse
-                // means the replacement may hold this very credential.
-                Ref.get(sessions).pipe(
-                  Effect.flatMap((current) =>
-                    Effect.forEach(
-                      entry.mcpCredentialIdByThread,
-                      ([threadId, mcpCredentialId]) => {
-                        // Id-sensitive: a stale record for the same thread but
-                        // a DIFFERENT credential (left behind by an old session
-                        // the thread rotated away from) must not veto revoking
-                        // this session's own credential, or it leaks forever.
-                        // A reservation means an in-flight open is configuring
-                        // a provider process with this credential right now;
-                        // revoking it here would strand that process (eager
-                        // adapters cannot pick up a rotated token).
-                        const heldElsewhere =
-                          isMcpCredentialReserved(threadId, mcpCredentialId) ||
-                          Array.from(current.values()).some(
-                            (other) =>
-                              other !== entry &&
-                              (other.attachedThreadIds.has(threadId) ||
-                                other.mcpCredentialIdByThread.get(threadId) === mcpCredentialId),
-                          );
-                        return heldElsewhere
-                          ? Effect.void
-                          : clearMcpSession(threadId, mcpCredentialId);
-                      },
-                      { discard: true },
+                input.reason === "server_shutdown" &&
+                isRemoteProviderSession(input.providerSessionId)
+                  ? Effect.void
+                  : // Revoke every credential this session recorded, including for
+                    // threads that detached without re-attaching: the provider
+                    // process is gone, so nothing holds them anymore. Skip threads
+                    // a live replacement session took over, since credential reuse
+                    // means the replacement may hold this very credential.
+                    Ref.get(sessions).pipe(
+                      Effect.flatMap((current) =>
+                        Effect.forEach(
+                          entry.mcpCredentialIdByThread,
+                          ([threadId, mcpCredentialId]) => {
+                            // Id-sensitive: a stale record for the same thread but
+                            // a DIFFERENT credential (left behind by an old session
+                            // the thread rotated away from) must not veto revoking
+                            // this session's own credential, or it leaks forever.
+                            // A reservation means an in-flight open is configuring
+                            // a provider process with this credential right now;
+                            // revoking it here would strand that process (eager
+                            // adapters cannot pick up a rotated token).
+                            const heldElsewhere =
+                              isMcpCredentialReserved(threadId, mcpCredentialId) ||
+                              Array.from(current.values()).some(
+                                (other) =>
+                                  other !== entry &&
+                                  (other.attachedThreadIds.has(threadId) ||
+                                    other.mcpCredentialIdByThread.get(threadId) ===
+                                      mcpCredentialId),
+                              );
+                            return heldElsewhere
+                              ? Effect.void
+                              : clearMcpSession(threadId, mcpCredentialId);
+                          },
+                          { discard: true },
+                        ),
+                      ),
                     ),
-                  ),
-                ),
             }),
         ).pipe(
           Effect.catchCause((cause) =>
@@ -1670,9 +1707,12 @@ export const layerWithOptions = (
         eventSubscribers: Ref.Ref<
           ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
         >,
+        eventPumpReady: Deferred.Deferred<void>,
       ): ProviderAdapterV2SessionRuntime => {
         const providerSessionId = runtime.providerSessionId;
-        const subscribeEvents = makeEventSubscription(eventSubscribers);
+        const subscribeEvents = makeEventSubscription(eventSubscribers).pipe(
+          Effect.tap(() => Deferred.succeed(eventPumpReady, undefined)),
+        );
         // Every provider's turn operations pass through here, so this is where they are
         // counted. Only turn starts are timed: until the provider accepts the turn.
         const turnMetrics = (operation: string, model?: string) =>
@@ -1878,7 +1918,9 @@ export const layerWithOptions = (
 
       const startEventPump = (entry: LiveSessionEntry) => {
         let stoppedByProvider = false;
-        return entry.runtime.events.pipe(
+        return Stream.unwrap(
+          Deferred.await(entry.eventPumpReady).pipe(Effect.as(entry.runtime.events)),
+        ).pipe(
           Stream.runForEach((event) => {
             if (shutdownSignal.received) return Effect.void;
             if (
@@ -1936,6 +1978,59 @@ export const layerWithOptions = (
                     return;
                   }
                   yield* publishToSubscribers(entry.eventSubscribers, { type: "event", event });
+                  const delivery = remoteEventEnvelope(event);
+                  if (event.type === "turn.terminal" && delivery) {
+                    if ((yield* Ref.get(entry.eventSubscribers)).size === 0) {
+                      let finalized = false;
+                      for (const threadId of entry.attachedThreadIds) {
+                        const projection = yield* projectionStore
+                          .getThreadRecords(threadId, ["runs"])
+                          .pipe(
+                            Effect.mapError(
+                              (cause) =>
+                                new ProviderAdapterEventStreamError({
+                                  driver: entry.runtime.driver,
+                                  providerSessionId: entry.runtime.providerSessionId,
+                                  cause,
+                                }),
+                            ),
+                          );
+                        finalized ||= projection.runs.some(
+                          (run) =>
+                            run.providerThreadId === event.providerThreadId &&
+                            run.ordinal === event.runOrdinal &&
+                            [
+                              "waiting",
+                              "completed",
+                              "failed",
+                              "cancelled",
+                              "interrupted",
+                              "rolled_back",
+                            ].includes(run.status),
+                        );
+                      }
+                      if (!finalized)
+                        return yield* new ProviderAdapterEventStreamError({
+                          driver: entry.runtime.driver,
+                          providerSessionId: entry.runtime.providerSessionId,
+                          cause: "Remote terminal has no active consumer or durable finalization",
+                        });
+                      yield* eventSink.write({ events: [], executionDelivery: delivery }).pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new ProviderAdapterEventStreamError({
+                              driver: entry.runtime.driver,
+                              providerSessionId: entry.runtime.providerSessionId,
+                              cause,
+                            }),
+                        ),
+                      );
+                      yield* completeRemoteTerminal(event);
+                      yield* ackRemoteEvent(event);
+                    }
+                    // Do not let a later runless callback advance the cursor past unfinished terminal semantics.
+                    yield* awaitRemoteTerminal(event);
+                  }
                 }),
               ),
             );
@@ -1991,6 +2086,7 @@ export const layerWithOptions = (
       // closing within the time box.
       const sessionScopes = yield* Scope.make("parallel");
       const shutdown = Effect.gen(function* () {
+        shutdownSignal.received = true;
         const activeSessions = [...(yield* Ref.get(sessions)).values()];
         yield* Effect.forEach(
           activeSessions,
@@ -2022,7 +2118,7 @@ export const layerWithOptions = (
             input.providerSessionId,
             Effect.gen(function* () {
               const cwd = input.runtimePolicy.cwd;
-              if (cwd !== null) {
+              if (cwd !== null && !remoteExecution) {
                 const workspaceIsDirectory = yield* fileSystem.stat(cwd).pipe(
                   Effect.map((stat) => stat.type === "Directory"),
                   Effect.catch((error) => Effect.succeed(error.reason._tag !== "NotFound")),
@@ -2112,6 +2208,13 @@ export const layerWithOptions = (
                   // interrupter, the lock, or later opens.
                   Effect.onError(() =>
                     dropReservation.pipe(
+                      Effect.andThen(
+                        shutdownSignal.received
+                          ? Effect.void
+                          : abortRemoteProviderSessionOpen(input.providerSessionId).pipe(
+                              Effect.ignore,
+                            ),
+                      ),
                       // Clear only a session this open freshly set up: a reused
                       // one is held by another live provider process and must
                       // survive this open's failure.
@@ -2144,9 +2247,12 @@ export const layerWithOptions = (
               const eventSubscribers = yield* Ref.make<
                 ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
               >(new Map());
-              const exposedRuntime = decorateRuntime(runtime, eventSubscribers);
+              const eventPumpReady = yield* Deferred.make<void>();
+              if (!input.deferEventPump) yield* Deferred.succeed(eventPumpReady, undefined);
+              const exposedRuntime = decorateRuntime(runtime, eventSubscribers, eventPumpReady);
               const now = yield* Clock.currentTimeMillis;
               const entry: LiveSessionEntry = {
+                eventPumpReady,
                 attachedThreadIds: new Set([input.threadId]),
                 loadedProviderThreadKeyByThread: new Map(),
                 mcpCredentialIdByThread:

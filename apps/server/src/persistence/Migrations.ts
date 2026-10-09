@@ -11,6 +11,7 @@
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as AgentRuntimeSchema from "../agentRuntime/Schema.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 // Import all migrations statically
@@ -220,6 +221,10 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     yield* Effect.logWarning(
       "Database migration history diverges from this build; recorded migration ids are skipped, not reconciled by name.",
     ).pipe(Effect.annotateLogs({ divergent }));
+  }
+  yield* AgentRuntimeSchema.migrate;
+  if (toMigrationInclusive === undefined || toMigrationInclusive >= 55) {
+    yield* AgentRuntimeSchema.backfill;
   }
   return executedMigrations;
 });

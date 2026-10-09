@@ -18,6 +18,7 @@ import * as GitHubCredentials from "../sourceControl/GitHubCredentials.ts";
 import * as GitHubQuota from "../sourceControl/githubQuota.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import { KnownWorkflowRuns } from "./gitHubConditionalChecks.ts";
 
@@ -100,6 +101,7 @@ const mockApi = Layer.effect(
 
 const layer = it.layer(
   GitHubPullRequestApi.layer.pipe(
+    Layer.provide(RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
     Layer.provideMerge(mockApi),
     Layer.provideMerge(GitHubQuota.layer),
     Layer.provide(NodeCrypto.layer),
@@ -504,6 +506,7 @@ it.effect(
         ),
       );
       const cli = yield* GitHubPullRequestApi.make.pipe(
+        Effect.provide(RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
         Effect.provide(
           GitHubApi.layer.pipe(
             Layer.provide(Layer.mergeAll(credentials, http)),

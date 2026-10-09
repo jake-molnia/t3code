@@ -1,3 +1,6 @@
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
+import { resolveProjectScripts, setupProjectScript } from "@t3tools/shared/projectScripts";
+import * as WorkerProtocol from "../agentRuntime/worker/Protocol.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -172,6 +175,7 @@ function failureDetail(error: unknown): string {
 }
 
 const make = Effect.gen(function* () {
+  const routes = yield* WorkspaceRouting.WorkspaceRouting;
   const projects = yield* ProjectService.ProjectService;
   const setupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
   const cloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
@@ -244,6 +248,92 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+
+    if (routes.enabled) {
+      if (
+        input.workspaceStrategy.type === "existing_worktree" &&
+        input.workspaceStrategy.worktreePath !== project.workspaceRoot
+      )
+        return yield* mapError(
+          input,
+          "provision-worktree",
+          threadId,
+        )(
+          "Importing an existing or dirty worktree into a new sandbox requires a workspace snapshot; it cannot use a central machine path.",
+        );
+      const settings = yield* serverSettings.getSettings;
+      const resolved = resolveProjectSettings(settings, input.projectId, project).settings;
+      const cwd = yield* routes
+        .prepareThread({
+          threadId,
+          projectCwd: project.workspaceRoot,
+          ...(resolved.worktreeSubmodules !== null
+            ? { submodules: resolved.worktreeSubmodules }
+            : {}),
+          ...(input.workspaceStrategy.branch ? { branch: input.workspaceStrategy.branch } : {}),
+          ...(input.workspaceStrategy.type === "worktree"
+            ? { refName: input.workspaceStrategy.baseRef }
+            : {}),
+        })
+        .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+      yield* threads
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`${input.commandId}:workspace`),
+          threadId,
+          worktreePath: cwd,
+          branch: input.workspaceStrategy.branch ?? null,
+        })
+        .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+      const script = setupProjectScript(resolveProjectScripts(settings, project));
+      if (script) {
+        const runSetup = routes
+          .call({
+            cwd,
+            method: "scripts.run",
+            input: {
+              operationId: `${input.commandId}:setup`,
+              command: "/bin/sh",
+              args: ["-lc", script.command],
+              timeoutMs: 3_600_000,
+              env: { T3CODE_PROJECT_ROOT: cwd, T3CODE_WORKTREE_PATH: cwd },
+            },
+          })
+          .pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(WorkerProtocol.ScriptResult)),
+            Effect.flatMap((result) =>
+              result.code === 0
+                ? Effect.void
+                : Effect.fail(
+                    mapError(
+                      input,
+                      "run-setup-script",
+                      threadId,
+                    )(`Setup script exited with ${result.code ?? "unknown exit status"}.`),
+                  ),
+            ),
+            Effect.mapError(mapError(input, "run-setup-script", threadId)),
+          );
+        if (script.async !== false)
+          yield* runSetup.pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Remote setup script failed", { threadId, cause }),
+            ),
+            Effect.forkIn(preparationScope),
+          );
+        else yield* runSetup;
+      }
+      if (runId !== null)
+        yield* threads
+          .dispatch({
+            type: "prepared-run.release",
+            commandId: CommandId.make(`${input.commandId}:release`),
+            threadId,
+            runId,
+          })
+          .pipe(Effect.mapError(mapError(input, "release-run", threadId)));
+      return;
+    }
 
     const reused = input.reusedWorktree;
     const tracked = input.workspaceStrategy.type === "worktree" || reused !== undefined;
@@ -746,7 +836,7 @@ const make = Effect.gen(function* () {
         // A Scratch thread launched at the project root runs in a folder of its
         // own. Only the first attempt claims one; a retry replays its create.
         const workspaceStrategy: ThreadLaunchWorkspaceStrategy =
-          input.workspaceStrategy.type === "root" && Option.isNone(launchReceipt)
+          !routes.enabled && input.workspaceStrategy.type === "root" && Option.isNone(launchReceipt)
             ? Option.match(
                 yield* managedFolders
                   .folderForThread({

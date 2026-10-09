@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import * as FileSystem from "effect/FileSystem";
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import * as Redacted from "effect/Redacted";
 import { ChildProcessSpawner } from "effect/process";
 import * as GitHubApi from "../sourceControl/GitHubApi.ts";
@@ -39,7 +39,9 @@ const fakeGit = Layer.mergeAll(
         };
       }),
   }),
-  FileSystem.layerNoop({ makeTempDirectoryScoped: () => Effect.succeed("/tmp/scratch") }),
+  Layer.mock(RepositoryFiles.RepositoryFiles)({
+    temporaryDirectory: Effect.succeed("/tmp/scratch"),
+  }),
 );
 
 const runGitHubStackAction = (send: Send, input: Parameters<typeof runStackAction>[0]) =>

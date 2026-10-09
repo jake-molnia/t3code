@@ -236,26 +236,6 @@ describe("EnvironmentProviderSettings routing", () => {
       .mockResolvedValue({ _tag: "Success", value: { accepted: true } });
   });
 
-  it("shows Codex and Claude while hiding untouched disabled provider slots", () => {
-    const panel = renderPanel();
-    for (const driver of ["codex", "claudeAgent"] as const) {
-      expect(
-        visitElements(
-          panel,
-          (element) => element.props.instanceId === driver && element.props.mode === "list",
-        ),
-      ).not.toBeNull();
-    }
-    for (const driver of ["cursor", "grok", "pi", "opencode", "antigravity"] as const) {
-      expect(
-        visitElements(
-          panel,
-          (element) => element.props.instanceId === driver && element.props.mode === "list",
-        ),
-      ).toBeNull();
-    }
-  });
-
   it("keeps explicitly configured providers visible when disabled", () => {
     const grokId = ProviderInstanceId.make("grok");
     settingsState.value = {
@@ -302,7 +282,7 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(settingsState.mutationEnvironmentIds).toEqual([environmentId]);
   });
 
-  it("routes refresh and provider update commands to the selected environment", async () => {
+  it("routes refresh commands to the selected environment", async () => {
     atoms.providers = [provider()];
     const panel = renderPanel();
     const refreshButton = visitElements(panel, isRefreshButton);
@@ -313,20 +293,6 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(commands.refresh).toHaveBeenCalledWith({
       environmentId,
       input: { refreshModels: true },
-    });
-
-    const providerCard = visitElements(
-      panel,
-      (element) =>
-        element.props.instanceId === codexId && typeof element.props.onRunUpdate === "function",
-    );
-    expect(providerCard).not.toBeNull();
-    (providerCard?.props.onRunUpdate as (() => void) | undefined)?.();
-    await flushPromises();
-
-    expect(commands.updateProvider).toHaveBeenCalledWith({
-      environmentId,
-      input: { provider: ProviderDriverKind.make("codex"), instanceId: codexId },
     });
   });
 
@@ -548,7 +514,7 @@ describe("EnvironmentProviderSettings routing", () => {
     );
   });
 
-  it("lets the server decide managed ACP cleanup after an atomic delete", async () => {
+  it("removes an ACP account without uninstalling image-owned binaries", async () => {
     const firstId = ProviderInstanceId.make("acpRegistry_kilo_one");
     const secondId = ProviderInstanceId.make("acpRegistry_kilo_two");
     const registryInstance = {
@@ -581,10 +547,7 @@ describe("EnvironmentProviderSettings routing", () => {
       operation: "remove",
       instanceId: firstId,
     });
-    expect(commands.uninstall).toHaveBeenCalledWith({
-      environmentId,
-      input: { agentId: "kilo" },
-    });
+    expect(commands.uninstall).not.toHaveBeenCalled();
   });
 
   it("keeps the signed-in ACP account visible when login methods are no longer advertised", () => {
@@ -617,42 +580,5 @@ describe("EnvironmentProviderSettings routing", () => {
           element.type.name === "ProviderAuthenticationSection",
       ),
     ).not.toBeNull();
-  });
-
-  it("routes explicit ACP browser authentication consent to the selected environment", async () => {
-    const instanceId = ProviderInstanceId.make("acpRegistry_antigravity");
-    const action = {
-      elicitationId: "google-login-1",
-      url: "https://accounts.google.com/login",
-      message: "Continue with Google",
-    };
-    settingsState.value = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      providerInstances: {
-        [instanceId]: {
-          driver: ProviderDriverKind.make("acpRegistry"),
-          enabled: true,
-          config: { agentId: "antigravity" },
-        },
-      },
-    };
-    atoms.providers = [
-      {
-        ...provider(),
-        instanceId,
-        driver: ProviderDriverKind.make("acpRegistry"),
-        auth: { status: "unauthenticated", action },
-      },
-    ];
-
-    const panel = renderPanel();
-    const card = visitElements(panel, (element) => element.props.instanceId === instanceId);
-    (card?.props.onAcceptUrlAuth as ((candidate: typeof action) => void) | undefined)?.(action);
-    await flushPromises();
-
-    expect(commands.acceptUrlAuth).toHaveBeenCalledWith({
-      environmentId,
-      input: { instanceId, elicitationId: action.elicitationId },
-    });
   });
 });

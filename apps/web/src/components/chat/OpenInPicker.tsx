@@ -32,7 +32,6 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import {
-  AntigravityIcon,
   CursorIcon,
   FileExplorerIcon,
   FinderIcon,
@@ -115,11 +114,6 @@ export const resolveOpenInOptions = (
     {
       Icon: Zed,
       value: "zed",
-      kind: "brand",
-    },
-    {
-      Icon: AntigravityIcon,
-      value: "antigravity",
       kind: "brand",
     },
     {

@@ -5,12 +5,12 @@ import {
   FILL_PREVIEW_VIEWPORT,
   INCOGNITO_BROWSER_PROFILE_ID,
   PREVIEW_AUTOMATION_SERVER_OPERATIONS,
-  PreviewViewportSetting as PreviewViewportSettingSchema,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  type PreviewAppearancePreference,
   type PreviewAutomationActionEvent,
   type PreviewAutomationClickInput,
-  type PreviewAutomationDialogInput,
   type PreviewAutomationConsoleEntry,
+  type PreviewAutomationDialogInput,
   type PreviewAutomationDragInput,
   type PreviewAutomationEvaluateInput,
   type PreviewAutomationHoverInput,
@@ -32,28 +32,27 @@ import {
   type PreviewNavStatus,
   type PreviewSessionSnapshot,
   type PreviewViewportSetting,
-  ThreadId,
+  PreviewViewportSetting as PreviewViewportSettingSchema,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
-  type PreviewAppearancePreference,
+  ThreadId,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
-import * as NodeCrypto from "node:crypto";
-import * as NodeFSP from "node:fs/promises";
-import * as NodePath from "node:path";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import { constVoid } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
-import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import type {
   BrowserContext,
   CDPSession,
@@ -65,15 +64,14 @@ import type {
 
 import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
-import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
 import * as PreviewManager from "./Manager.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
+import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -443,7 +441,6 @@ const make = Effect.gen(function* () {
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   // The fix every host error names, rendered for how this server was launched.
-  const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
 
   const tabs = new Map<string, ServerTab>();
   const pendingTabs = new Map<string, Promise<ServerTab>>();
@@ -464,7 +461,6 @@ const make = Effect.gen(function* () {
       Effect.runPromiseWith(launchServices)(
         PreviewBrowserHost.diagnoseLaunchFailure({
           executable,
-          setupCommand,
           output: /sandboxing failed/i.test(String(cause))
             ? PreviewBrowserHost.NO_SANDBOX_SIGNATURE
             : "",
@@ -2122,15 +2118,6 @@ const make = Effect.gen(function* () {
     });
 
   yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
-  // Whoever runs the server learns the fix before anyone opens a tab.
-  if (
-    !PreviewBrowserHost.sandboxDisabled(yield* HostProcessEnvironment) &&
-    (yield* PreviewBrowserHost.sandboxBlocked)
-  ) {
-    yield* Effect.logWarning(
-      `This host blocks the sandbox T3's browser runs in, so browser tabs and HTML previews will not start. Run \`${setupCommand}\` once to allow it.`,
-    );
-  }
   // The desktop took its page back (closed, swapped, crashed, or devtools opened).
   // The session stays; the next viewer or agent reconnects when it re-attaches.
   yield* desktopChannel.detached.pipe(

@@ -13,12 +13,7 @@ import {
 } from "./hostProcess.ts";
 import { CommandResolutionCache, resolveCommandPath } from "./shell.ts";
 
-const NodeRuntimeFeature = Schema.Literals([
-  "Local device support",
-  "Device automation",
-  "Antigravity",
-  "Antigravity sign-in",
-]);
+const NodeRuntimeFeature = Schema.Literals(["Local device support", "Device automation"]);
 
 export const nodeRuntimeUnavailableMessage = (feature: typeof NodeRuntimeFeature.Type): string =>
   `${feature} requires Node.js. Install Node.js and make sure node is on PATH, then retry.`;

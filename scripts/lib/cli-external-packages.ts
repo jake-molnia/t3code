@@ -4,8 +4,7 @@
  * Two consumers derive from this list, and they must never disagree:
  *
  * - apps/server/vite.config.ts decides what stays external to the bundle.
- * - scripts/build-desktop-artifact.ts selects the runtime dependency roots for
- *   the Windows server sidecar.
+ * - scripts/build-cli-archive.ts selects CLI archive dependency roots.
  *
  * A runtime package that is external but absent from the sidecar fails as soon
  * as Node resolves it from the emitted bundle. Keeping both consumers on one
@@ -35,7 +34,6 @@ export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   "@yuuang/",
   "@ff-labs/",
   "@napi-rs/keyring",
-  "@clerk/electron-passkeys",
   "node-gyp-build",
   "node-addon-api",
   // ws's optional accelerators. Nothing in this repo declares them, so they are

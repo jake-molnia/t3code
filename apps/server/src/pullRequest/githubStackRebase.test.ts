@@ -5,6 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import * as GitHubApi from "../sourceControl/GitHubApi.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { cascadeRebaseStack } from "./githubStackRebase.ts";
@@ -14,6 +15,7 @@ const layer = Layer.mergeAll(
     credential: () => Effect.succeed({ token: Redacted.make("token"), fingerprint: "fp" }),
   }),
   VcsProcess.layer,
+  RepositoryFiles.layer,
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 /**

@@ -6,7 +6,7 @@ import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -1103,7 +1103,7 @@ const SIMPLE_ACTION_MUTATIONS = {
 export const make = Effect.gen(function* () {
   const api = yield* GitHubApi.GitHubApi;
   const vcsProcess = yield* VcsProcess.VcsProcess;
-  const fileSystem = yield* FileSystem.FileSystem;
+  const repositoryFiles = yield* RepositoryFiles.RepositoryFiles;
   const revalidateChecks = yield* makeChecksRevalidator;
   const routingIdentities = new Map<
     string,
@@ -2495,7 +2495,7 @@ export const make = Effect.gen(function* () {
         return runGitHubStackAction({ ...input, stackNumber: input.stackNumber }).pipe(
           Effect.provideService(GitHubApi.GitHubApi, api),
           Effect.provideService(VcsProcess.VcsProcess, vcsProcess),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(RepositoryFiles.RepositoryFiles, repositoryFiles),
         );
       if (input.action === "revert") {
         return pullRequestNodeId({ ...input, operation: "revertPullRequest" }).pipe(

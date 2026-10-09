@@ -1,8 +1,3 @@
-import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
-import { DeviceToolVersions } from "../device/DeviceToolVersions";
-import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
-import { ScopedSwitch } from "./ScopedSwitch";
-import { DeviceHostsSettings } from "./DeviceHostsSettings";
 /**
  * Integrations settings - preferences for surfaces T3 Code embeds rather than
  * owns. Browser is the first section: the defaults a preview tab opens at,
@@ -12,17 +7,13 @@ import { DeviceHostsSettings } from "./DeviceHostsSettings";
  * @module IntegrationsSettings
  */
 import {
-  AuthSettingsWriteScope,
-  BrowserImportFailureReason,
   BROWSER_PROFILE_MAX_COUNT,
-  type BrowserLinkTarget,
-  type BrowserProfile,
-  type EnvironmentId,
   BROWSER_PROFILE_NAME_MAX_LENGTH,
   BROWSER_RECORDING_FRAME_RATES,
+  BrowserImportFailureReason,
   DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
-  DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_BROWSER_LINK_TARGET,
+  DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   DEFAULT_BROWSER_VIEWPORT,
   DEFAULT_PREVIEW_APPEARANCE,
@@ -36,6 +27,9 @@ import {
   isBuiltInBrowserProfileId,
   resolveBrowserProfiles,
   type BrowserImportSource,
+  type BrowserLinkTarget,
+  type BrowserProfile,
+  type EnvironmentId,
   type PreviewAppearancePreference,
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
@@ -43,28 +37,17 @@ import { PREVIEW_VIEWPORT_PRESETS } from "@t3tools/shared/previewViewport";
 import { MoreVertical, Plus as PlusIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { ScreenRotationIcon } from "~/browser/ScreenRotationIcon";
-import { AnimatedHeight } from "~/components/AnimatedHeight";
 import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
 import { previewBridge } from "~/components/preview/previewBridge";
 import { cn, randomUUID } from "~/lib/utils";
-import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
-import { deviceEnvironment, useDeviceState } from "~/state/device";
-import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
-import { useAtomCommand } from "~/state/use-atom-command";
-import { previewEnvironment } from "~/state/preview";
 import { useServerConfigs } from "~/state/entities";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import {
-  AgentDeviceSetupStatus,
-  DeviceHubSetupStatus,
-  PlatformStatus,
-  platformSetupStatus,
-  deviceHubDescription,
-  agentDeviceDescription,
-} from "~/components/device/DeviceSetup";
-import { isElectron } from "../../env";
+import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
+import { previewEnvironment } from "~/state/preview";
+import { useAtomCommand } from "~/state/use-atom-command";
 
+import { readLocalApi } from "~/localApi";
 import { Badge } from "../ui/badge";
 import {
   Menu,
@@ -75,9 +58,14 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
-import { readLocalApi } from "~/localApi";
 
-import { toastManager } from "../ui/toast";
+import {
+  getClientSettings,
+  persistClientSettingsUpdate,
+  useClientSettings,
+  useClientSettingsHydrated,
+  useUpdatePrimarySettings,
+} from "~/hooks/useSettings";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -100,27 +88,20 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  getClientSettings,
-  persistClientSettingsUpdate,
-  useClientSettings,
-  useClientSettingsHydrated,
-  useUpdatePrimarySettings,
-} from "~/hooks/useSettings";
 
+import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
+import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import type { ImportOutcome } from "./browserImportWizard.logic";
 import {
-  SettingsUnavailableGroup,
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
   SettingsSection,
+  SettingsUnavailableGroup,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
-import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
-import { useSettingsScope } from "./SettingsScopeContext";
-import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
-import type { ImportOutcome } from "./browserImportWizard.logic";
 
 const FILL_VALUE = "fill";
 const RESPONSIVE_VALUE = "responsive";
@@ -622,274 +603,6 @@ function BrowserLinkTargetSetting({ disabled }: { readonly disabled: boolean }) 
   );
 }
 
-function DeviceIntegrationSettings() {
-  const { search, environment: selected } = useSettingsScope();
-  const settings = useScopedSettings();
-  const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
-  const environmentId = connected ? selected.environmentId : null;
-
-  return (
-    <SettingsSection id="devices" title="Devices">
-      <DeviceIntegrationControls
-        key={`${environmentId}:${JSON.stringify(search)}`}
-        environmentId={environmentId}
-        enabled={settings.enableDeviceSupport}
-        agentAccessEnabled={settings.enableAgentDeviceAccess}
-      />
-    </SettingsSection>
-  );
-}
-
-function DeviceIntegrationControls({
-  environmentId,
-  enabled,
-  agentAccessEnabled,
-}: {
-  environmentId: EnvironmentId | null;
-  enabled: boolean;
-  agentAccessEnabled: boolean;
-}) {
-  const canConfigure = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
-  const { state, loaded } = useDeviceState(environmentId);
-  const { scope, environments, connectedEnvironments } = useSettingsScope();
-  const updateSettings = useUpdateScopedSettings();
-  const projectScope = scope.kind === "project" || scope.kind === "checkout";
-  const anyHubEnabled = connectedEnvironments.some(
-    (environment) => environment.serverConfig?.settings.enableDeviceSupport,
-  );
-  const configure = useAtomCommand(deviceEnvironment.configure, { reportFailure: false });
-  const list = useAtomCommand(deviceEnvironment.list, { reportFailure: false });
-  const [pending, setPending] = useState<
-    "hub" | "check" | "agent" | "update-hub" | "update-agent" | null
-  >(null);
-  const busy = state.hostStatus === "installing" || state.hostStatus === "starting";
-  const localPlatformsUnavailable = state.hosts.some(
-    (host) => host.kind === "local" && !host.platforms.some((platform) => platform.available),
-  );
-  const [platformsRevealed, setPlatformsRevealed] = useState(false);
-  // Keep diagnostics visible through subsequent agent setup and refresh phases.
-  if (platformsRevealed && !enabled) setPlatformsRevealed(false);
-  if (
-    enabled &&
-    !platformsRevealed &&
-    (state.hostStatus === "ready" || localPlatformsUnavailable) &&
-    pending !== "hub"
-  ) {
-    setPlatformsRevealed(true);
-  }
-
-  const update = async (
-    kind: NonNullable<typeof pending>,
-    input: { enabled?: boolean; agentAccessEnabled?: boolean },
-  ) => {
-    if (!environmentId || !readEnvironmentScope(environmentId, AuthSettingsWriteScope)) return;
-    setPending(kind);
-    try {
-      const results = await Promise.allSettled(
-        environments.map(async (environment) => {
-          if (environment.connection.phase !== "connected" || !environment.serverConfig) {
-            throw new Error("Environment disconnected");
-          }
-          if (!readEnvironmentScope(environment.environmentId, AuthSettingsWriteScope)) {
-            throw new Error("This connection cannot change device settings.");
-          }
-          return configure({
-            environmentId: environment.environmentId,
-            input: { ...input, ...(input.enabled ? { onboardingCompleted: true } : {}) },
-          });
-        }),
-      );
-      const failed = environments.filter((_, index) => {
-        const result = results[index];
-        return result?.status !== "fulfilled" || result.value._tag === "Failure";
-      });
-      if (failed.length > 0) {
-        toastManager.add({
-          type: "error",
-          title: "Device settings not saved on all environments",
-          description: `Could not update ${failed.map((environment) => environment.label).join(", ")}.`,
-        });
-      }
-    } finally {
-      setPending(null);
-    }
-  };
-
-  const [updateError, setUpdateError] = useState<{ tool: "hub" | "agent"; message: string } | null>(
-    null,
-  );
-  const localTools = state.hosts.find((host) => host.kind === "local")?.tools;
-  const versionActions = (tool: "hub" | "agent") => {
-    const version = localTools?.[tool];
-    const needsUpdate = version && !version.installedVersions.includes(version.requiredVersion);
-    return (
-      <div className="space-y-2">
-        <div className="flex flex-wrap gap-2">
-          {state.supportsToolUpdate && needsUpdate ? (
-            <Button
-              size="sm"
-              disabled={!environmentId || pending !== null || busy}
-              onClick={() => {
-                if (!environmentId) return;
-                setUpdateError(null);
-                setPending(`update-${tool}`);
-                void list({ environmentId, input: { updateTool: tool } })
-                  .then((result) => {
-                    if (result._tag === "Failure")
-                      setUpdateError({
-                        tool,
-                        message:
-                          "Update failed. Check this host's network connection and try again.",
-                      });
-                  })
-                  .finally(() => setPending(null));
-              }}
-            >
-              {pending === `update-${tool}` ? "Updating…" : `Update to v${version.requiredVersion}`}
-            </Button>
-          ) : null}
-          {state.supportsToolInspection ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!environmentId || pending !== null || busy}
-              onClick={() => {
-                if (!environmentId) return;
-                setPending("check");
-                void list({ environmentId, input: { inspectOnly: true } }).finally(() =>
-                  setPending(null),
-                );
-              }}
-            >
-              {pending === "check" ? "Checking…" : "Check versions"}
-            </Button>
-          ) : null}
-        </div>
-        {updateError?.tool === tool ? (
-          <p role="alert" className="text-xs text-destructive">
-            {updateError.message}
-          </p>
-        ) : null}
-      </div>
-    );
-  };
-
-  return (
-    <>
-      <SettingsRow
-        {...searchableSetting("device-hub")}
-        serverScoped
-        settingKeys={["enableDeviceSupport"]}
-        description={deviceHubDescription}
-        control={
-          <>
-            <DeviceToolVersions
-              action={versionActions("hub")}
-              kind="hub"
-              tools={state.hosts.find((host) => host.kind === "local")?.tools}
-            />
-            {pending === "hub" ? <DeviceHubSetupStatus state={state} pending compact /> : null}
-            <ScopedSwitch
-              settingKeys={["enableDeviceSupport"]}
-              checked={enabled}
-              disabled={
-                !canConfigure ||
-                projectScope ||
-                !loaded ||
-                !environmentId ||
-                busy ||
-                pending !== null
-              }
-              aria-label="Device hub"
-              onCheckedChange={(checked) =>
-                void update("hub", {
-                  enabled: Boolean(checked),
-                  ...(checked ? {} : { agentAccessEnabled: false }),
-                })
-              }
-            />
-          </>
-        }
-      />
-      <AnimatedHeight>
-        {platformsRevealed ? (
-          <SettingsRow
-            {...searchableSetting("device-platform-support")}
-            description={
-              connectedEnvironments.length > 1
-                ? `Status for ${connectedEnvironments.find((environment) => environment.environmentId === environmentId)?.label}. Select an environment to inspect its simulator support.`
-                : undefined
-            }
-            status={
-              <div className="flex flex-wrap gap-x-5 gap-y-2">
-                <PlatformStatus compact platform="iOS" status={platformSetupStatus(state, "ios")} />
-                <PlatformStatus
-                  compact
-                  platform="Android"
-                  status={platformSetupStatus(state, "android")}
-                />
-              </div>
-            }
-            control={
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!environmentId || !enabled || busy || pending !== null}
-                onClick={() => {
-                  if (!environmentId) return;
-                  setPending("check");
-                  void list({ environmentId, input: {} }).finally(() => setPending(null));
-                }}
-              >
-                {pending === "check" ? "Checking…" : "Refresh"}
-              </Button>
-            }
-          />
-        ) : null}
-      </AnimatedHeight>
-      <SettingsRow
-        {...searchableSetting("agent-device-access")}
-        serverScoped
-        settingKeys={["enableAgentDeviceAccess"]}
-        description={agentDeviceDescription}
-        control={
-          <>
-            <DeviceToolVersions
-              action={versionActions("agent")}
-              kind="agent"
-              tools={state.hosts.find((host) => host.kind === "local")?.tools}
-            />
-            {pending === "agent" ? <AgentDeviceSetupStatus state={state} pending compact /> : null}
-            <ScopedSwitch
-              settingKeys={["enableAgentDeviceAccess"]}
-              checked={agentAccessEnabled}
-              disabled={
-                !canConfigure ||
-                connectedEnvironments.length === 0 ||
-                (!projectScope && (!loaded || !anyHubEnabled || busy)) ||
-                pending !== null
-              }
-              aria-label="Agent device access"
-              onCheckedChange={(checked) =>
-                projectScope
-                  ? updateSettings({ enableAgentDeviceAccess: Boolean(checked) })
-                  : void update("agent", { agentAccessEnabled: Boolean(checked) })
-              }
-            />
-          </>
-        }
-      />
-      {environmentId ? (
-        <DeviceHostUpdates
-          state={{ ...state, hosts: state.hosts.filter((host) => host.kind === "local") }}
-          environmentId={environmentId}
-        />
-      ) : null}
-      <DeviceHostsSettings environmentId={environmentId} />
-    </>
-  );
-}
-
 function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
   const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
   const updateSettings = useUpdatePrimarySettings();
@@ -1249,44 +962,48 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
             {atProfileLimit ? (
               <MenuItem disabled>You&rsquo;ve reached the profile limit</MenuItem>
             ) : null}
-            <MenuSeparator />
-            <MenuGroup>
-              <MenuGroupLabel>Import from</MenuGroupLabel>
-              {sources === null ? (
-                <MenuItem disabled>Looking for browsers…</MenuItem>
-              ) : importableSources.length === 0 ? (
-                <MenuItem disabled>No supported browsers found</MenuItem>
-              ) : (
-                // Every source is a plain row — running, needs-permission and
-                // ready all look the same here. The wizard picks up whatever
-                // state the source is in and walks the user forward from there.
-                <>
-                  {importableSources.map((source) => (
-                    <MenuItem
-                      key={source.id}
-                      disabled={!settingsHydrated || primaryEnvironment == null}
-                      onClick={() => {
-                        if (!settingsHydrated || primaryEnvironment == null) return;
-                        setImportSession({
-                          source,
-                          environmentId: primaryEnvironment.environmentId,
-                          environmentName: resolveEnvironmentOptionLabel({
-                            isPrimary: true,
-                            environmentId: primaryEnvironment.environmentId,
-                            runtimeLabel: primaryEnvironment.label,
-                          }),
-                        });
-                      }}
-                    >
-                      {source.name}
-                    </MenuItem>
-                  ))}
-                  {primaryEnvironment == null ? (
-                    <MenuItem disabled>Connect to an environment to import cookies</MenuItem>
-                  ) : null}
-                </>
-              )}
-            </MenuGroup>
+            {previewBridge ? (
+              <>
+                <MenuSeparator />
+                <MenuGroup>
+                  <MenuGroupLabel>Import from</MenuGroupLabel>
+                  {sources === null ? (
+                    <MenuItem disabled>Looking for browsers…</MenuItem>
+                  ) : importableSources.length === 0 ? (
+                    <MenuItem disabled>No supported browsers found</MenuItem>
+                  ) : (
+                    // Every source is a plain row — running, needs-permission and
+                    // ready all look the same here. The wizard picks up whatever
+                    // state the source is in and walks the user forward from there.
+                    <>
+                      {importableSources.map((source) => (
+                        <MenuItem
+                          key={source.id}
+                          disabled={!settingsHydrated || primaryEnvironment == null}
+                          onClick={() => {
+                            if (!settingsHydrated || primaryEnvironment == null) return;
+                            setImportSession({
+                              source,
+                              environmentId: primaryEnvironment.environmentId,
+                              environmentName: resolveEnvironmentOptionLabel({
+                                isPrimary: true,
+                                environmentId: primaryEnvironment.environmentId,
+                                runtimeLabel: primaryEnvironment.label,
+                              }),
+                            });
+                          }}
+                        >
+                          {source.name}
+                        </MenuItem>
+                      ))}
+                      {primaryEnvironment == null ? (
+                        <MenuItem disabled>Connect to an environment to import cookies</MenuItem>
+                      ) : null}
+                    </>
+                  )}
+                </MenuGroup>
+              </>
+            ) : null}
           </MenuPopup>
         </Menu>
       }
@@ -1518,7 +1235,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
 
 export function IntegrationsSettingsPanel() {
   // Client-local preview defaults are editable only where the preview exists.
-  const previewDefaultsDisabled = !isElectron;
+  const previewDefaultsDisabled = false;
   const previewDefaults = (
     <>
       <BrowserProfilesSetting disabled={previewDefaultsDisabled} />
@@ -1546,7 +1263,6 @@ export function IntegrationsSettingsPanel() {
           previewDefaults
         )}
       </SettingsSection>
-      <DeviceIntegrationSettings />
     </SettingsPageContainer>
   );
 }

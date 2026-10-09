@@ -1,56 +1,4 @@
-import {
-  ChevronRightIcon,
-  ChevronsLeftRightEllipsisIcon,
-  EllipsisIcon,
-  PlusIcon,
-  QrCodeIcon,
-  RouteIcon,
-  TerminalIcon,
-} from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
-import { Atom } from "effect/reactivity";
-import {
-  type KeyboardEvent,
-  type ReactNode,
-  memo,
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import {
-  AuthAccessReadScope,
-  AuthAccessWriteScope,
-  AuthSettingsWriteScope,
-  AuthProvidersManageScope,
-  AuthEnvironmentMaintainScope,
-  AuthDiagnosticsReadScope,
-  AuthOrchestrationOperateScope,
-  AuthOrchestrationReadScope,
-  AuthPreviewOperateScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
-  AuthSourceControlWriteScope,
-  AuthFilesystemReadScope,
-  AuthFilesystemWriteScope,
-  AuthStandardClientScopes,
-  AuthTerminalOperateScope,
-  AuthTerminalReadScope,
-  type AuthClientSession,
-  type AuthEnvironmentScope,
-  type AuthGrantScope,
-  type AuthPairingLink,
-  type AuthPairingCredentialResult,
-  type AdvertisedEndpoint,
-  type DesktopDiscoveredSshHost,
-  type DesktopSshEnvironmentTarget,
-  type DesktopServerExposureState,
-  type DesktopWslState,
-  type EnvironmentId,
-  resolveEnvironmentMachineKind,
-} from "@t3tools/contracts";
 import {
   RelayConnectionRegistration,
   RelayConnectionTarget,
@@ -62,118 +10,81 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import {
+  type AdvertisedEndpoint,
+  AuthAccessReadScope,
+  AuthAccessWriteScope,
+  type AuthClientSession,
+  AuthDiagnosticsReadScope,
+  AuthEnvironmentMaintainScope,
+  type AuthEnvironmentScope,
+  AuthFilesystemReadScope,
+  AuthFilesystemWriteScope,
+  type AuthGrantScope,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  type AuthPairingCredentialResult,
+  type AuthPairingLink,
+  AuthPreviewOperateScope,
+  AuthProvidersManageScope,
+  AuthRelayReadScope,
+  AuthRelayWriteScope,
+  AuthSettingsWriteScope,
+  AuthSourceControlWriteScope,
+  AuthStandardClientScopes,
+  AuthTerminalOperateScope,
+  AuthTerminalReadScope,
+  type DesktopDiscoveredSshHost,
+  type DesktopServerExposureState,
+  type DesktopSshEnvironmentTarget,
+  type DesktopWslState,
+  type EnvironmentId,
+  resolveEnvironmentMachineKind,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
+import { Atom } from "effect/reactivity";
+import {
+  ChevronRightIcon,
+  ChevronsLeftRightEllipsisIcon,
+  EllipsisIcon,
+  PlusIcon,
+  QrCodeIcon,
+  RouteIcon,
+  TerminalIcon,
+} from "lucide-react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { cn } from "../../lib/utils";
-import { isLocalEnvironmentDisabled } from "../../localEnvironment";
-import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
-import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
-import {
-  applyWslEnableSelection,
-  canRevokeOtherClients,
-  isQrShareableEndpoint,
-  isWslSettingsRowVisible,
-  selectQrEndpointOption,
-  togglePairingScopeSelection,
-} from "./ConnectionsSettings.logic";
-import {
-  SettingsPageContainer,
-  SettingsRow,
-  SettingsSection,
-  useRelativeTimeTick,
-} from "./settingsLayout";
-import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
-import { searchableSetting } from "./settingsSearch";
-import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
-import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
-import { usePreparedConnection } from "~/state/session";
-import {
-  EnvironmentRow,
-  environmentTransportLabel,
-  formatDesktopSshTarget,
-} from "./EnvironmentRow";
-import { FoldedSettingsSection } from "./FoldedSettingsSection";
-import { LoadBalancingSettings } from "./LoadBalancingSettings";
-import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
-import { Input } from "../ui/input";
-import { CommandShortcut } from "../ui/command";
-import {
-  Autocomplete,
-  AutocompleteEmpty,
-  AutocompleteInput,
-  AutocompleteItem,
-  AutocompleteList,
-  AutocompletePopup,
-} from "../ui/autocomplete";
-import { Checkbox } from "../ui/checkbox";
-import {
-  Dialog,
-  DialogClose,
-  DialogFooter,
-  DialogDescription,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-  DialogTrigger,
-} from "../ui/dialog";
-import { ScrollArea } from "../ui/scroll-area";
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { QRCodeSvg } from "../ui/qr-code";
-import { Spinner } from "../ui/spinner";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
-import { Switch } from "../ui/switch";
-import { stackedThreadToast, toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { Alert, AlertDescription } from "../ui/alert";
-import { Button } from "../ui/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
-import { AnimatedHeight } from "../AnimatedHeight";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
-import { Textarea } from "../ui/textarea";
-import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "../../pairingUrl";
-import { readHostedPairingRequest } from "../../hostedPairing";
-import {
-  createServerPairingCredential,
-  revokeOtherServerClientSessions,
-  revokeServerClientSession,
-  revokeServerPairingLink,
-  isLoopbackHostname,
-  usePrimarySessionState,
-  type ServerClientSessionRecord,
-  type ServerPairingLinkRecord,
-} from "~/environments/primary";
-import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
-import { useUiStateStore } from "~/uiStateStore";
-import {
-  resolveServerConfigVersionMismatch,
-  resolveServerSelfUpdateCapability,
-  supportsDesktopAppUpdate,
-  supportsServerUpdateThreadContinuation,
-} from "~/versionSkew";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
-import { RemoveT3ConnectEnvironmentDialog } from "../clerk/RemoveT3ConnectEnvironmentDialog";
 import { useCloudLinkController } from "~/cloud/useCloudLinkController";
-import { authEnvironment } from "~/state/auth";
+import { requestConfirmDialog } from "~/confirmDialog";
 import { environmentCatalog } from "~/connection/catalog";
+import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import {
   connectPairing as connectPairingAtom,
   connectSshEnvironment as connectSshEnvironmentAtom,
 } from "~/connection/onboarding";
-import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
-import { useEnvironmentQuery } from "~/state/query";
+import {
+  type ServerClientSessionRecord,
+  type ServerPairingLinkRecord,
+  createServerPairingCredential,
+  isLoopbackHostname,
+  revokeOtherServerClientSessions,
+  revokeServerClientSession,
+  revokeServerPairingLink,
+  usePrimarySessionState,
+} from "~/environments/primary";
+import { authEnvironment } from "~/state/auth";
 import {
   desktopNetworkAccessStateAtom,
   refreshDesktopNetworkAccessState,
@@ -184,29 +95,110 @@ import {
   type EnvironmentPresentation,
   useEnvironments,
   usePrimaryEnvironment,
-  useRelayEnvironmentDiscovery,
   usePrimaryEnvironmentId,
+  useRelayEnvironmentDiscovery,
 } from "~/state/environments";
-import { APP_VERSION } from "~/branding";
-import { requestConfirmDialog } from "~/confirmDialog";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { useEnvironmentQuery } from "~/state/query";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
-import { ConnectionStatusDot } from "../ConnectionStatusDot";
+import { readEnvironmentScope, useEnvironmentScope, usePreparedConnection } from "~/state/session";
+import { useUiStateStore } from "~/uiStateStore";
 import {
-  OutdatedServerUpdateAction,
-  ServerUpdateAction,
-  ServerUpdateProgress,
-  ServerUpdatesAction,
-  type ServerUpdateTarget,
-} from "../ServerUpdateAction";
-import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
-import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
+  resolveServerConfigVersionMismatch,
+  resolveServerSelfUpdateCapability,
+  supportsDesktopAppUpdate,
+  supportsServerUpdateThreadContinuation,
+} from "~/versionSkew";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { readHostedPairingRequest } from "../../hostedPairing";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
 } from "../../keybindings";
+import { cn } from "../../lib/utils";
+import { isLocalEnvironmentDisabled } from "../../localEnvironment";
+import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "../../pairingUrl";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
+import { AnimatedHeight } from "../AnimatedHeight";
+import { ConnectionStatusDot } from "../ConnectionStatusDot";
+import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { ServerUpdateProgress, type ServerUpdateTarget } from "../ServerUpdateAction";
+import { RemoveT3ConnectEnvironmentDialog } from "../clerk/RemoveT3ConnectEnvironmentDialog";
+import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
+import { Alert, AlertDescription } from "../ui/alert";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
+import {
+  Autocomplete,
+  AutocompleteEmpty,
+  AutocompleteInput,
+  AutocompleteItem,
+  AutocompleteList,
+  AutocompletePopup,
+} from "../ui/autocomplete";
+import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
+import { CommandShortcut } from "../ui/command";
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+  DialogTrigger,
+} from "../ui/dialog";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
+import { Input } from "../ui/input";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { QRCodeSvg } from "../ui/qr-code";
+import { ScrollArea } from "../ui/scroll-area";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Spinner } from "../ui/spinner";
+import { Switch } from "../ui/switch";
+import { Textarea } from "../ui/textarea";
+import { stackedThreadToast, toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import {
+  applyWslEnableSelection,
+  canRevokeOtherClients,
+  isQrShareableEndpoint,
+  isWslSettingsRowVisible,
+  selectQrEndpointOption,
+  togglePairingScopeSelection,
+} from "./ConnectionsSettings.logic";
+import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
+import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
+import {
+  EnvironmentRow,
+  environmentTransportLabel,
+  formatDesktopSshTarget,
+} from "./EnvironmentRow";
+import { FoldedSettingsSection } from "./FoldedSettingsSection";
+import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
+import { LoadBalancingSettings } from "./LoadBalancingSettings";
+import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
+import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
+import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
+import {
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+  useRelativeTimeTick,
+} from "./settingsLayout";
+import { searchableSetting } from "./settingsSearch";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
@@ -1774,26 +1766,14 @@ function SavedBackendListRow({
       {unsupported &&
       environment.entry.serverUpdateRequired === true &&
       serverUpdateState.status !== "running" ? (
-        <OutdatedServerUpdateAction
-          environmentId={environmentId}
-          serverLabel={`${environment.label} server`}
-          fromVersion={lastDescriptor?.serverVersion}
-          targetVersion={APP_VERSION}
-          label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
-        />
+        <span className="text-xs text-muted-foreground">
+          Update the deployment image to use this version.
+        </span>
       ) : null}
       {showUpdateAction ? (
-        <ServerUpdateAction
-          environmentId={environmentId}
-          serverLabel={`${environment.label} server`}
-          selfUpdate={resolveServerSelfUpdateCapability(environment.serverConfig)}
-          installation={environment.serverConfig?.environment.capabilities.serverInstallation}
-          desktopAppUpdate={supportsDesktopAppUpdate(environment.serverConfig)}
-          threadContinuation={supportsServerUpdateThreadContinuation(environment.serverConfig)}
-          targetVersion={versionMismatch.clientVersion}
-          label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
-          appearance="icon"
-        />
+        <span className="text-xs text-muted-foreground">
+          Update the deployment image to use this version.
+        </span>
       ) : null}
       <Tooltip>
         <TooltipTrigger
@@ -3729,27 +3709,9 @@ export function ConnectionsSettings() {
                   primaryVersionMismatch &&
                   primaryEnvironmentId !== null &&
                   primaryServerUpdateState.status !== "running" ? (
-                    <ServerUpdateAction
-                      size="sm"
-                      environmentId={primaryEnvironmentId}
-                      serverLabel={
-                        primaryEnvironment ? `${primaryEnvironment.label} server` : "server"
-                      }
-                      selfUpdate={resolveServerSelfUpdateCapability(primaryServerConfig)}
-                      installation={
-                        primaryServerConfig?.environment.capabilities.serverInstallation
-                      }
-                      desktopAppUpdate={supportsDesktopAppUpdate(primaryServerConfig)}
-                      threadContinuation={supportsServerUpdateThreadContinuation(
-                        primaryServerConfig,
-                      )}
-                      targetVersion={primaryVersionMismatch.clientVersion}
-                      label={
-                        primaryServerUpdateState.status === "failed"
-                          ? "Retry update"
-                          : `Update to ${primaryVersionMismatch.clientVersion}`
-                      }
-                    />
+                    <span className="text-xs text-muted-foreground">
+                      Update the deployment image to use this version.
+                    </span>
                   ) : primaryServerUpdateState.status === "idle" && primaryServerConfig ? (
                     <span className="text-xs text-muted-foreground">Up to date</span>
                   ) : undefined
@@ -4111,7 +4073,9 @@ export function ConnectionsSettings() {
         headerAction={
           <div className="flex items-center gap-1">
             {savedServerUpdateTargets.length > 0 ? (
-              <ServerUpdatesAction targets={savedServerUpdateTargets} variant="ghost-muted" />
+              <span className="text-xs text-muted-foreground">
+                Update the deployment image to use this version.
+              </span>
             ) : null}
             <Dialog
               open={addBackendDialogOpen}

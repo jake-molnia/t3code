@@ -1,3 +1,4 @@
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -98,6 +99,7 @@ const alternateInstanceId = ProviderInstanceId.make("codex_alternate");
 const layerVcsDriverRegistryTest = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProcess.layer),
   Layer.provide(layerServerConfig),
+  Layer.provide(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
   Layer.provide(layerPlatformTest),
 );
 
@@ -282,6 +284,7 @@ const layerTest = Layer.mergeAll(
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
+  Layer.provide(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
   Layer.provide(layerPlatformTest),
 );
 
@@ -294,6 +297,7 @@ const layerLegacyImportTest = RuntimeLayer.layer.pipe(
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
+  Layer.provide(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
   Layer.provide(layerPlatformTest),
 );
 
@@ -332,6 +336,7 @@ const layerProjectDeletionTest = Layer.mergeAll(
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
+  Layer.provide(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
   Layer.provide(layerPlatformTest),
 );
 
@@ -476,6 +481,7 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
+  Layer.provide(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
   Layer.provide(layerPlatformTest),
 );
 

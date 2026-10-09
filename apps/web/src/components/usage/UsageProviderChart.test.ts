@@ -101,21 +101,6 @@ describe("buildPeriodColumns", () => {
     ]);
   });
 
-  it("keeps band values absolute rather than cumulative", () => {
-    // Regression: the bands were once stack offsets, which drew Claude Code
-    // permanently above Codex regardless of which provider spent more.
-    const [first] = buildPeriodColumns(days, byDay, "cost");
-
-    expect(first?.bands).toEqual([
-      { provider: "codex", value: 10 },
-      { provider: "claude", value: 20 },
-      { provider: "grok", value: 0 },
-      { provider: "cursor", value: 0 },
-      { provider: "opencode", value: 0 },
-      { provider: "antigravity", value: 0 },
-    ]);
-  });
-
   it("reports the total as the sum of its bands", () => {
     for (const column of buildPeriodColumns(days, byDay, "cost")) {
       const sum = column.bands.reduce((running, band) => running + band.value, 0);

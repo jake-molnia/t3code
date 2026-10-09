@@ -24,11 +24,10 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "../background/HostPowerMonitor.ts";
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import * as AntigravityInstallation from "../provider/AntigravityInstallation.ts";
 import * as CodexInstallation from "../provider/CodexInstallation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ModelManifest from "../provider/ModelManifest.ts";
-import * as ProviderInstanceRegistryHydration from "../provider/ProviderInstanceRegistryHydration.ts";
+import * as ProviderInstanceRegistryHydration from "../provider/testing/nativeProviderHydration.ts";
 import * as ProviderEventLoggers from "../provider/ProviderEventLoggers.ts";
 import * as OpenCodeRuntime from "../provider/opencodeRuntime.ts";
 import * as OpenCodeServerLedger from "../provider/OpenCodeServerLedger.ts";
@@ -92,15 +91,13 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
         ProviderEventLoggers.NoOpProviderEventLoggers,
       ),
       ModelManifest.layerTest,
-      AntigravityInstallation.AntigravityInstallation.layer.pipe(
+      Layer.empty.pipe(
         Layer.provide(layerServerConfig.pipe(Layer.provide(layerPlatformTest))),
         Layer.provide(FetchHttpClient.layer),
         Layer.provide(layerPlatformTest),
       ),
-      // The Codex driver now resolves managed ChatGPT installs; these runs never launch Codex.
-      Layer.mock(CodexInstallation.CodexInstallation)({
-        managedDirectory: "unused-managed-installation",
-      }),
+      // These provider tests never launch Codex.
+      Layer.mock(CodexInstallation.CodexInstallation)({}),
       Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
         getEnvironmentId: Effect.succeed(
           EnvironmentId.make("00000000-0000-4000-8000-000000000001"),

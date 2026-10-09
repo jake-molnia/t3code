@@ -1,3 +1,9 @@
+import {
+  remoteEventEnvelope,
+  copyRemoteEventDelivery,
+  ackRemoteEvent,
+  completeRemoteTerminal,
+} from "../execution/RemoteProviderAdapter.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
@@ -500,6 +506,10 @@ export type RunExecutionServiceV2Error = typeof RunExecutionServiceV2Error.Type;
  * SERVICE DEFINITION
  */
 export interface RunExecutionServiceV2StartRootRunInput {
+  /** Reinstall ingestion for a still-running remote turn without sending its prompt again. */
+  readonly reattachOnly?: boolean;
+  readonly reattachChildNodeIds?: ReadonlyArray<NodeId>;
+  readonly reattachChildTurnIds?: ReadonlyArray<ProviderTurnId>;
   readonly commandId: CommandId;
   readonly appThread: OrchestrationV2AppThread;
   readonly providerSessionId: ProviderSessionId;
@@ -842,21 +852,22 @@ export const layer: Layer.Layer<
                     .responseStreamingMode,
               ),
             );
-            yield* checkpointService
-              .captureBaseline({
-                scope: input.checkpointScope,
-                ordinalWithinScope: Math.max(0, input.run.ordinal - 1),
-              })
-              .pipe(
-                Effect.catchCause((cause) =>
-                  Cause.hasInterruptsOnly(cause)
-                    ? Effect.failCause(cause)
-                    : Effect.logWarning(
-                        "orchestration V2 checkpoint baseline capture failed; starting provider without a baseline",
-                        { runId: input.run.id },
-                      ),
-                ),
-              );
+            if (!input.reattachOnly)
+              yield* checkpointService
+                .captureBaseline({
+                  scope: input.checkpointScope,
+                  ordinalWithinScope: Math.max(0, input.run.ordinal - 1),
+                })
+                .pipe(
+                  Effect.catchCause((cause) =>
+                    Cause.hasInterruptsOnly(cause)
+                      ? Effect.failCause(cause)
+                      : Effect.logWarning(
+                          "orchestration V2 checkpoint baseline capture failed; starting provider without a baseline",
+                          { runId: input.run.id },
+                        ),
+                  ),
+                );
             if (
               input.shouldStartProviderTurn !== undefined &&
               !(yield* input.shouldStartProviderTurn())
@@ -954,11 +965,19 @@ export const layer: Layer.Layer<
                 : { relatedProviderThreadIds: input.relatedProviderThreadIds }),
             }),
           );
-          const rootTerminalSeen = yield* Ref.make(false);
-          const rootRunFinalized = yield* Ref.make(false);
+          const rootTerminalSeen = yield* Ref.make(
+            input.reattachOnly === true && input.run.status === "completed",
+          );
+          const rootRunFinalized = yield* Ref.make(
+            input.reattachOnly === true && input.run.status === "completed",
+          );
           const providerThreadOwnerLost = yield* Ref.make(false);
-          const activeChildProviderTurns = yield* Ref.make<ReadonlySet<ProviderTurnId>>(new Set());
-          const activeChildSubagents = yield* Ref.make<ReadonlySet<NodeId>>(new Set());
+          const activeChildProviderTurns = yield* Ref.make<ReadonlySet<ProviderTurnId>>(
+            new Set(input.reattachChildTurnIds),
+          );
+          const activeChildSubagents = yield* Ref.make<ReadonlySet<NodeId>>(
+            new Set(input.reattachChildNodeIds),
+          );
           const activeBackgroundTurnItems = yield* Ref.make<
             ReadonlySet<OrchestrationV2TurnItem["id"]>
           >(new Set(inheritedBackgroundTurnItemsById.keys()));
@@ -1197,6 +1216,7 @@ export const layer: Layer.Layer<
                   DateTime.toEpochMillis(yield* DateTime.now),
                 );
                 if (deliveredEvent) {
+                  copyRemoteEventDelivery(event, deliveredEvent);
                   // Root provider_thread.updated always uses an ownership gate:
                   // pre-terminal writeIfRunCurrent (attempt still running), or
                   // post-terminal writeIfProviderThreadOwner so late roster
@@ -1268,6 +1288,14 @@ export const layer: Layer.Layer<
                   yield* finalizeRootRun(event);
                 }
                 yield* trackChildLifecycle(event, deliveredEvent !== null);
+                if (event.type === "turn.terminal" || deliveredEvent === null) {
+                  const delivery = remoteEventEnvelope(event);
+                  if (delivery) {
+                    yield* eventSink.write({ events: [], executionDelivery: delivery });
+                    yield* completeRemoteTerminal(event);
+                    yield* ackRemoteEvent(event);
+                  }
+                }
               }),
             ),
             Stream.takeUntilEffect(() => shouldStopProviderEventIngestion),
@@ -1343,6 +1371,7 @@ export const layer: Layer.Layer<
             Effect.forkDetach,
           );
 
+          if (input.reattachOnly) return;
           // A failed read fails the start below, so the run is recorded as
           // failed instead of staying active with no provider turn.
           const shouldStart =

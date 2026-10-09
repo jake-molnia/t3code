@@ -1,9 +1,4 @@
-import {
-  ANTIGRAVITY_DEFAULT_MODEL,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  type ServerProvider,
-} from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -65,41 +60,7 @@ describe("ProviderModelPicker", () => {
     expect(markup).not.toContain("Unavailable");
   });
 
-  it.each(["", ANTIGRAVITY_DEFAULT_MODEL])(
-    "shows a choice prompt before Antigravity has an account catalog for %s",
-    (model) => {
-      const markup = renderPicker({
-        instanceId: "antigravity",
-        driver: "antigravity",
-        model,
-        options: [],
-      });
-
-      expect(markup).toContain("Choose model");
-      expect(markup).not.toContain(ANTIGRAVITY_DEFAULT_MODEL);
-    },
-  );
-
-  it.each([{ aliases: [ANTIGRAVITY_DEFAULT_MODEL] }, { isDefault: true }])(
-    "shows the actual default model for an Antigravity marker with %j",
-    (defaultMetadata) => {
-      const markup = renderPicker({
-        instanceId: "google_work",
-        driver: "antigravity",
-        model: ANTIGRAVITY_DEFAULT_MODEL,
-        options: [
-          { slug: "gemini-fast", name: "Gemini Fast" },
-          { slug: "gemini-pro", name: "Gemini Pro", ...defaultMetadata },
-        ],
-      });
-
-      expect(markup).toContain("Gemini Pro");
-      expect(markup).not.toContain("Gemini Fast");
-      expect(markup).not.toContain(ANTIGRAVITY_DEFAULT_MODEL);
-    },
-  );
-
-  it.each(["opencode", "antigravity"])(
+  it.each(["opencode"])(
     "keeps the selected model label when the %s account catalog does not contain it",
     (driver) => {
       const markup = renderPicker({

@@ -10,6 +10,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
+import * as RepositoryFiles from "./RepositoryFiles.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -782,6 +783,7 @@ function makeManager(input?: {
     }
     const manager = yield* GitManager.make.pipe(
       Effect.provide(layerManager),
+      Effect.provide(RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
       Effect.provideContext(stores),
     );
     return { manager, ghCalls };

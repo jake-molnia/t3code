@@ -1,3 +1,4 @@
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { CommandId, GitCommandError, ProjectId, ThreadId } from "@t3tools/contracts";
@@ -84,6 +85,7 @@ const layer = (baseDir: string, options?: HarnessOptions) =>
     Layer.provideMerge(layerGitWorkflow),
     Layer.provideMerge(options?.git ?? layerRealGit),
     Layer.provideMerge(SqlitePersistence.layerMemory),
+    Layer.provideMerge(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
     Layer.provideMerge(ServerConfig.layerTest(baseDir, baseDir)),
     Layer.provideMerge(NodeServices.layer),
   );

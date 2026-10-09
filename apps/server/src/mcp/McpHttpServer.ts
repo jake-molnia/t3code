@@ -1,3 +1,4 @@
+import * as RemoteWorkspaceHtmlRender from "../agentRuntime/RemoteWorkspaceHtmlRender.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -17,7 +18,6 @@ import { OrchestratorMcpFailure, PreviewAutomationError } from "@t3tools/contrac
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
-import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -49,12 +49,6 @@ import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import * as PullRequestsHandlers from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
-import * as DeviceHandlers from "./toolkits/device/handlers.ts";
-import {
-  DeviceScreenshotTool,
-  DeviceScreenshotToolkit,
-  DeviceStandardToolkit,
-} from "./toolkits/device/tools.ts";
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 
@@ -710,26 +704,6 @@ const registerImageTool = <T extends Tool.Any, E, R>(
     });
   });
 
-const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreenshot")(function* () {
-  const devices = yield* DeviceService.DeviceService;
-  const threads = yield* ThreadManagementService.ThreadManagementService;
-  const built = yield* DeviceScreenshotToolkit;
-  yield* registerImageTool(
-    DeviceScreenshotTool,
-    (payload) =>
-      built
-        .handle("device_screenshot", payload)
-        .pipe(Stream.unwrap, Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption)),
-    (effect) =>
-      effect.pipe(
-        Effect.provideService(DeviceService.DeviceService, devices),
-        Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
-      ),
-    "screenshot",
-    "Device screenshot failed.",
-  );
-});
-
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 
 const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(function* () {
@@ -774,7 +748,7 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
 export const layerHtmlToolkit = Layer.mergeAll(
   toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender),
   imageToolRegistration(registerHtmlPreview(), HtmlHandlers.layerPreview),
-).pipe(Layer.provide(HtmlRender.layer));
+);
 
 const layerPreviewStandardToolkitRegistration = toolkitRegistration(
   PreviewStandardToolkit,
@@ -825,21 +799,6 @@ export const layerPullRequestsToolkit = toolkitRegistration(
   PullRequestsHandlers.layer,
 );
 
-const layerDeviceStandardToolkitRegistration = toolkitRegistration(
-  DeviceStandardToolkit,
-  DeviceHandlers.layerStandard,
-);
-
-const layerDeviceScreenshotRegistration = imageToolRegistration(
-  registerDeviceScreenshot(),
-  DeviceHandlers.layerScreenshot,
-);
-
-export const layerDeviceToolkit = Layer.mergeAll(
-  layerDeviceStandardToolkitRegistration,
-  layerDeviceScreenshotRegistration,
-);
-
 export const layerMcpTransport = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
@@ -857,6 +816,5 @@ export const layer = Layer.mergeAll(
   layerPreviewControlsRegistration,
   layerWorktreeToolkitRegistration,
   layerPullRequestsToolkit,
-  layerDeviceToolkit,
   layerHtmlToolkit,
-).pipe(Layer.provideMerge(layerMcpTransport));
+).pipe(Layer.provide(RemoteWorkspaceHtmlRender.layer), Layer.provideMerge(layerMcpTransport));

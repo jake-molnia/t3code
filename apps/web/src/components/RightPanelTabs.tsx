@@ -1,10 +1,4 @@
-import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
-import {
-  threadPullRequestKeysEqual,
-  visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
 import type {
   ContextMenuItem,
   EnvironmentId,
@@ -13,9 +7,14 @@ import type {
   PullRequestState,
   ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
+import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
-  Smartphone,
+  threadPullRequestKeysEqual,
+  visibleThreadPullRequests,
+} from "@t3tools/shared/threadPullRequests";
+import { Volume2, VolumeOff } from "lucide";
+import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -23,32 +22,27 @@ import {
   Files,
   Globe2,
   Plus,
+  Smartphone,
   TerminalSquare,
 } from "lucide-react";
-import { Volume2, VolumeOff } from "lucide";
 import {
-  type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
-  type ReactElement,
-  type ReactNode,
   useCallback,
   useEffect,
   useEffectEvent,
   useMemo,
   useRef,
   useState,
+  type ReactElement,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
+import { useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
 
-import { isElectron } from "~/env";
-import type { DesktopPreviewOverlay } from "~/previewStateStore";
-import type { RightPanelSurface } from "~/rightPanelStore";
-import { cn } from "~/lib/utils";
-import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
-import { readLocalApi } from "~/localApi";
-import { Button } from "~/components/ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
+import { useBrowserDefaults } from "~/browser/browserDefaults";
 import { AndroidIcon, AppleIcon } from "~/components/Icons";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { MorphIcon } from "~/components/MorphIcon";
+import { Button } from "~/components/ui/button";
 import { Kbd } from "~/components/ui/kbd";
 import {
   Menu,
@@ -60,13 +54,18 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "~/components/ui/menu";
-import { useBrowserDefaults } from "~/browser/browserDefaults";
-import { ScrollArea } from "~/components/ui/scroll-area";
 import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
-import { faviconUrlForOrigin } from "~/lib/favicon";
-import { useTheme } from "~/hooks/useTheme";
-import { useDeviceState } from "~/state/device";
+import { ScrollArea } from "~/components/ui/scroll-area";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { isElectron } from "~/env";
 import type { PreviewPanelInlineSize } from "~/hooks/usePreviewPanelInlineSize";
+import { useTheme } from "~/hooks/useTheme";
+import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
+import { faviconUrlForOrigin } from "~/lib/favicon";
+import { cn } from "~/lib/utils";
+import { readLocalApi } from "~/localApi";
+import type { DesktopPreviewOverlay } from "~/previewStateStore";
+import type { RightPanelSurface } from "~/rightPanelStore";
 import {
   newestPullRequestSummary,
   pullRequestEnvironment,
@@ -75,12 +74,12 @@ import {
 import { useEnvironmentQuery } from "~/state/query";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
-import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanelShell";
-import { FaviconImage } from "./preview/PreviewFaviconIcon";
-import { previewBridge } from "./preview/previewBridge";
-import { PierreEntryIcon } from "./chat/PierreEntryIcon";
-import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { PierreEntryIcon } from "./chat/PierreEntryIcon";
+import { FaviconImage } from "./preview/PreviewFaviconIcon";
+import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanelShell";
+import { previewBridge } from "./preview/previewBridge";
+import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 
 interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -384,15 +383,6 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestsAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequests,
       onClick: props.onAddPullRequests,
-    },
-    {
-      label: "Device",
-      description: "Watch an iOS Simulator or Android Emulator.",
-      icon: Smartphone,
-      shortcut: "M",
-      available: props.deviceAvailable,
-      disabledReason: SURFACE_UNAVAILABLE_HINTS.device,
-      onClick: props.onAddDevice,
     },
   ] as const;
 
@@ -912,14 +902,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.pullRequests,
       onClick: props.onAddPullRequests,
     },
-    {
-      label: "Device",
-      icon: Smartphone,
-      shortcut: "M",
-      available: props.deviceAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.device,
-      onClick: props.onAddDevice,
-    },
   ] as const;
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1229,17 +1211,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                           </button>
                         }
                       />
-                      <TooltipPopup>
-                        {surface.kind === "device" ? (
-                          <DeviceTabTooltip
-                            surface={surface}
-                            environmentId={props.environmentId}
-                            title={title}
-                          />
-                        ) : (
-                          title
-                        )}
-                      </TooltipPopup>
+                      <TooltipPopup>{title}</TooltipPopup>
                     </Tooltip>
                   )}
                 </div>
@@ -1416,29 +1388,5 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         )}
       </div>
     </PreviewPanelShell>
-  );
-}
-
-function DeviceTabTooltip(props: {
-  surface: Extract<RightPanelSurface, { kind: "device" }>;
-  environmentId: EnvironmentId | null;
-  title: string;
-}) {
-  const target = props.surface.target;
-  const { state } = useDeviceState(target ? props.environmentId : null);
-  const device = target
-    ? state.devices.find((entry) => entry.hostId === target.hostId && entry.id === target.deviceId)
-    : undefined;
-  const host = target ? state.hosts.find((entry) => entry.id === target.hostId) : undefined;
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span>{props.title}</span>
-      {target ? (
-        <span className="text-muted-foreground">
-          {host?.label ?? "Device host"} ·{" "}
-          {device?.version ?? (target.platform === "ios" ? "iOS" : "Android")}
-        </span>
-      ) : null}
-    </div>
   );
 }

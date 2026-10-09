@@ -794,26 +794,6 @@ export function createServerEnvironmentAtoms<R, E>(
                   return yield* Effect.failCause(exit.cause);
                 });
 
-            if (
-              updateResult.method === "desktop-app" &&
-              updateResult.desktopUpdateToken !== undefined
-            ) {
-              yield* Deferred.succeed(desktopCommitStarting, undefined);
-              yield* Deferred.await(desktopReconnectObserverArmed);
-              const commitExit = yield* environmentRegistry
-                .run(
-                  target.environmentId,
-                  request(WS_METHODS.serverCommitDesktopUpdate, {
-                    requestId: updateResult.desktopUpdateToken,
-                  }),
-                )
-                .pipe(Effect.exit);
-              if (Exit.isFailure(commitExit) && !isLegacyUpdateHandoffLoss(commitExit.cause)) {
-                return yield* Effect.failCause(commitExit.cause);
-              }
-              desktopCommitLostTransport = Exit.isFailure(commitExit);
-            }
-
             targetVersion = updateResult.targetVersion;
 
             currentStage = "resuming";
@@ -864,25 +844,7 @@ export function createServerEnvironmentAtoms<R, E>(
             }),
           ),
         );
-        const desktopUpdateToken = result.desktopUpdateToken;
-        const resumed =
-          result.method === "desktop-app" && desktopUpdateToken !== undefined
-            ? yield* waitForDesktopUpdateTarget(
-                result.targetVersion,
-                nextReady,
-                runDesktopCommitWithReconnectObserver(
-                  environmentRegistry.stateChanges(target.environmentId),
-                  environmentRegistry
-                    .run(
-                      target.environmentId,
-                      request(WS_METHODS.serverCommitDesktopUpdate, {
-                        requestId: desktopUpdateToken,
-                      }),
-                    )
-                    .pipe(Effect.asVoid),
-                ),
-              )
-            : yield* nextReady;
+        const resumed = yield* nextReady;
         yield* validateServerUpdateReadyEvent(result, resumed);
 
         atomRegistry.set(stateAtom, IDLE_SERVER_UPDATE_STATE);
@@ -1036,27 +998,6 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:provider:auth-logout",
       tag: WS_METHODS.providerAuthLogout,
     }),
-    providerInstallState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
-      label: "environment-data:provider:install-state",
-      tag: WS_METHODS.providerInstallSubscribe,
-      idleTtlMs: 0,
-    }),
-    startProviderInstall: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:provider:install-start",
-      tag: WS_METHODS.providerInstallStart,
-      concurrency: {
-        mode: "singleFlight",
-        key: ({ environmentId }) => environmentId,
-      },
-    }),
-    cancelProviderInstall: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:provider:install-cancel",
-      tag: WS_METHODS.providerInstallCancel,
-    }),
-    removeProviderInstallation: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:provider:install-remove",
-      tag: WS_METHODS.providerInstallRemove,
-    }),
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,
@@ -1175,12 +1116,6 @@ export function createServerEnvironmentAtoms<R, E>(
           ]),
       },
     }),
-    updateProvider: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:update-provider",
-      tag: WS_METHODS.serverUpdateProvider,
-      scheduler: configScheduler,
-      concurrency: configConcurrency,
-    }),
     updateServer,
     upsertKeybinding: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:upsert-keybinding",
@@ -1199,22 +1134,6 @@ export function createServerEnvironmentAtoms<R, E>(
     // environment-serial scheduler. The named boundary keeps clients on the
     // atomic map-entry payload instead of rebuilding a stale whole map.
     mutateProviderInstance: updateSettings,
-    prepareAcpRegistryAgent: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:acp-registry:prepare",
-      tag: WS_METHODS.serverPrepareAcpRegistryAgent,
-      concurrency: {
-        mode: "singleFlight",
-        key: ({ environmentId, input }) => `${environmentId}:${input.agentId}`,
-      },
-    }),
-    uninstallAcpRegistryManagedBinary: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:acp-registry:uninstall-managed-binary",
-      tag: WS_METHODS.serverUninstallAcpRegistryManagedBinary,
-      concurrency: {
-        mode: "singleFlight",
-        key: ({ environmentId, input }) => `${environmentId}:${input.agentId}`,
-      },
-    }),
     acceptAcpRegistryUrlAuth: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:acp-registry:accept-url-auth",
       tag: WS_METHODS.serverAcceptAcpRegistryUrlAuth,

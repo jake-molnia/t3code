@@ -487,7 +487,6 @@ const TEXT_GENERATION_FALLBACK_DRIVERS = [
   "muse",
   "pi",
   "opencode",
-  "antigravity",
 ].map((driver) => ProviderDriverKind.make(driver));
 
 /** ACP Registry instances reject every application text-generation operation. */

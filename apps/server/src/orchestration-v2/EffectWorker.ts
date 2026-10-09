@@ -1,3 +1,4 @@
+import * as ForkWorkspace from "../execution/ForkWorkspaceService.ts";
 import { CommandId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -104,10 +105,36 @@ export const layerExecutor: Layer.Layer<
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const forkWorkspace = yield* Effect.serviceOption(ForkWorkspace.ForkWorkspaceService);
     return OrchestrationEffectExecutorV2.of({
       execute: (effect, options) => {
         const willRetry = options?.willRetry ?? false;
         switch (effect.request.type) {
+          case "workspace.fork.prepare":
+            return Option.isSome(forkWorkspace)
+              ? forkWorkspace.value
+                  .prepare({
+                    targetThreadId: effect.threadId,
+                    sourceThreadId: effect.request.sourceThreadId,
+                    sourceRunId: effect.request.sourceRunId,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new OrchestrationEffectExecutionError({
+                          effectId: effect.id,
+                          effectType: effect.request.type,
+                          cause,
+                        }),
+                    ),
+                  )
+              : Effect.fail(
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause: "Fork workspace service is unavailable",
+                  }),
+                );
           case "provider-runtime.continue": {
             const sourceRunId = effect.request.sourceRunId;
             return continueRestartedRun({ threadId: effect.threadId, sourceRunId }).pipe(

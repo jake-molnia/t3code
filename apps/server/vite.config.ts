@@ -78,7 +78,13 @@ export default mergeConfig(
     pack: {
       // The executable embeds one entry; the history worker becomes a hidden
       // subcommand there instead of a sibling script.
-      entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
+      entry: packExecutable
+        ? ["src/bin.ts"]
+        : {
+            bin: "src/bin.ts",
+            "claude-history-worker": "src/claude-history-worker.ts",
+            "execution-worker": "src/execution/bin.ts",
+          },
       outDir: packExecutable ? "dist-exe" : "dist",
       sourcemap: !packExecutable,
       clean: true,

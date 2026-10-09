@@ -1,3 +1,5 @@
+import * as Option from "effect/Option";
+import * as RemoteRecovery from "../execution/RemoteSessionRecovery.ts";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
@@ -185,6 +187,7 @@ export const make = Effect.gen(function* () {
   const eventSink = yield* EventSink.EventSinkV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const outbox = yield* EffectOutbox.EffectOutboxV2;
+  const remoteRecovery = yield* Effect.serviceOption(RemoteRecovery.RemoteSessionRecovery);
   const reconcileProjection = Effect.fn("ProviderRuntimeRecoveryService.reconcileProjection")(
     function* (
       projection: ProjectionStore.ProjectionRuntimeRecoveryState,
@@ -732,6 +735,7 @@ export const make = Effect.gen(function* () {
             (cause) => new ProviderRuntimeRecoveryError({ operation: "read-projections", cause }),
           ),
         );
+      const preserved = new Set<ThreadId>();
       let terminalizedRuns = 0;
       let stoppedSessions = 0;
       let closedRequests = 0;
@@ -747,6 +751,20 @@ export const make = Effect.gen(function* () {
               }),
           ),
         );
+        if (
+          Option.isSome(remoteRecovery) &&
+          (yield* remoteRecovery.value
+            .preserve(projection, trigger)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderRuntimeRecoveryError({ operation: "reconcile", threadId, cause }),
+              ),
+            ))
+        ) {
+          preserved.add(threadId);
+          continue;
+        }
         const enabled =
           continueAfterRestart !== null &&
           resolveProjectSettings(continueAfterRestart, projection.thread.projectId).settings
@@ -758,6 +776,7 @@ export const make = Effect.gen(function* () {
         retiredEffects += result.retiredEffects;
       }
       const outboxReconciliation = yield* outbox.reconcileAfterProcessLoss.pipe(
+        Effect.provideService(EffectOutbox.PreservedRemoteThreads, preserved),
         Effect.mapError(
           (cause) => new ProviderRuntimeRecoveryError({ operation: "drain-outbox", cause }),
         ),
@@ -781,6 +800,8 @@ export const make = Effect.gen(function* () {
     for (const threadId of threadIds) {
       yield* Effect.gen(function* () {
         const projection = yield* projections.getRuntimeRecoveryProjection(threadId);
+        if (Option.isSome(remoteRecovery) && (yield* remoteRecovery.value.isRemote(projection)))
+          return;
         if (
           !resolveProjectSettings(enabled, projection.thread.projectId).settings
             .continueThreadsAfterServerUpdate

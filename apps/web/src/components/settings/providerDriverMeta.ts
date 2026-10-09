@@ -1,6 +1,5 @@
 import {
   AcpRegistrySettings,
-  AntigravitySettings,
   ClaudeSettings,
   CodexSettings,
   CursorSettings,
@@ -47,11 +46,6 @@ export const providerClients = makeProviderClientRegistry([
     driverKind: ProviderDriverKind.make("opencode"),
     label: "OpenCode",
     settingsSchema: OpenCodeSettings,
-  },
-  {
-    driverKind: ProviderDriverKind.make("antigravity"),
-    label: "Antigravity",
-    settingsSchema: AntigravitySettings,
   },
   {
     driverKind: ProviderDriverKind.make("muse"),

@@ -36,6 +36,7 @@ export const PROVIDER_PRESENTATION = {
     color: "#5b9bbd",
     driverKind: ProviderDriverKind.make("opencode"),
   },
+  // Historical usage remains readable after removing this provider.
   antigravity: {
     label: "Antigravity",
     color: "#8c7bd1",

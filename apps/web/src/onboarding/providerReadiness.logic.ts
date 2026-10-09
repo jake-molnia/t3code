@@ -38,7 +38,7 @@ export function getOnboardingProviderState(provider: ServerProvider | undefined)
   if (!provider.enabled || provider.status === "disabled") return "disabled";
   if (!provider.installed && provider.status === "warning" && provider.auth.status === "unknown")
     return "checking";
-  if (!provider.installed) return "install";
+  if (!provider.installed) return "unavailable";
   if (provider.auth.status === "unauthenticated") return "signIn";
   if (provider.status === "ready") return "ready";
   return "attention";
@@ -47,7 +47,7 @@ export function getOnboardingProviderState(provider: ServerProvider | undefined)
 const PROVIDER_STATE_PRIORITY = {
   checking: 0,
   disabled: 1,
-  install: 2,
+  unavailable: 2,
   attention: 3,
   signIn: 4,
   ready: 5,
@@ -71,36 +71,6 @@ export function selectOnboardingProvidersByDriver(
   }
 
   return providersByDriver;
-}
-
-/**
- * Official standalone installers. Neither needs Node or npm, and both land in
- * the paths the server's provider maintenance recognizes as native, so the
- * one-click updater in Settings keeps working after install.
- */
-const NATIVE_INSTALL_COMMANDS = {
-  claudeAgent: {
-    windows: "irm https://claude.ai/install.ps1 | iex",
-    posix: "curl -fsSL https://claude.ai/install.sh | bash",
-  },
-  codex: {
-    windows: "irm https://chatgpt.com/codex/install.ps1 | iex",
-    posix: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
-  },
-} as const;
-
-/**
- * Install command for the setup terminal, keyed on the environment's platform
- * (not the client's): a Windows desktop driving a WSL server gets the shell
- * script. Unknown platforms get the shell script too, since the terminal there
- * is a POSIX shell in practice.
- */
-export function resolveOnboardingProviderInstallCommand(
-  driver: keyof typeof NATIVE_INSTALL_COMMANDS,
-  platform: ExecutionEnvironmentPlatformOs,
-): string {
-  const commands = NATIVE_INSTALL_COMMANDS[driver];
-  return platform === "windows" ? commands.windows : commands.posix;
 }
 
 /** Use the selected provider instance's binary when the setup terminal opens its login flow. */

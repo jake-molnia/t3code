@@ -1,3 +1,4 @@
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
@@ -194,6 +195,7 @@ function makeHarness(options: HarnessOptions = {}) {
   const layerLaunch = ThreadLaunch.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false }),
         layerExternalServices,
         layerThreadManagement,
         layerReceipts,

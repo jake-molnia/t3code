@@ -1,3 +1,4 @@
+import * as Routing from "../agentRuntime/WorkspaceRouting.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -164,6 +165,8 @@ function selectRemoteUrl(
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
+  const routes = yield* Routing.WorkspaceRouting;
+  const remote = routes.enabled ? routes : undefined;
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const git = yield* GitVcsDriver.GitVcsDriver;
@@ -213,6 +216,7 @@ export const make = Effect.gen(function* () {
         });
       }
 
+      if (remote) return yield* remote.validate(trimmed);
       return path.resolve(expandHomePathWith(trimmed, path));
     },
   );
@@ -220,6 +224,18 @@ export const make = Effect.gen(function* () {
   const prepareDestination = Effect.fn("SourceControlRepositoryService.prepareDestination")(
     function* (destinationPath: string) {
       const normalizedDestination = yield* normalizeDestinationPath(destinationPath);
+      if (remote) {
+        yield* remote.call({
+          cwd: normalizedDestination,
+          method: "workspace.prepareClone",
+          input: {},
+        });
+        return {
+          destinationPath: normalizedDestination,
+          parentPath: normalizedDestination,
+          directoryName: ".",
+        };
+      }
       if (yield* fileSystem.exists(normalizedDestination)) {
         const entries = yield* fileSystem
           .readDirectory(normalizedDestination, { recursive: false })
@@ -311,13 +327,13 @@ export const make = Effect.gen(function* () {
     yield* git
       .execute({
         operation: "SourceControlRepositoryService.cloneRepository",
-        cwd: path.dirname(prepared.destinationPath),
+        cwd: remote ? prepared.destinationPath : path.dirname(prepared.destinationPath),
         args: [
           "clone",
           "--progress",
           "--",
           prepared.cloneUrl,
-          path.basename(prepared.destinationPath),
+          remote ? "." : path.basename(prepared.destinationPath),
         ],
         timeoutMs: options?.timeoutMs === undefined ? CLONE_TIMEOUT_MS : options.timeoutMs,
         // Progress redraws add up on a slow multi-GB clone. The buffered copy
@@ -355,6 +371,10 @@ export const make = Effect.gen(function* () {
     destinationPath: string,
   ) {
     const normalized = yield* normalizeDestinationPath(destinationPath);
+    if (remote) {
+      yield* remote.call({ cwd: normalized, method: "workspace.discardClone", input: {} });
+      return;
+    }
     // Only what git left behind may go. The destination was empty when the
     // clone started, so anything without a `.git` inside was put there by
     // someone else since; refuse rather than delete their files.

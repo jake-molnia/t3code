@@ -1,8 +1,9 @@
+import * as RepositoryFiles from "./RepositoryFiles.ts";
+import { GitActionScope } from "../agentRuntime/RemoteGitDriver.ts";
 import * as Arr from "effect/Array";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
-import * as ByteSize from "effect/ByteSize";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -731,6 +732,7 @@ export const make = Effect.gen(function* () {
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const repositoryFiles = yield* RepositoryFiles.RepositoryFiles;
   const path = yield* Path.Path;
 
   const sourceControlProvider = (cwd: string) => sourceControlProviders.resolve({ cwd });
@@ -774,19 +776,7 @@ export const make = Effect.gen(function* () {
     return yield* gitCore.createWorktree(input, { worktreesDirectory, ...options, submodules });
   });
 
-  const readRepositoryInstructions = (cwd: string, fileName: string) =>
-    Effect.gen(function* () {
-      const root = yield* fileSystem.realPath(cwd);
-      const instructionPath = yield* fileSystem.realPath(path.join(root, fileName));
-      if (!instructionPath.startsWith(`${root}${path.sep}`)) {
-        return "";
-      }
-      const info = yield* fileSystem.stat(instructionPath);
-      if (info.type !== "File" || info.size > ByteSize.bytes(20_000)) {
-        return "";
-      }
-      return (yield* fileSystem.readFileString(instructionPath)).trim();
-    }).pipe(Effect.orElseSucceed(() => ""));
+  const readRepositoryInstructions = repositoryFiles.readInstructions;
 
   const readRecentCommitSubjects = (cwd: string) =>
     gitCore
@@ -1044,8 +1034,7 @@ export const make = Effect.gen(function* () {
       ),
     );
   const tempDir = process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? "/tmp";
-  const canonicalizeExistingPath = (value: string) =>
-    fileSystem.realPath(value).pipe(Effect.orElseSucceed(() => value));
+  const canonicalizeExistingPath = repositoryFiles.canonicalizeExistingPath;
   const normalizeStatusCacheKey = canonicalizeExistingPath;
   const nonRepositoryStatusDetails: GitVcsDriver.GitStatusDetails = {
     isRepo: false,
@@ -2909,6 +2898,7 @@ export const make = Effect.gen(function* () {
       });
 
       return yield* runAction().pipe(
+        Effect.provideService(GitActionScope, { id: progress.actionId, counters: new Map() }),
         Effect.ensuring(invalidateStatus(input.cwd)),
         Effect.tapError((error) =>
           Effect.flatMap(Ref.get(currentPhase), (phase) =>

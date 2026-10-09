@@ -1,0 +1,139 @@
+import * as HtmlRender from "../../htmlRender/HtmlRender.ts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
+import * as C from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
+import * as PreviewManager from "../../preview/Manager.ts";
+import * as ServerBrowser from "../../preview/ServerBrowser.ts";
+import * as Broker from "../../mcp/PreviewAutomationBroker.ts";
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import { makePreviewExecutor } from "./PreviewExecutor.ts";
+import * as P from "./PreviewProtocol.ts";
+
+const services = Layer.mergeAll(
+  PreviewManager.layer,
+  Broker.layer,
+  Layer.succeed(HtmlRender.HtmlRender, {
+    prepare: (html) => Effect.succeed(html),
+    preview: () => Effect.die("browser not used in viewer tests"),
+    publish: () => Effect.die("publication not used in viewer tests"),
+  }),
+).pipe(Layer.provideMerge(NodeServices.layer));
+it.layer(services, { excludeTestServices: true })("sandbox preview execution", (it) => {
+  it.effect(
+    "forces server tabs and holds native frame acknowledgements until the viewer acks",
+    () =>
+      Effect.gen(function* () {
+        const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>({ capacity: 16 });
+        let acknowledged = 0;
+        const inputs: unknown[] = [];
+        const browser = ServerBrowser.ServerBrowser.of({
+          attachViewer: () =>
+            Effect.succeed({
+              output,
+              input: (message) =>
+                Effect.sync(() => {
+                  inputs.push(message);
+                }),
+            }),
+          answerFileChooser: () => Effect.succeed(true),
+          openDownload: () => Effect.succeed(Option.none()),
+          clearProfile: () => Effect.void,
+        });
+        const executor = yield* makePreviewExecutor({ publish: async () => {} }).pipe(
+          Effect.provideService(ServerBrowser.ServerBrowser, browser),
+          Effect.provideService(ServerEnvironment.ServerEnvironment, {
+            getEnvironmentId: Effect.succeed(C.EnvironmentId.make("worker-env")),
+            getDescriptor: Effect.die("descriptor not used"),
+          }),
+        );
+        const opened = yield* Schema.decodeUnknownEffect(C.PreviewSessionSnapshot)(
+          yield* executor.execute("preview.open", {
+            threadId: "thread",
+            url: "http://localhost:3000",
+            runtime: "desktop",
+          }),
+        );
+        expect(opened.runtime).toBe("server");
+        const viewer = yield* Schema.decodeUnknownEffect(P.ViewerRef)(
+          yield* executor.execute("preview.viewerOpen", {
+            threadId: "thread",
+            tabId: opened.tabId,
+            maxWidth: 1280,
+            maxHeight: 720,
+            quality: 70,
+            canOperate: true,
+          }),
+        );
+        yield* Queue.offer(output, {
+          _tag: "frame",
+          data: new Uint8Array([1, 2, 3]),
+          ack: Effect.sync(() => {
+            acknowledged++;
+          }),
+        });
+        const frames = yield* Schema.decodeUnknownEffect(P.ViewerBatch)(
+          yield* executor.execute("preview.viewerPoll", viewer),
+        );
+        expect(frames).toEqual([{ _tag: "frame", data: "AQID", ackId: 1 }]);
+        expect(acknowledged).toBe(0);
+        yield* executor.execute("preview.viewerAck", { ...viewer, ackId: 1 });
+        yield* executor.execute("preview.viewerAck", { ...viewer, ackId: 1 });
+        expect(acknowledged).toBe(1);
+        yield* executor.execute("preview.viewerInput", {
+          ...viewer,
+          message: { type: "pointerMove", x: 1, y: 2 },
+        });
+        expect(inputs).toHaveLength(1);
+        yield* executor.execute("preview.viewerClose", viewer);
+        expect((yield* Effect.exit(executor.execute("preview.viewerPoll", viewer)))._tag).toBe(
+          "Failure",
+        );
+      }),
+  );
+  it.effect("bounds unacknowledged frames and acknowledges dropped frames", () =>
+    Effect.gen(function* () {
+      const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>({ capacity: 20 });
+      let acknowledgements = 0;
+      const executor = yield* makePreviewExecutor({ publish: async () => {} }).pipe(
+        Effect.provideService(ServerBrowser.ServerBrowser, {
+          attachViewer: () => Effect.succeed({ output, input: () => Effect.void }),
+          answerFileChooser: () => Effect.succeed(false),
+          openDownload: () => Effect.succeed(Option.none()),
+          clearProfile: () => Effect.void,
+        }),
+        Effect.provideService(ServerEnvironment.ServerEnvironment, {
+          getEnvironmentId: Effect.succeed(C.EnvironmentId.make("worker-env")),
+          getDescriptor: Effect.die("unused"),
+        }),
+      );
+      const viewer = yield* Schema.decodeUnknownEffect(P.ViewerRef)(
+        yield* executor.execute("preview.viewerOpen", {
+          threadId: "thread",
+          tabId: "tab",
+          maxWidth: 100,
+          maxHeight: 100,
+          quality: 50,
+          canOperate: false,
+        }),
+      );
+      for (let i = 0; i < 12; i++)
+        yield* Queue.offer(output, {
+          _tag: "frame",
+          data: new Uint8Array([i]),
+          ack: Effect.sync(() => {
+            acknowledgements++;
+          }),
+        });
+      const batch = yield* Schema.decodeUnknownEffect(P.ViewerBatch)(
+        yield* executor.execute("preview.viewerPoll", viewer),
+      );
+      expect(batch).toHaveLength(8);
+      expect(acknowledgements).toBe(4);
+    }),
+  );
+});

@@ -7,16 +7,15 @@ import * as Schema from "effect/Schema";
 
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
 
-const Credentials = Schema.fromJsonString(
-  Schema.Struct({
-    version: Schema.Literal(1),
-    backendUrl: Schema.String,
-    apiKey: Schema.String,
-    createdAtMs: Schema.Finite,
-    apiKeyExpiresAtMs: Schema.optionalKey(Schema.Finite),
-    email: Schema.optionalKey(Schema.String),
-  }),
-);
+export const ExecutionCredentials = Schema.Struct({
+  version: Schema.Literal(1),
+  backendUrl: Schema.String,
+  apiKey: Schema.String,
+  createdAtMs: Schema.Finite,
+  apiKeyExpiresAtMs: Schema.optionalKey(Schema.Finite),
+  email: Schema.optionalKey(Schema.String),
+});
+const Credentials = Schema.fromJsonString(ExecutionCredentials);
 
 const decodeCredentials = Schema.decodeUnknownEffect(Credentials);
 const encodeCredentials = Schema.encodeEffect(Credentials);

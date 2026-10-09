@@ -50,7 +50,6 @@ import {
 } from "../../onboarding/projectImport.logic";
 import {
   getOnboardingProviderState,
-  resolveOnboardingProviderInstallCommand,
   resolveOnboardingProviderLoginCommand,
   selectOnboardingProvidersByDriver,
 } from "../../onboarding/providerReadiness.logic";
@@ -724,7 +723,7 @@ function ConnectedAgentsStep({
   } | null>(null);
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
 
-  // Re-probe on entry so freshly installed CLIs show up without a manual
+  // Re-probe on entry so provider account changes show up without a manual
   // refresh; harmless when nothing changed (single-flighted per environment).
   useEffect(() => {
     void refreshProviders({ environmentId, input: {} });
@@ -777,6 +776,7 @@ function ConnectedAgentsStep({
               onOpenTerminal={() => {
                 if (
                   provider === undefined ||
+                  !provider.installed ||
                   !readEnvironmentScope(environmentId, AuthTerminalOperateScope)
                 )
                   return;
@@ -785,16 +785,11 @@ function ConnectedAgentsStep({
                   driver,
                   providerInstanceId: provider.instanceId,
                   cwd: serverConfig.cwd,
-                  command: provider.installed
-                    ? resolveOnboardingProviderLoginCommand(
-                        provider,
-                        serverConfig.settings,
-                        serverConfig.environment.platform.os,
-                      )
-                    : resolveOnboardingProviderInstallCommand(
-                        driver,
-                        serverConfig.environment.platform.os,
-                      ),
+                  command: resolveOnboardingProviderLoginCommand(
+                    provider,
+                    serverConfig.settings,
+                    serverConfig.environment.platform.os,
+                  ),
                   keybindings: serverConfig.keybindings,
                 });
               }}
@@ -809,6 +804,7 @@ function ConnectedAgentsStep({
               onOpenTerminal={() => {
                 if (
                   provider === undefined ||
+                  !provider.installed ||
                   serverConfig === null ||
                   !readEnvironmentScope(environmentId, AuthTerminalOperateScope)
                 )
@@ -818,16 +814,11 @@ function ConnectedAgentsStep({
                   driver,
                   providerInstanceId: provider.instanceId,
                   cwd: serverConfig.cwd,
-                  command: provider.installed
-                    ? resolveOnboardingProviderLoginCommand(
-                        provider,
-                        serverConfig.settings,
-                        serverConfig.environment.platform.os,
-                      )
-                    : resolveOnboardingProviderInstallCommand(
-                        driver,
-                        serverConfig.environment.platform.os,
-                      ),
+                  command: resolveOnboardingProviderLoginCommand(
+                    provider,
+                    serverConfig.settings,
+                    serverConfig.environment.platform.os,
+                  ),
                   keybindings: serverConfig.keybindings,
                 });
               }}
@@ -855,7 +846,7 @@ function ConnectedAgentsStep({
         />
       ) : null}
       {terminalSession !== null ? (
-        <AgentInstallTerminal
+        <AgentSignInTerminal
           key={`${terminalSession.environmentId}:${terminalSession.providerInstanceId}:${terminalSession.driver}`}
           session={terminalSession}
           onClose={() => {
@@ -998,16 +989,19 @@ function AgentCard({
           <span className="text-xs text-muted-foreground">Disabled</span>
         ) : providerState === "attention" ? (
           <span className="text-xs text-muted-foreground">{summary.headline}</span>
-        ) : (
+        ) : provider?.installed ? (
           <Button
             size="xs"
             variant="ghost"
+            aria-label={`Sign in to ${displayName}`}
             onClick={onOpenTerminal}
             disabled={terminalOpen || !terminalAvailable}
           >
             <TerminalIcon className="size-3.5" />
-            {providerState === "signIn" ? "Sign in" : "Install"}
+            Sign in
           </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">Runtime unavailable</span>
         )}
       </div>
     </div>
@@ -1015,12 +1009,12 @@ function AgentCard({
 }
 
 /**
- * Inline install terminal. Opens a PTY on the connected environment under a
+ * Inline sign-in terminal. Opens a PTY on the connected environment under a
  * synthetic onboarding thread id (terminals are keyed by free-form thread id;
- * the server validates only the cwd) and pre-types the install or login
+ * the server validates only the cwd) and pre-types the login
  * command without submitting, so the user reviews and presses Enter.
  */
-function AgentInstallTerminal({
+function AgentSignInTerminal({
   session,
   onClose,
 }: {
@@ -1169,7 +1163,7 @@ function AgentInstallTerminal({
             threadRef={threadRef}
             threadId={AGENT_ONBOARDING_THREAD_ID}
             terminalId={terminalId}
-            terminalLabel={`Install ${driver}`}
+            terminalLabel={`Sign in to ${driver}`}
             cwd={cwd}
             providerInstanceId={providerInstanceId}
             advancedTypography={advancedTypography}

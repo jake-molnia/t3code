@@ -1,3 +1,4 @@
+import * as Routing from "../agentRuntime/WorkspaceRouting.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -35,6 +36,7 @@ export class ReviewService extends Context.Service<
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
+  const routes = yield* Routing.WorkspaceRouting;
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -70,6 +72,20 @@ export const make = Effect.gen(function* () {
     operation: "ReviewService.getDiffPreview" | "ReviewService.getDiffFileContents",
     cwd: string,
   ) {
+    if (routes.enabled) {
+      return yield* routes.validate(cwd).pipe(
+        Effect.asVoid,
+        Effect.mapError(
+          (cause) =>
+            new VcsRepositoryDetectionError({
+              operation,
+              cwd,
+              detail: "Review requires a registered execution workspace.",
+              cause,
+            }),
+        ),
+      );
+    }
     const worktreesDirectories = yield* settings.getSettings.pipe(
       Effect.orElseSucceed(() => ({ worktreesDirectory: "", previousWorktreesDirectories: [] })),
     );

@@ -6,15 +6,10 @@ which models and account access are available through this agent.
 
 ## Set up Antigravity
 
-On web or desktop, open **Settings > Providers**, choose the environment that runs
-your project, and enable Antigravity. Install its runtime there, then choose
-**Sign in** and complete the browser sign-in. Wait for T3 Code to confirm
-account access and load models before starting a thread. Once the runtime is installed,
-you can also sign in from **Settings > Provider accounts** in the mobile app.
-
-Installation continues if you leave settings or reconnect. Setup requires
-permission to operate the environment; update an older server if it does not offer
-Antigravity setup.
+Open **Settings > Providers**, choose Antigravity, and select **Sign in**.
+Complete browser sign-in and wait for T3 Code to verify account access and load
+models before starting a thread. The execution image supplies the runtime.
+Provider settings do not install, update, or remove it.
 
 ### Sign in from a remote device
 

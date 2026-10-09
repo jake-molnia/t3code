@@ -1,5 +1,6 @@
 import * as NodeBuffer from "node:buffer";
 
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -1262,4 +1263,4 @@ export const make = Effect.gen(function* () {
 });
 
 export const layerVcs = Layer.effect(VcsDriver.VcsDriver, makeVcsDriver);
-export const layer = Layer.effect(GitVcsDriver, make);
+export const layer = Layer.merge(Layer.effect(GitVcsDriver, make), RepositoryFiles.layer);

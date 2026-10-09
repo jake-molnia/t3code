@@ -36,21 +36,15 @@ without expanding shell expressions.
 
 ## Where agents run
 
-Registry agents always run on the machine that hosts your T3 Code server. That stays true when you
-connect through `app.t3.codes`, T3 Connect, or a relay.
-
-Agents install under `tools/<agent-id>/<version>/` inside T3 home. T3 Code verifies SHA-256 when the Registry entry
-provides one; entries without a checksum retain the Registry's HTTPS distribution guarantee.
-Registry `npx` and `uvx` packages use T3-owned npm prefixes and Python tool directories at the exact
-version published by the Registry. Their commands are available in a new server terminal for
-sign-in and direct use. Removing an agent's last provider instance removes T3-managed binary files
-but keeps package installs. To use an existing local binary, set **Executable override** explicitly.
+ACP agents run in the conversation's sandbox. The execution image supplies a
+finite set of supported agents and their versions. Provider settings select
+accounts and models; they do not download, update, or uninstall agent binaries.
+Contact the deployment administrator to change the image's supported agents.
 
 ## Signing in
 
-Open the agent's account section in **Settings → Providers** on web or desktop. Choose
-**Sign in** and, if the agent offers several methods, select one. For an installed, configured
-provider, mobile also offers **Settings → Provider accounts**.
+Open the agent's account section in **Settings → Providers**. Choose
+**Sign in** and, if the agent offers several methods, select one.
 
 Browser sign-in shows the agent's URL and waits for you to open or copy it before telling the
 agent to proceed. The page opens on your device, while the agent runs on the environment.

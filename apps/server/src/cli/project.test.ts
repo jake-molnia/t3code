@@ -1,3 +1,4 @@
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration uses temporary Node paths.
@@ -7,6 +8,7 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import {
   CommandId,
   EnvironmentInternalError,
@@ -44,6 +46,14 @@ import {
   projectCommandErrorFromLiveServerRequest,
 } from "./project.ts";
 
+// These persistence tests deliberately exercise native temporary directories.
+// Production CLI routing remains remote and fails closed without a workspace binding.
+vi.mock("../agentRuntime/WorkspaceRouting.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agentRuntime/WorkspaceRouting.ts")>();
+  const Layer = await import("effect/Layer");
+  return { ...actual, layer: Layer.mock(actual.WorkspaceRouting)({ enabled: false }) };
+});
+
 const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
 const runCli = (args: ReadonlyArray<string>) =>
   Command.runWith(cli, { version: "0.0.0" })(args).pipe(Effect.provide(layerCliRuntime));
@@ -77,7 +87,6 @@ const makeConfig = (baseDir: string) =>
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: undefined,
-      autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
@@ -88,6 +97,7 @@ const readProjects = (baseDir: string) =>
   Effect.gen(function* () {
     const config = yield* makeConfig(baseDir);
     const layer = RuntimeLayer.layerProjectService.pipe(
+      Layer.provide(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
       Layer.provideMerge(ProjectEnrichmentService.layer),
       Layer.provideMerge(RepositoryIdentityResolver.layer),
       Layer.provideMerge(ProjectFaviconResolver.layer),

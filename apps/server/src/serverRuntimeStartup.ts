@@ -1,26 +1,14 @@
-import {
-  CommandId,
-  DEFAULT_MODEL,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
-  DEFAULT_SERVER_SETTINGS,
-  type ModelSelection,
-  type Project,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-} from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, type Project } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -35,7 +23,6 @@ import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1Threa
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
-import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -174,16 +161,6 @@ const recordStartupHeartbeat = Effect.gen(function* () {
   });
 });
 
-export const getAutoBootstrapThreadModelSelection = (): ModelSelection => ({
-  instanceId: ProviderInstanceId.make("codex"),
-  model: DEFAULT_MODEL,
-});
-
-interface AutoBootstrapWelcomeTargets {
-  readonly bootstrapProjectId?: ProjectId;
-  readonly bootstrapThreadId?: ThreadId;
-}
-
 export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
   projects: ReadonlyArray<Pick<Project, "id" | "workspaceRoot" | "autoPull">>,
   settings = DEFAULT_SERVER_SETTINGS,
@@ -253,64 +230,6 @@ export const resolveWelcomeBase = Effect.gen(function* () {
     cwd: serverConfig.cwd,
     projectName,
   } as const;
-});
-
-const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
-  const randomUUID = crypto.randomUUIDv4;
-  const serverConfig = yield* ServerConfig.ServerConfig;
-  const projects = yield* ProjectService.ProjectService;
-  const threads = yield* ThreadManagement.ThreadManagementService;
-  const threadLaunch = yield* ThreadLaunch.ThreadLaunchService;
-  const path = yield* Path.Path;
-
-  let bootstrapProjectId: ProjectId | undefined;
-  let bootstrapThreadId: ThreadId | undefined;
-
-  if (serverConfig.autoBootstrapProjectFromCwd) {
-    // Project creation has no user model choice; only the bootstrap thread
-    // gets an automatic selection, and an explicit project default wins.
-    const threadModelSelection = getAutoBootstrapThreadModelSelection();
-    const { project } = yield* projects.bootstrap({
-      commandId: CommandId.make(yield* randomUUID),
-      projectId: ProjectId.make(yield* randomUUID),
-      title: path.basename(serverConfig.cwd) || "project",
-      workspaceRoot: serverConfig.cwd,
-    });
-    const shell = yield* threads.getShellSnapshot();
-    const existingThread = shell.threads.find(
-      (thread) =>
-        thread.projectId === project.id && thread.lineage.relationshipToParent !== "subagent",
-    );
-    if (existingThread === undefined) {
-      const serverSettings = yield* ServerSettings.ServerSettingsService;
-      const settings = yield* serverSettings.getSettings;
-      const launched = yield* threadLaunch.launch({
-        commandId: CommandId.make(yield* randomUUID),
-        projectId: project.id,
-        title: "New thread",
-        modelSelection:
-          resolveProjectSettings(settings, project.id, project).settings.defaultModelSelection ??
-          threadModelSelection,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: resolveProjectSettings(settings, project.id, project).settings
-          .defaultRuntimeMode,
-        workspaceStrategy: { type: "root" },
-        createdBy: "system",
-        creationSource: "server",
-      });
-      bootstrapProjectId = project.id;
-      bootstrapThreadId = launched.threadId;
-    } else {
-      bootstrapProjectId = project.id;
-      bootstrapThreadId = existingThread.id;
-    }
-  }
-
-  return {
-    ...(bootstrapProjectId ? { bootstrapProjectId } : {}),
-    ...(bootstrapThreadId ? { bootstrapThreadId } : {}),
-  } satisfies AutoBootstrapWelcomeTargets;
 });
 
 const resolveStartupBrowserTarget = Effect.gen(function* () {
@@ -425,7 +344,6 @@ const make = (options?: StartupOptions) =>
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-    const crypto = yield* Crypto.Crypto;
     const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
 
     const commandGate = yield* makeCommandGate;
@@ -504,7 +422,7 @@ const make = (options?: StartupOptions) =>
           },
         });
       }
-      const { recovery, bootstrap: bootstrapTargets } = yield* runOrderedV2StartupPhases({
+      const { recovery } = yield* runOrderedV2StartupPhases({
         importLegacyShells: runStartupPhase(
           "orchestration-v2.legacy-v1.import-shells",
           legacyV1ThreadImporter.reconcileShells.pipe(
@@ -528,13 +446,7 @@ const make = (options?: StartupOptions) =>
             workerFiberRef: effectWorkerFiber,
           }),
         ),
-        autoBootstrap: (serverConfig.autoBootstrapProjectFromCwd
-          ? runStartupPhase(
-              "welcome.autobootstrap",
-              resolveAutoBootstrapWelcomeTargets.pipe(Effect.provideService(Crypto.Crypto, crypto)),
-            )
-          : Effect.succeed({})
-        ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),
+        autoBootstrap: Effect.void,
       });
       yield* Effect.logInfo("V2 orchestration recovery completed", recovery);
       // Runs after activation: the status check fetches every enabled project's
@@ -618,8 +530,6 @@ const make = (options?: StartupOptions) =>
         environmentId: environment.environmentId,
         cwd: welcomeBase.cwd,
         projectName: welcomeBase.projectName,
-        bootstrapProjectId: bootstrapTargets.bootstrapProjectId,
-        bootstrapThreadId: bootstrapTargets.bootstrapThreadId,
       });
       yield* runStartupPhase(
         "welcome.publish",
@@ -629,7 +539,6 @@ const make = (options?: StartupOptions) =>
           payload: {
             environment,
             ...welcomeBase,
-            ...bootstrapTargets,
           },
         }),
       );

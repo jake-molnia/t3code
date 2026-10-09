@@ -3,16 +3,7 @@ import { type CSSProperties, memo } from "react";
 import { providerInstanceInitials } from "@t3tools/client-runtime/state/provider-instance-display";
 
 import { ProviderDriverKind } from "@t3tools/contracts";
-import {
-  AntigravityIcon,
-  ClaudeAI,
-  CursorIcon,
-  GrokIcon,
-  MuseIcon,
-  Icon,
-  OpenAI,
-  OpenCodeIcon,
-} from "../Icons";
+import { ClaudeAI, CursorIcon, GrokIcon, MuseIcon, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 
 import { cn } from "~/lib/utils";
 import { providerClients } from "../settings/providerDriverMeta";
@@ -30,7 +21,6 @@ const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
   [ProviderDriverKind.make("cursor")]: CursorIcon,
   [ProviderDriverKind.make("grok")]: GrokIcon,
   [ProviderDriverKind.make("muse")]: MuseIcon,
-  [ProviderDriverKind.make("antigravity")]: AntigravityIcon,
 };
 
 const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
@@ -39,7 +29,6 @@ const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string
   [ProviderDriverKind.make("cursor")]: "text-[#26251E] dark:text-[#EDECEC]",
   [ProviderDriverKind.make("grok")]: "text-[#0F0F0F] dark:text-[#F5F5F5]",
   [ProviderDriverKind.make("opencode")]: "text-[#211E1E] dark:text-[#F1ECEC]",
-  [ProviderDriverKind.make("antigravity")]: "text-[#5b87bf]",
 };
 
 /** Brand text color for a provider label; package glyphs supply theirs as CSS variables. */

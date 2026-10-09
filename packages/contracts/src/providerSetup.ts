@@ -154,39 +154,6 @@ export const ProviderAuthCancelInput = Schema.Struct({
   flowId: SetupOperationId,
 });
 export type ProviderAuthCancelInput = typeof ProviderAuthCancelInput.Type;
-
-const ByteCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
-
-export const ProviderInstallState = Schema.Struct({
-  driver: ProviderDriverKind,
-  operationId: Schema.NullOr(SetupOperationId),
-  phase: Schema.Literals([
-    "idle",
-    "downloading",
-    "extracting",
-    "verifying",
-    "succeeded",
-    "failed",
-    "cancelled",
-  ]),
-  downloadedBytes: ByteCount,
-  totalBytes: Schema.NullOr(ByteCount),
-  version: Schema.NullOr(TrimmedNonEmptyString),
-  installedVersion: Schema.NullOr(TrimmedNonEmptyString),
-  executablePath: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
-  source: Schema.optionalKey(Schema.NullOr(Schema.Literals(["managed", "local"]))),
-  canRemove: Schema.Boolean,
-  message: Schema.NullOr(Schema.String),
-});
-export type ProviderInstallState = typeof ProviderInstallState.Type;
-
-export const ProviderInstallCancelInput = Schema.Struct({
-  instanceId: ProviderInstanceId,
-  operationId: SetupOperationId,
-});
-export type ProviderInstallCancelInput = typeof ProviderInstallCancelInput.Type;
-
-/** Safe setup failure text. Never include OAuth codes, URLs, or native token data. */
 export class ProviderSetupError extends Schema.TaggedError<ProviderSetupError>()(
   "ProviderSetupError",
   {

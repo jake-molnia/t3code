@@ -1,3 +1,4 @@
+import * as Routing from "../agentRuntime/WorkspaceRouting.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -12,6 +13,8 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as ReviewService from "./ReviewService.ts";
 
 function layer(input: {
+  readonly routing?: Partial<Routing.WorkspaceRouting["Service"]> &
+    Pick<Routing.WorkspaceRouting["Service"], "enabled">;
   readonly workspaceRoot: string;
   readonly baseDir: string;
   readonly detectCalls?: Array<{ readonly cwd: string }>;
@@ -19,6 +22,7 @@ function layer(input: {
   readonly previousWorktreesDirectories?: ReadonlyArray<string>;
 }) {
   return ReviewService.layer.pipe(
+    Layer.provide(Layer.mock(Routing.WorkspaceRouting)(input.routing ?? { enabled: false })),
     Layer.provide(
       Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
         get: () => Effect.die("unexpected VCS registry get"),
@@ -175,3 +179,40 @@ describe("ReviewService", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+it.effect(
+  "review authorization uses registered worker paths instead of central workspace roots",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "remote-review-" });
+      const cwd = "/workspace/registered/repo";
+      const detectCalls: Array<{ cwd: string }> = [];
+      const review = yield* ReviewService.ReviewService.pipe(
+        Effect.provide(
+          layer({
+            workspaceRoot: baseDir,
+            baseDir,
+            detectCalls,
+            routing: {
+              enabled: true,
+              validate: (value) =>
+                value === cwd
+                  ? Effect.succeed(value)
+                  : Effect.fail(
+                      new Routing.WorkspaceRoutingError({
+                        operation: "validate",
+                        cause: "unregistered",
+                      }),
+                    ),
+            },
+          }),
+        ),
+      );
+      const preview = yield* review.getDiffPreview({ cwd });
+      assert.strictEqual(preview.cwd, cwd);
+      const failure = yield* review.getDiffPreview({ cwd: baseDir }).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "VcsRepositoryDetectionError");
+      assert.deepStrictEqual(detectCalls, [{ cwd }]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);

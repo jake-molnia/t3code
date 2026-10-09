@@ -1,8 +1,4 @@
-import type {
-  ServerProvider,
-  ServerProviderVersionAdvisory,
-  ServerProviderCompatibilityAdvisory,
-} from "@t3tools/contracts";
+import type { ServerProvider } from "@t3tools/contracts";
 
 /**
  * Visual treatment for each server-reported provider status. Centralized so
@@ -93,80 +89,6 @@ export function getProviderSummary(provider: ServerProvider | undefined) {
  */
 export function getProviderVersionLabel(version: string | null | undefined) {
   if (!version) return null;
-  // Antigravity reports a release tag such as `agy_acp_server_20260818_01_RC01`.
-  // Show the date and candidate so the row title keeps room for the name.
-  const antigravity = /^agy_acp_server_(\d{4})(\d{2})(\d{2})_\d+(?:_(\w+))?$/.exec(version);
-  if (antigravity) {
-    const [, year, month, day, candidate] = antigravity;
-    return `${year}-${month}-${day}${candidate ? ` ${candidate}` : ""}`;
-  }
   // Only bare semver-like versions get a `v` prefix. Other tags are shown as-is.
   return /^\d/.test(version) ? `v${version}` : version;
-}
-
-const COMPATIBILITY_TITLES = {
-  graceful: "Limited support",
-  unsupported: "Unsupported version",
-  broken: "Known broken version",
-} as const;
-
-/** Compatibility guidance shares the version popover, with safe install actions. */
-export function getProviderVersionAdvisoryPresentation(
-  advisory: ServerProviderVersionAdvisory | undefined,
-  compatibility?: ServerProviderCompatibilityAdvisory | undefined,
-  showCompatibility = true,
-): {
-  readonly title: string;
-  readonly detail: string;
-  readonly updateCommand: string | null;
-  readonly emphasis: "normal" | "strong";
-  readonly targetVersion: string | null;
-} | null {
-  const latestIsIncompatible =
-    compatibility?.latestVersionStatus === "broken" ||
-    compatibility?.latestVersionStatus === "unsupported";
-  if (
-    showCompatibility &&
-    compatibility &&
-    (compatibility.status === "graceful" ||
-      compatibility.status === "unsupported" ||
-      compatibility.status === "broken")
-  ) {
-    const targetVersion = compatibility.recommendedVersion;
-    const recommendation = getProviderVersionLabel(targetVersion) ?? compatibility.recommendedRange;
-    return {
-      title: COMPATIBILITY_TITLES[compatibility.status],
-      detail:
-        compatibility.message ??
-        (recommendation ? `Use ${recommendation} for full support.` : "Update for full support."),
-      updateCommand:
-        targetVersion || latestIsIncompatible ? null : (advisory?.updateCommand ?? null),
-      emphasis: compatibility.status === "graceful" ? "normal" : "strong",
-      targetVersion,
-    };
-  }
-  if (
-    !advisory ||
-    advisory.status === "current" ||
-    advisory.status === "unknown" ||
-    latestIsIncompatible
-  ) {
-    return null;
-  }
-
-  const label = "Update available";
-  const version = advisory.latestVersion;
-  const versionLabel = getProviderVersionLabel(version);
-
-  return {
-    title: label,
-    detail:
-      advisory.message ??
-      (versionLabel
-        ? `${label}: install ${versionLabel}.`
-        : `${label}: install the latest provider version.`),
-    updateCommand: advisory.updateCommand,
-    emphasis: "normal" as const,
-    targetVersion: null,
-  };
 }

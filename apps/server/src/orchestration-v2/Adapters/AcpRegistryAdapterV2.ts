@@ -80,7 +80,7 @@ export interface AcpRegistryAdapterV2Options {
 // ─── Per-agent exceptions ────────────────────────────────────────────────────
 // This adapter serves every ACP registry agent through the plain ACP spec.
 // Agent-specific behavior does not belong here: an agent that needs it gets a
-// dedicated driver (as Grok and Antigravity have). The few exceptions below
+// dedicated driver (as Grok has). The few exceptions below
 // predate that rule and are small presentation hooks, not permission or tool
 // behavior.
 //
