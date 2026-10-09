@@ -45,8 +45,8 @@ export const apply = Effect.fn("AgentRuntimeBindings.apply")(function* (
         VALUES (${thread.id}, ${parent.workspaceId}) ON CONFLICT(thread_id) DO NOTHING`;
     } else {
       const workspaceId = `t3:${thread.id}`;
-      yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id, owner_thread_id)
-        VALUES (${workspaceId}, ${thread.id}) ON CONFLICT(owner_thread_id) DO NOTHING`;
+      yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id, owner_thread_id, pool_id)
+        VALUES (${workspaceId}, ${thread.id}, ${thread.executionPoolId ?? null}) ON CONFLICT(owner_thread_id) DO NOTHING`;
       yield* sql`INSERT INTO agent_runtime_thread_bindings(thread_id, workspace_id)
         VALUES (${thread.id}, ${workspaceId}) ON CONFLICT(thread_id) DO NOTHING`;
     }

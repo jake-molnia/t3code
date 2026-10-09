@@ -76,6 +76,7 @@ export interface ThreadLaunchInitialMessage {
 }
 
 export interface ThreadLaunchInput {
+  readonly executionPoolId?: import("@t3tools/contracts").ExecutionPoolId;
   readonly commandId: CommandId;
   readonly threadId?: ThreadId;
   readonly reuseExistingThread?: boolean;
@@ -864,6 +865,9 @@ const make = Effect.gen(function* () {
               })
             : threads.dispatch({
                 type: "thread.create",
+                ...(input.executionPoolId === undefined
+                  ? {}
+                  : { executionPoolId: input.executionPoolId }),
                 commandId: input.commandId,
                 threadId: candidateThreadId,
                 projectId: input.projectId,

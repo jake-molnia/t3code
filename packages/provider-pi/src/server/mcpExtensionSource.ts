@@ -210,6 +210,16 @@ function createMcpClient(endpoint: string, token: string) {
 }
 
 export default async function t3McpExtension(pi: ExtensionAPI) {
+  const additional: unknown = JSON.parse(process.env.T3_ADDITIONAL_MCP_SERVERS ?? "{}");
+  if (additional && typeof additional === "object" && "registerMcpServer" in pi && typeof pi.registerMcpServer === "function") {
+    for (const [name, server] of Object.entries(additional)) {
+      if (!server || typeof server !== "object" || !("url" in server) || typeof server.url !== "string") continue;
+      const headers: Record<string,string> = {};
+      if ("headers" in server && server.headers && typeof server.headers === "object") for (const [key,value] of Object.entries(server.headers)) if (typeof value === "string") headers[key] = value;
+      pi.registerMcpServer(name, { url: server.url, headers });
+    }
+  }
+
   // Workaround for an upstream Pi context-budgeting bug: pi-ai reuses the
   // previous response's usage even when a fork's instructions/tools differ,
   // then reserves almost all remaining context for output. OpenRouter can

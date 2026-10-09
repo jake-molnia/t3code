@@ -167,7 +167,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               const client =
                 observation?.kind === "running"
                   ? observation.client
-                  : yield* runtime.forThread(value.threadId);
+                  : yield* runtime.forThread(value.threadId, driver.driverKind);
               if (attachOnly) {
                 const residency = yield* runtime.sessionResidency(value.providerSessionId);
                 const current = yield* Effect.tryPromise(() => client.inspectIdentity());

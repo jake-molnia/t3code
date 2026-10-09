@@ -1,3 +1,4 @@
+import { ExecutionPoolId } from "./executionPools.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -362,6 +363,7 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
 export const OrchestrationV2AppThread = Schema.Struct({
+  executionPoolId: Schema.optional(ExecutionPoolId),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -1834,6 +1836,7 @@ export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
+  executionPoolId: Schema.optional(ExecutionPoolId),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -2611,6 +2614,7 @@ export type OrchestrationV2StoredEventJson = typeof OrchestrationV2StoredEventJs
 export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("thread.create"),
+    executionPoolId: Schema.optional(ExecutionPoolId),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
     threadId: ThreadId,
@@ -3180,6 +3184,7 @@ export type OrchestrationV2ArchivedShellStreamItem =
   typeof OrchestrationV2ArchivedShellStreamItem.Type;
 
 export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
+  executionPoolId: Schema.optional(ExecutionPoolId),
   commandId: CommandId,
   creationSource: Schema.optional(OrchestrationV2CreationSource),
   threadId: Schema.optional(ThreadId),

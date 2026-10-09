@@ -1,3 +1,4 @@
+import { ExecutionPoolId } from "@t3tools/contracts";
 import { stripInlineContextReferences } from "./lib/composerContextReferences";
 import { elementContextToPreviewAnnotation } from "./lib/elementContext";
 import {
@@ -320,6 +321,8 @@ const PersistedDraftThreadState = Schema.Struct({
   environmentId: Schema.String,
   projectId: ProjectId,
   logicalProjectKey: Schema.optionalKey(Schema.String),
+  executionPoolId: Schema.optionalKey(Schema.NullOr(ExecutionPoolId)),
+  executionPoolSelection: Schema.optionalKey(Schema.Literals(["auto", "manual"])),
   environmentSelection: Schema.optionalKey(Schema.Literals(["auto", "manual"])),
   loadBalancedEnvironmentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
@@ -452,6 +455,8 @@ export interface DraftSessionState {
   environmentId: EnvironmentId;
   projectId: ProjectId;
   logicalProjectKey: string;
+  executionPoolId?: ExecutionPoolId | null;
+  executionPoolSelection?: "auto" | "manual";
   environmentSelection?: "auto" | "manual";
   loadBalancedEnvironmentId?: EnvironmentId | null;
   createdAt: string;
@@ -541,6 +546,8 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      executionPoolId?: ExecutionPoolId | null;
+      executionPoolSelection?: "auto" | "manual";
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
     },
@@ -558,6 +565,8 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      executionPoolId?: ExecutionPoolId | null;
+      executionPoolSelection?: "auto" | "manual";
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
     },
@@ -574,6 +583,8 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      executionPoolId?: ExecutionPoolId | null;
+      executionPoolSelection?: "auto" | "manual";
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
     },
@@ -1581,6 +1592,8 @@ function createDraftThreadState(
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
+    executionPoolId?: ExecutionPoolId | null;
+    executionPoolSelection?: "auto" | "manual";
     environmentSelection?: "auto" | "manual";
     loadBalancedEnvironmentId?: EnvironmentId | null;
   },
@@ -1616,6 +1629,12 @@ function createDraftThreadState(
     environmentId: projectRef.environmentId,
     projectId: projectRef.projectId,
     logicalProjectKey,
+    executionPoolId:
+      options?.executionPoolId === undefined
+        ? (existingThread?.executionPoolId ?? null)
+        : options.executionPoolId,
+    executionPoolSelection:
+      options?.executionPoolSelection ?? existingThread?.executionPoolSelection ?? "auto",
     ...(environmentSelection ? { environmentSelection } : {}),
     ...(options?.loadBalancedEnvironmentId !== undefined
       ? { loadBalancedEnvironmentId: options.loadBalancedEnvironmentId }
@@ -1660,6 +1679,8 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.environmentId === right.environmentId &&
     left.projectId === right.projectId &&
     left.logicalProjectKey === right.logicalProjectKey &&
+    left.executionPoolId === right.executionPoolId &&
+    left.executionPoolSelection === right.executionPoolSelection &&
     left.environmentSelection === right.environmentSelection &&
     left.loadBalancedEnvironmentId === right.loadBalancedEnvironmentId &&
     left.createdAt === right.createdAt &&
@@ -1817,6 +1838,14 @@ function normalizePersistedDraftThreads(
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
+        ...(typeof candidateDraftThread.executionPoolId === "string" &&
+        candidateDraftThread.executionPoolId.trim().length > 0
+          ? { executionPoolId: ExecutionPoolId.make(candidateDraftThread.executionPoolId.trim()) }
+          : {}),
+        ...(candidateDraftThread.executionPoolSelection === "auto" ||
+        candidateDraftThread.executionPoolSelection === "manual"
+          ? { executionPoolSelection: candidateDraftThread.executionPoolSelection }
+          : {}),
         ...(candidateDraftThread.environmentSelection === "manual" ||
         candidateDraftThread.environmentSelection === "auto"
           ? { environmentSelection: candidateDraftThread.environmentSelection }
@@ -2579,6 +2608,8 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    executionPoolId: persistedDraftThread.executionPoolId ?? null,
+    executionPoolSelection: persistedDraftThread.executionPoolSelection ?? "auto",
     ...(persistedDraftThread.environmentSelection
       ? { environmentSelection: persistedDraftThread.environmentSelection }
       : {}),
@@ -2865,6 +2896,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               environmentId: nextProjectRef.environmentId,
               projectId: nextProjectRef.projectId,
               logicalProjectKey: existing.logicalProjectKey,
+              executionPoolId:
+                options.executionPoolId === undefined
+                  ? (existing.executionPoolId ?? null)
+                  : options.executionPoolId,
+              executionPoolSelection:
+                options.executionPoolSelection ?? existing.executionPoolSelection ?? "auto",
               ...(environmentSelection ? { environmentSelection } : {}),
               loadBalancedEnvironmentId:
                 options.loadBalancedEnvironmentId === undefined
@@ -2889,6 +2926,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.environmentId === existing.environmentId &&
               nextDraftThread.projectId === existing.projectId &&
               nextDraftThread.logicalProjectKey === existing.logicalProjectKey &&
+              nextDraftThread.executionPoolId === existing.executionPoolId &&
+              nextDraftThread.executionPoolSelection === existing.executionPoolSelection &&
               nextDraftThread.environmentSelection === existing.environmentSelection &&
               nextDraftThread.loadBalancedEnvironmentId === existing.loadBalancedEnvironmentId &&
               nextDraftThread.createdAt === existing.createdAt &&

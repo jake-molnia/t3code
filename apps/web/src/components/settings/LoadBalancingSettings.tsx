@@ -1,4 +1,5 @@
-import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { useExecutionPools } from "~/hooks/useExecutionPools";
 
 import {
   useClientSettings,
@@ -8,7 +9,7 @@ import {
 import type { EnvironmentPresentation } from "~/state/environments";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
-import { EnvironmentRow, environmentTransportLabel } from "./EnvironmentRow";
+import { EnvironmentRow } from "./EnvironmentRow";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { searchableSetting } from "./settingsSearch";
 
@@ -49,22 +50,14 @@ export function summarizeLoadPreferences(
   return parts.length === 0 ? null : parts.join(" · ");
 }
 
-/**
- * Folded section under the environments list. Its switch turns balancing on
- * for this client, and the body holds one row per switched-on machine with
- * how often that machine should receive new threads. Rendered only when two
- * or more machines are on, since one machine has nothing to balance against.
- */
-export function LoadBalancingSettings({
-  environments,
-}: {
-  environments: ReadonlyArray<EnvironmentPresentation>;
-}) {
+export function LoadBalancingSettings({ environmentId }: { environmentId: EnvironmentId }) {
   const settings = useClientSettings();
   const settingsHydrated = useClientSettingsHydrated();
   const updateSettings = useUpdateClientSettings();
 
-  if (environments.length < 2) return null;
+  const catalog = useExecutionPools(environmentId);
+  const pools = catalog.snapshot?.pools ?? [];
+  if (pools.length < 2) return null;
 
   const { id, title } = searchableSetting("load-balancing");
   return (
@@ -73,7 +66,14 @@ export function LoadBalancingSettings({
       title={title}
       summary={
         settings.loadBalancingEnabled
-          ? summarizeLoadPreferences(environments, settings.loadBalancingWeights)
+          ? pools
+              .flatMap((pool) => {
+                const preference = loadPreferenceForWeight(settings.loadBalancingWeights[pool.id]);
+                return preference === 50
+                  ? []
+                  : [`${pool.label} ${preferenceLabel(preference).toLowerCase()}`];
+              })
+              .join(" · ") || null
           : "Off"
       }
       control={
@@ -86,37 +86,31 @@ export function LoadBalancingSettings({
       }
     >
       <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
-        New threads in shared projects start on the machine with the most free CPU and memory,
-        weighted by each machine's preference.
+        New threads start in the pool with the most free CPU and memory, weighted by each pool's
+        preference.
       </p>
-      {environments.map((environment) => (
+      {pools.map((pool) => (
         <EnvironmentRow
-          key={environment.environmentId}
-          kind={resolveEnvironmentMachineKind(environment.serverConfig)}
-          label={environment.label}
-          subtitle={environmentTransportLabel(environment)}
+          key={pool.id}
+          kind="cloud"
+          label={pool.label}
+          subtitle={pool.available ? "Available" : "Unavailable"}
         >
           <Select
             items={preferences}
-            value={loadPreferenceForWeight(
-              settings.loadBalancingWeights[environment.environmentId],
-            )}
+            value={loadPreferenceForWeight(settings.loadBalancingWeights[pool.id])}
             disabled={!settingsHydrated || !settings.loadBalancingEnabled}
             onValueChange={(value) => {
               if (value === null) return;
               updateSettings({
                 loadBalancingWeights: {
                   ...settings.loadBalancingWeights,
-                  [environment.environmentId]: value,
+                  [pool.id]: value,
                 },
               });
             }}
           >
-            <SelectTrigger
-              size="xs"
-              className="w-32"
-              aria-label={`${environment.label} load preference`}
-            >
+            <SelectTrigger size="xs" className="w-32" aria-label={`${pool.label} load preference`}>
               <SelectValue />
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>

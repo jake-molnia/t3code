@@ -41,6 +41,8 @@ export function createExecutionClient(options: {
   fetch?: typeof fetch;
 }) {
   const request = options.fetch ?? fetch;
+  const endpoint = (path: string) =>
+    new URL(path.replace(/^\//, ""), options.endpoint.replace(/\/+$/, "") + "/");
   const headers = { authorization: `Bearer ${options.token}`, "content-type": "application/json" };
   return {
     identity: options.identity,
@@ -50,7 +52,7 @@ export function createExecutionClient(options: {
       identity: options.identity,
     }),
     async transient(method: string, input: unknown) {
-      const response = await request(new URL("/v1/transient", options.endpoint), {
+      const response = await request(endpoint("/v1/transient"), {
         method: "POST",
         headers,
         body: JSON.stringify({ identity: options.identity, method, input }),
@@ -62,7 +64,7 @@ export function createExecutionClient(options: {
     },
     async ack(sessionId: string, sequence: number) {
       if (sequence === 0) return;
-      const response = await request(new URL("/v1/events/ack", options.endpoint), {
+      const response = await request(endpoint("/v1/events/ack"), {
         method: "POST",
         headers,
         body: JSON.stringify({ identity: options.identity, sessionId, sequence }),
@@ -71,19 +73,19 @@ export function createExecutionClient(options: {
     },
     async operationStatus(operationId: string) {
       const response = await request(
-        new URL(`/v1/operations/${encodeURIComponent(operationId)}`, options.endpoint),
+        endpoint(`/v1/operations/${encodeURIComponent(operationId)}`),
         { headers },
       );
       if (!response.ok) throw new Error("Worker operation status unavailable");
       return decodeStateInputSync(await response.json());
     },
     async inspectIdentity() {
-      const response = await request(new URL("/v1/identity", options.endpoint), { headers });
+      const response = await request(endpoint("/v1/identity"), { headers });
       if (!response.ok) throw new Error("Worker identity unavailable");
       return decodeExecutionIdentitySync(await response.json());
     },
     async call(method: string, input: unknown, operationId: string = NodeCrypto.randomUUID()) {
-      const response = await request(new URL("/v1/operations", options.endpoint), {
+      const response = await request(endpoint("/v1/operations"), {
         method: "POST",
         headers,
         body: JSON.stringify({ identity: options.identity, operationId, method, input }),
@@ -95,9 +97,8 @@ export function createExecutionClient(options: {
     },
     async events(after: number, signal?: AbortSignal, sessionId?: string, waitMs = 25000) {
       const response = await request(
-        new URL(
+        endpoint(
           `/v1/events?after=${after}${sessionId === undefined ? "" : `&sessionId=${encodeURIComponent(sessionId)}&waitMs=${waitMs}`}`,
-          options.endpoint,
         ),
         {
           headers,

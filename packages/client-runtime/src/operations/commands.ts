@@ -1,3 +1,4 @@
+import type { ExecutionPoolId } from "@t3tools/contracts";
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import {
   type ThreadLinkedPullRequest,
@@ -67,6 +68,7 @@ export interface DeleteProjectInput extends CommandMetadata {
 }
 
 export interface CreateThreadInput extends CommandMetadata {
+  readonly executionPoolId?: ExecutionPoolId;
   readonly threadId: ThreadId;
   readonly projectId: ProjectId;
   readonly title: string;
@@ -143,6 +145,7 @@ export interface SetThreadInteractionModeInput extends ThreadCommandInput {
 
 interface StartThreadBootstrap {
   readonly createThread?: {
+    readonly executionPoolId?: ExecutionPoolId;
     readonly projectId: ProjectId;
     readonly title: string;
     readonly modelSelection: ModelSelection;
@@ -395,6 +398,7 @@ export const createThread = Effect.fn("EnvironmentCommands.createThread")(functi
 ) {
   return yield* dispatch({
     type: "thread.create",
+    ...(input.executionPoolId ? { executionPoolId: input.executionPoolId } : {}),
     commandId: yield* allocateCommandId(input),
     createdBy: "user",
     creationSource: input.creationSource ?? "web",
@@ -668,6 +672,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
       commandId,
       creationSource: input.creationSource ?? "web",
+      ...(bootstrap?.executionPoolId ? { executionPoolId: bootstrap.executionPoolId } : {}),
       threadId: input.threadId,
       ...(bootstrap === undefined ? { reuseExistingThread: true } : {}),
       projectId: thread.projectId,

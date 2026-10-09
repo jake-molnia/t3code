@@ -1,10 +1,9 @@
+import * as Pools from "./ExecutionPools.ts";
 import { sameIdentity } from "../execution/ExecutionWorker.ts";
-import { ThreadId } from "@t3tools/contracts";
-import * as Config from "effect/Config";
+import { ThreadId, type ProviderDriverKind } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -82,7 +81,10 @@ export class RuntimeClient extends Context.Service<
       threadId: ThreadId,
       identity: ExecutionIdentity,
     ) => Effect.Effect<void, RuntimeClientError>;
-    readonly forThread: (threadId: ThreadId) => Effect.Effect<ExecutionClient, RuntimeClientError>;
+    readonly forThread: (
+      threadId: ThreadId,
+      driver?: ProviderDriverKind,
+    ) => Effect.Effect<ExecutionClient, RuntimeClientError>;
     readonly forWorkspace: (
       workspaceId: string,
     ) => Effect.Effect<ExecutionClient, RuntimeClientError>;
@@ -102,34 +104,42 @@ export class RuntimeClient extends Context.Service<
 export const layer = Layer.effect(
   RuntimeClient,
   Effect.gen(function* () {
-    const configuredUrl = yield* Config.option(Config.String("AGENT_RUNTIME_URL"));
-    const configuredToken = yield* Config.option(Config.String("AGENT_RUNTIME_TOKEN"));
-    const profile = yield* Config.String("AGENT_RUNTIME_PROFILE").pipe(Config.withDefault("t3"));
+    const pools = yield* Pools.ExecutionPools;
     const sql = yield* SqlClient.SqlClient;
     const httpClient = yield* HttpClient.HttpClient;
-    const enabled = Option.isSome(configuredUrl);
-    const url = Option.getOrElse(configuredUrl, () => "");
-    const token = Option.getOrElse(configuredToken, () => "");
-    if (enabled && !token)
-      return yield* Effect.die(new Error("AGENT_RUNTIME_TOKEN is required with AGENT_RUNTIME_URL"));
-    if (enabled) {
-      const parsed = yield* Effect.try(() => new URL(url));
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-        return yield* Effect.die(new Error("Agent runtime URL must be HTTP(S)"));
-    }
+    const enabled = pools.enabled;
+    const placement = (workspaceId: string) =>
+      sql.withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* sql<{
+            poolId: string | null;
+            profile: string | null;
+          }>`SELECT pool_id AS poolId, profile_id AS profile FROM agent_runtime_workspaces WHERE workspace_id=${workspaceId}`;
+          const row = rows[0];
+          if (!row)
+            return yield* new RuntimeClientError({
+              operation: "placement",
+              cause: "Unknown execution workspace",
+            });
+          const pool = yield* pools.get(row.poolId);
+          const profile = row.profile ?? pool.profile;
+          yield* sql`UPDATE agent_runtime_workspaces SET pool_id=${pool.id}, profile_id=${profile} WHERE workspace_id=${workspaceId} AND (pool_id IS NULL OR profile_id IS NULL)`;
+          return { ...pool, profile };
+        }),
+      );
     const failure = (operation: string) => (cause: unknown) =>
       new RuntimeClientError({ operation, cause });
-    const request = (path: string, body?: unknown) =>
+    const request = (pool: Pools.PoolConnection, path: string, body?: unknown) =>
       Effect.gen(function* () {
         if (!enabled)
           return yield* new RuntimeClientError({
             operation: "request",
             cause: "Remote execution is not configured",
           });
-        const target = new URL(path, url).toString();
+        const target = new URL(path.replace(/^\//, ""), pool.url.replace(/\/?$/, "/")).toString();
         const base = (
           body === undefined ? HttpClientRequest.get(target) : HttpClientRequest.post(target)
-        ).pipe(HttpClientRequest.setHeader("authorization", `Bearer ${token}`));
+        ).pipe(HttpClientRequest.setHeader("authorization", `Bearer ${pool.token}`));
         const outgoing = body === undefined ? base : yield* HttpClientRequest.bodyJson(base, body);
         const result = yield* httpClient.execute(outgoing);
         if (result.status < 200 || result.status >= 300)
@@ -142,11 +152,13 @@ export const layer = Layer.effect(
       });
     const ensure = (workspaceId: string, revision: number) =>
       Effect.gen(function* () {
+        const pool = yield* placement(workspaceId);
+        const profile = pool.profile;
         yield* sql`UPDATE agent_runtime_workspaces SET execution_requested = 1 WHERE workspace_id = ${workspaceId} AND execution_requested = 0`;
         let admittedRevision = revision;
         let admitted = false;
         for (let attempt = 0; attempt < 4 && !admitted; attempt++) {
-          admitted = yield* request("/v1/operations", {
+          admitted = yield* request(pool, "/v1/operations", {
             workspaceId,
             operationId: `ensure:${workspaceId}:${admittedRevision}`,
             revision: admittedRevision,
@@ -180,6 +192,7 @@ export const layer = Layer.effect(
         const access = yield* Effect.gen(function* () {
           for (;;) {
             const current = yield* request(
+              pool,
               `/v1/workspaces/${encodeURIComponent(workspaceId)}?profile=${encodeURIComponent(profile)}`,
             ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Access)));
             if (
@@ -238,11 +251,24 @@ export const layer = Layer.effect(
         Effect.provideService(SqlClient.SqlClient, sql),
         Effect.mapError(failure("cursor")),
       );
-    const forThread = (threadId: ThreadId) =>
+    const forThread = (threadId: ThreadId, driver?: ProviderDriverKind) =>
       Bindings.read(threadId).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
         Effect.mapError(failure("resolve-binding")),
-        Effect.flatMap((binding) => ensure(binding.workspaceId, binding.revision)),
+        Effect.flatMap((binding) =>
+          Effect.gen(function* () {
+            if (driver !== undefined) {
+              const pool = yield* placement(binding.workspaceId);
+              if (pool.providerDrivers.length > 0 && !pool.providerDrivers.includes(driver))
+                return yield* new RuntimeClientError({
+                  operation: "provider-placement",
+                  cause: "The selected pool does not support this provider",
+                });
+            }
+            return yield* ensure(binding.workspaceId, binding.revision);
+          }),
+        ),
+        Effect.mapError(failure("provider-placement")),
       );
     const forUtility = (instanceId: string) =>
       Effect.gen(function* () {
@@ -262,7 +288,10 @@ export const layer = Layer.effect(
     ) =>
       Effect.gen(function* () {
         const workspaceId = options.expectedIdentity.workspaceId;
+        const pool = yield* placement(workspaceId);
+        const profile = pool.profile;
         const current = yield* request(
+          pool,
           `/v1/workspaces/${encodeURIComponent(workspaceId)}?profile=${encodeURIComponent(profile)}`,
         ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Access)));
         if (
@@ -350,7 +379,7 @@ export const layer = Layer.effect(
             operation: "stop",
             cause: "Admission changed before submission",
           });
-        yield* request("/v1/operations", payload);
+        yield* request(pool, "/v1/operations", payload);
       }).pipe(Effect.mapError(failure("stop")));
     const identityJson = Schema.fromJsonString(ExecutionIdentity);
     const sessionResidency = (providerSessionId: string) =>
@@ -375,7 +404,10 @@ export const layer = Layer.effect(
       }).pipe(Effect.mapError(failure("remember-session")));
     const observeWorkspace = (workspaceId: string) =>
       Effect.gen(function* () {
+        const pool = yield* placement(workspaceId);
+        const profile = pool.profile;
         const access = yield* request(
+          pool,
           `/v1/workspaces/${encodeURIComponent(workspaceId)}?profile=${encodeURIComponent(profile)}`,
         ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Access)));
         if (access.state.phase === "released" || access.state.phase === "suspended")
@@ -427,4 +459,4 @@ export const layer = Layer.effect(
       stop,
     });
   }),
-);
+).pipe(Layer.provideMerge(Pools.layer));

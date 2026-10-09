@@ -1,3 +1,4 @@
+import * as ExecutionPools from "../agentRuntime/ExecutionPools.ts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import {
   SessionPlacement,
@@ -800,6 +801,7 @@ function lastDeliveredRunForProviderThread(
 }
 
 const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(function* () {
+  const executionPools = yield* Effect.serviceOption(ExecutionPools.ExecutionPools);
   const checkpointService = yield* CheckpointServiceV2;
   const commandPolicy = yield* CommandPolicyV2;
   const contextHandoffService = yield* ContextHandoffServiceV2;
@@ -2196,6 +2198,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       "orchestration_v2.driver": command.modelSelection.instanceId,
     });
 
+    const selectedExecutionPool = Option.isSome(executionPools)
+      ? yield* executionPools.value.get(command.executionPoolId).pipe(mapDispatchError(command))
+      : null;
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
     const thread: OrchestrationV2AppThread = {
@@ -2203,10 +2208,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       creationSource: command.creationSource,
       id: command.threadId,
       projectId: command.projectId,
+      ...(selectedExecutionPool !== null
+        ? { executionPoolId: selectedExecutionPool.id }
+        : command.executionPoolId !== undefined
+          ? { executionPoolId: command.executionPoolId }
+          : {}),
       title: command.title,
       providerInstanceId: command.modelSelection.instanceId,
       modelSelection: command.modelSelection,
-      runtimeMode: command.runtimeMode,
+      runtimeMode: Option.isSome(executionPools) ? "full-access" : command.runtimeMode,
       interactionMode: command.interactionMode,
       branch: command.branch,
       worktreePath: command.worktreePath,
@@ -3171,7 +3181,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               }
             : thread;
         case "thread.runtime-mode.set":
-          return { ...thread, runtimeMode: command.runtimeMode, updatedAt: now };
+          return {
+            ...thread,
+            runtimeMode: Option.isSome(executionPools) ? "full-access" : command.runtimeMode,
+            updatedAt: now,
+          };
         case "thread.interaction-mode.set":
           return { ...thread, interactionMode: command.interactionMode, updatedAt: now };
         case "thread.model-selection.set":
@@ -6593,6 +6607,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ordinal: parentProjection.subagents.length + 1,
       });
       const childThread: OrchestrationV2AppThread = {
+        ...(parentProjection.thread.executionPoolId === undefined
+          ? {}
+          : { executionPoolId: parentProjection.thread.executionPoolId }),
         ...makeSubagentChildThread({
           parentThread: parentProjection.thread,
           childThreadId,
@@ -6605,7 +6622,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           createdBy: command.createdBy,
           creationSource: command.creationSource,
         }),
-        runtimeMode: command.runtimeMode,
+        runtimeMode: Option.isSome(executionPools) ? "full-access" : command.runtimeMode,
         interactionMode: command.interactionMode,
       };
       const task: OrchestrationV2Subagent = {

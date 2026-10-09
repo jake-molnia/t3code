@@ -281,3 +281,56 @@ test("credential refresh blocks utility suspension until access completes", asyn
   await access;
   expect((await quiesce()).status).toBe(200);
 });
+
+test.each(["", "/"])(
+  "preserves the gateway workspace prefix across every worker RPC (%s)",
+  async (suffix) => {
+    const { worker } = await fixture(async (method, input) => ({ method, input }));
+    const prefix = "/workspaces/workspace-a/worker";
+    const paths: string[] = [];
+    const gateway = await listenWorker({
+      host: "127.0.0.1",
+      port: 0,
+      handle: async (request) => {
+        const url = new URL(request.url);
+        paths.push(url.pathname);
+        if (!url.pathname.startsWith(`${prefix}/`)) return new Response(null, { status: 404 });
+        url.pathname = url.pathname.slice(prefix.length);
+        return worker.handle(
+          new Request(url, {
+            method: request.method,
+            headers: request.headers,
+            ...(request.method === "GET" ? {} : { body: await request.arrayBuffer() }),
+          }),
+        );
+      },
+    });
+    cleanup.push(gateway.close);
+    const client = createExecutionClient({
+      endpoint: `http://127.0.0.1:${gateway.port}${prefix}${suffix}`,
+      token,
+      identity,
+    });
+    expect(await client.inspectIdentity()).toEqual(identity);
+    expect(await client.call("write", { value: 1 }, "prefixed-operation")).toEqual({
+      method: "write",
+      input: { value: 1 },
+    });
+    expect((await client.operationStatus("prefixed-operation")).state).toBe("completed");
+    expect(await client.transient("auth.probe", {})).toEqual({ method: "auth.probe", input: {} });
+    await worker.publish("session / a", { text: "streamed through gateway" });
+    const events = await client.events(0, undefined, "session / a", 0);
+    expect(events.map((event) => event.event)).toEqual([{ text: "streamed through gateway" }]);
+    await client.ack("session / a", events[0]!.sequence);
+    expect(await client.events(events[0]!.sequence, undefined, "session / a", 0)).toEqual([]);
+    expect(paths).toEqual([
+      `${prefix}/v1/identity`,
+      `${prefix}/v1/operations`,
+      `${prefix}/v1/operations/prefixed-operation`,
+      `${prefix}/v1/transient`,
+      `${prefix}/v1/events`,
+      `${prefix}/v1/events/ack`,
+      `${prefix}/v1/events`,
+    ]);
+  },
+);

@@ -9,7 +9,11 @@ import {
 import { authorized } from "./ExecutionWorker.ts";
 
 /** Session endpoints remain stable while central authorization is replaced after reconnect. */
-export function createMcpForwarder(localOrigin: string, request: typeof fetch = fetch) {
+export function createMcpForwarder(
+  localOrigin: string,
+  request: typeof fetch = fetch,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
   const sessions = new Map<string, { token: string; config: McpProviderSessionConfig }>();
   return {
     configure(config: McpProviderSessionConfig) {
@@ -27,7 +31,17 @@ export function createMcpForwarder(localOrigin: string, request: typeof fetch = 
       const token = previous?.token ?? NodeCrypto.randomBytes(32).toString("hex");
       sessions.delete(key);
       sessions.set(key, { token, config });
+      const aperture = environment.APERTURE_UPSTREAM;
+      const additionalHttpServers = aperture
+        ? {
+            aperture: {
+              url: new URL("v1/mcp", `${aperture.replace(/\/$/, "")}/`).href,
+              headers: { Authorization: `Bearer ${environment.APERTURE_API_KEY ?? "-"}` },
+            },
+          }
+        : undefined;
       const local = {
+        ...(additionalHttpServers ? { additionalHttpServers } : {}),
         ...config,
         endpoint: new URL(`/mcp/${encodeURIComponent(key)}`, localOrigin).href,
         authorizationHeader: `Bearer ${token}`,

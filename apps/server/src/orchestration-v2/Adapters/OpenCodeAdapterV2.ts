@@ -976,6 +976,10 @@ export function makeOpenCodeAdapterV2(
         const hasT3Mcp = mcpSession !== undefined && !connection.external;
         const orchestrationSystemPrompt = t3OrchestrationSystemPrompt(hasT3Mcp);
         if (hasT3Mcp) {
+          for (const [name, server] of Object.entries(mcpSession.additionalHttpServers ?? {}))
+            yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
+              client.mcp.add({ name, config: { type: "remote", ...server, oauth: false } }),
+            );
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
               name: "t3-code",

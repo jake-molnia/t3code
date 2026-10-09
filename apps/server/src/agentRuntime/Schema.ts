@@ -16,6 +16,10 @@ export const migrate = Effect.gen(function* () {
     yield* sql`ALTER TABLE agent_runtime_workspaces ADD COLUMN lifecycle_request_json TEXT`;
   if (!columns.some((column) => column.name === "execution_requested"))
     yield* sql`ALTER TABLE agent_runtime_workspaces ADD COLUMN execution_requested INTEGER NOT NULL DEFAULT 0`;
+  if (!columns.some((column) => column.name === "pool_id"))
+    yield* sql`ALTER TABLE agent_runtime_workspaces ADD COLUMN pool_id TEXT`;
+  if (!columns.some((column) => column.name === "profile_id"))
+    yield* sql`ALTER TABLE agent_runtime_workspaces ADD COLUMN profile_id TEXT`;
   yield* sql`CREATE TABLE IF NOT EXISTS agent_runtime_thread_bindings (
     thread_id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES agent_runtime_workspaces(workspace_id)

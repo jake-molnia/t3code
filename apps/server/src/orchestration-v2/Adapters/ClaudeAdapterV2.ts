@@ -977,10 +977,19 @@ export function claudeMcpQueryOverrides(input: {
   }
   const mcpAllowedTools = input.readOnlySandbox
     ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
-    : [CLAUDE_T3_MCP_TOOL_WILDCARD];
+    : [
+        CLAUDE_T3_MCP_TOOL_WILDCARD,
+        ...Object.keys(session.additionalHttpServers ?? {}).map((name) => `mcp__${name}__*`),
+      ];
   return {
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
+      ...Object.fromEntries(
+        Object.entries(session.additionalHttpServers ?? {}).map(([name, server]) => [
+          name,
+          { type: "http" as const, ...server },
+        ]),
+      ),
       "t3-code": {
         type: "http",
         url: session.endpoint,

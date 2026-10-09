@@ -1,3 +1,4 @@
+import { prepareHarnessState } from "./HarnessDefaults.ts";
 import * as CredentialSources from "./credentialSources.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -38,6 +39,7 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
         paths.providerLogsDir,
       ])
         yield* fs.makeDirectory(directory, { recursive: true });
+      yield* Effect.tryPromise(() => prepareHarnessState(options.stateDir));
       return ServerConfig.make({
         ...paths,
         cwd: options.cwd,

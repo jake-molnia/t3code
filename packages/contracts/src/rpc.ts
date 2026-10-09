@@ -1,3 +1,4 @@
+import { ExecutionPoolsSnapshot } from "./executionPools.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -446,6 +447,7 @@ export const WS_METHODS = {
   // Server meta
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
+  serverExecutionPools: "server.executionPools",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -563,6 +565,12 @@ const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, 
 const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   payload: Schema.Struct({}),
   success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerExecutionPoolsRpc = Rpc.make(WS_METHODS.serverExecutionPools, {
+  payload: Schema.Struct({}),
+  success: ExecutionPoolsSnapshot,
   error: EnvironmentAuthorizationError,
 });
 
@@ -1736,6 +1744,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
+  WsServerExecutionPoolsRpc,
   WsServerRefreshProvidersRpc,
   WsProviderConsumeResetCreditRpc,
   WsProviderAuthStartRpc,

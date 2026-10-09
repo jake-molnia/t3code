@@ -1,3 +1,4 @@
+import { sandboxInput } from "./HarnessDefaults.ts";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
@@ -133,7 +134,7 @@ export const makeProviderExecutor = (options: {
             return yield* encodeProviderCapabilities(yield* adapter.getCapabilities());
           if (method === "planSelectionTransition")
             return yield* adapter.planSelectionTransition(yield* decodeSelection(command.input));
-          const input = yield* decodeOpenSession(command.input);
+          const input = sandboxInput(yield* decodeOpenSession(command.input));
           if (retiredSessions.has(input.providerSessionId))
             return yield* new ProviderExecutionError({ code: "session_retired" });
           const live = sessions.get(input.providerSessionId);
@@ -239,14 +240,14 @@ export const makeProviderExecutor = (options: {
             return null;
           case "ensureThread":
             return yield* encodeProviderThread(
-              yield* runtime.ensureThread(yield* decodeEnsureThread(command.input)),
+              yield* runtime.ensureThread(sandboxInput(yield* decodeEnsureThread(command.input))),
             );
           case "resumeThread":
             return yield* encodeProviderThread(
-              yield* runtime.resumeThread(yield* decodeResumeThread(command.input)),
+              yield* runtime.resumeThread(sandboxInput(yield* decodeResumeThread(command.input))),
             );
           case "startTurn": {
-            const input = yield* decodeTurn(command.input);
+            const input = sandboxInput(yield* decodeTurn(command.input));
             const key = `${input.providerThread.id}:${input.runOrdinal}`;
             activeTurns.set(key, command.sessionId);
             yield* runtime.startTurn(input).pipe(
@@ -277,7 +278,7 @@ export const makeProviderExecutor = (options: {
             );
           case "forkThread":
             return yield* encodeProviderThread(
-              yield* runtime.forkThread(yield* decodeFork(command.input)),
+              yield* runtime.forkThread(sandboxInput(yield* decodeFork(command.input))),
             );
           case "hasPendingBackgroundWork":
             return runtime.hasPendingBackgroundWork
@@ -295,7 +296,7 @@ export const makeProviderExecutor = (options: {
             break;
           case "compactThread":
             if (runtime.compactThread) {
-              const input = yield* decodeTurn(command.input);
+              const input = sandboxInput(yield* decodeTurn(command.input));
               const key = `${input.providerThread.id}:${input.runOrdinal}`;
               activeTurns.set(key, command.sessionId);
               yield* runtime.compactThread(input).pipe(

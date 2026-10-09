@@ -4173,7 +4173,7 @@ export function ConnectionsSettings() {
           }}
         />
       ) : null}
-      <LoadBalancingSettings environments={loadBalancingEnvironments} />
+      {primaryEnvironmentId ? <LoadBalancingSettings environmentId={primaryEnvironmentId} /> : null}
       <GitHubRoutingSettings environments={loadBalancingEnvironments} />
     </SettingsPageContainer>
   );

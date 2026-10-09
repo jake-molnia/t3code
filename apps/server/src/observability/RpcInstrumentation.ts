@@ -32,6 +32,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.projectsMutate]: "orchestration",
   [WS_METHODS.serverProbe]: "server",
   [WS_METHODS.serverGetConfig]: "server",
+  [WS_METHODS.serverExecutionPools]: "server",
   [WS_METHODS.serverRefreshProviders]: "server",
   [WS_METHODS.providerAuthStart]: "provider",
   [WS_METHODS.providerConsumeResetCredit]: "provider",

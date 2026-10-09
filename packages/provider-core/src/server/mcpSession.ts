@@ -1,6 +1,9 @@
 import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 
 export interface McpProviderSessionConfig {
+  readonly additionalHttpServers?: Readonly<
+    Record<string, { readonly url: string; readonly headers: Readonly<Record<string, string>> }>
+  >;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly providerSessionId: string;

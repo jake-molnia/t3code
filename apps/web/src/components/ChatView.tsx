@@ -1,3 +1,9 @@
+import {
+  chooseExecutionPool,
+  reconcileExecutionPoolProvider,
+} from "@t3tools/client-runtime/load-balancing";
+import { useExecutionPools } from "../hooks/useExecutionPools";
+import { ExecutionPoolSelector } from "./ExecutionPoolSelector";
 import { useAtomValue } from "@effect/atom-react";
 import { type LegendListRef } from "@legendapp/list/react";
 import { type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
@@ -11,7 +17,6 @@ import {
   wasBootstrapThreadDeleted,
   wasBootstrapThreadNotCreated,
 } from "@t3tools/client-runtime/errors";
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import {
   isAtomCommandInterrupted,
   mapAtomCommandResult,
@@ -62,7 +67,6 @@ import {
   RuntimeMode,
   TerminalOpenInput,
   isProviderNativeSubagentThread,
-  resolveEnvironmentMachineKind,
   type AssistantCitation,
   type ChatFileAttachment,
   type ChatAttachment as ContractChatAttachment,
@@ -156,10 +160,8 @@ import { isElectron } from "../env";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useElementWidth } from "../hooks/useElementWidth";
-import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { usePreviewPanelInlineSize } from "../hooks/usePreviewPanelInlineSize";
-import { useScratchProject } from "../hooks/useScratchProject";
 import { useTheme } from "../hooks/useTheme";
 import { useAcknowledgeThreadWoke, useThreadActions } from "../hooks/useThreadActions";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
@@ -446,8 +448,6 @@ import {
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
   shouldShowComposerContextStrip,
-  shouldShowEnvironmentIndicator,
-  type EnvironmentOption,
 } from "./BranchToolbar.logic";
 import {
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -568,7 +568,6 @@ import {
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { isTimelineScrollTarget } from "./chat/timelineScrollTarget";
-import { useAutoBalanceUpdateBanner } from "./chat/useAutoBalanceUpdateBanner";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import {
   overlayComposerIsResting,
@@ -1779,9 +1778,6 @@ export default function ChatView(props: ChatViewProps) {
   }, [citationLocation.href, citationLocation.key, environmentId, threadId]);
   const { resolvedTheme } = useTheme();
   // Granular store selectors — avoid subscribing to prompt changes.
-  const composerRuntimeMode = useComposerDraftStore(
-    (store) => store.getComposerDraft(composerDraftTarget)?.runtimeMode ?? null,
-  );
   const composerInteractionMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode ?? null,
   );
@@ -1809,7 +1805,6 @@ export default function ChatView(props: ChatViewProps) {
   const setComposerDraftReviewComments = useComposerDraftStore((store) => store.setReviewComments);
   const setComposerDraftThreadContexts = useComposerDraftStore((store) => store.setThreadContexts);
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
-  const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
@@ -2184,14 +2179,8 @@ export default function ChatView(props: ChatViewProps) {
   // session.lastError. Bump a tick so the banner hides immediately. Mirrors
   // the branch mismatch banner.
   const [, setThreadErrorBannerDismissTick] = useState(0);
-  const defaultRuntimeMode = resolveProjectSettings(settings, activeThread?.projectId ?? null)
-    .settings.defaultRuntimeMode;
-  // Implicit drafts follow their current project/environment, including retargets.
-  // Explicit composer choices and existing server threads retain their permissions.
-  const runtimeMode =
-    composerRuntimeMode ??
-    (isServerThread ? activeThread?.runtimeMode : undefined) ??
-    defaultRuntimeMode;
+  const defaultRuntimeMode: RuntimeMode = "full-access";
+  const runtimeMode: RuntimeMode = "full-access";
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = canWriteSourceControl && isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
@@ -2735,86 +2724,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [navigate, setEnvironmentEnabled],
   );
-  const { scratchWorkspaceRootFor, openScratchProject } = useScratchProject();
-  const activeProjectIsScratch =
-    activeProject !== null &&
-    isScratchProject(
-      activeProject,
-      environmentById.get(activeProject.environmentId)?.serverConfig?.scratchWorkspaceRoot ?? null,
-    );
-  const logicalProjectEnvironments = useMemo(() => {
-    if (!activeProject) return [];
-    const envs: EnvironmentOption[] = [];
-    const pushEnvironment = (environmentId: EnvironmentId, projectId: ProjectId | null) => {
-      const environment = environmentById.get(environmentId) ?? null;
-      envs.push({
-        environmentId,
-        projectId,
-        label: environment?.label ?? environmentId,
-        isPrimary: environmentId === primaryEnvironmentId,
-        machine: resolveEnvironmentMachineKind(environment?.serverConfig ?? null),
-      });
-    };
-    if (activeProjectIsScratch && draftId) {
-      // Each machine keeps its own "No project" folder at its own path, so they
-      // never group as one logical project. Offer every machine that has one.
-      for (const environment of environments) {
-        const scratchRoot = scratchWorkspaceRootFor(environment.environmentId);
-        // Keep the current machine visible so an offline source can still switch away.
-        if (scratchRoot === null && environment.environmentId !== activeProject.environmentId)
-          continue;
-        const scratchProject =
-          environment.environmentId === activeProject.environmentId
-            ? activeProject
-            : allProjects.find(
-                (p) =>
-                  p.environmentId === environment.environmentId && isScratchProject(p, scratchRoot),
-              );
-        pushEnvironment(environment.environmentId, scratchProject?.id ?? null);
-      }
-    } else {
-      const logicalKey = deriveLogicalProjectKeyFromSettings(
-        activeProject,
-        projectGroupingSettings,
-      );
-      const seen = new Set<string>();
-      for (const p of allProjects) {
-        if (seen.has(p.environmentId)) continue;
-        if (deriveLogicalProjectKeyFromSettings(p, projectGroupingSettings) !== logicalKey)
-          continue;
-        seen.add(p.environmentId);
-        pushEnvironment(p.environmentId, p.id);
-      }
-    }
-    // Sort: primary first, then alphabetical
-    envs.sort((a, b) => {
-      if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
-      return a.label.localeCompare(b.label);
-    });
-    return envs;
-  }, [
-    activeProject,
-    activeProjectIsScratch,
-    allProjects,
-    draftId,
-    environments,
-    projectGroupingSettings,
-    primaryEnvironmentId,
-    environmentById,
-    scratchWorkspaceRootFor,
-  ]);
-  const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
-  // Auto balance retargets to an existing project; a machine's "No project"
-  // folder may not exist until it is picked.
-  const canAutoBalanceEnvironments = hasMultipleEnvironments && !activeProjectIsScratch;
-  const activeEnvironmentOption =
-    logicalProjectEnvironments.find(
-      (environment) => environment.environmentId === activeThread?.environmentId,
-    ) ?? null;
-  const showComposerEnvironmentIndicator = shouldShowEnvironmentIndicator({
-    activeEnvironment: activeEnvironmentOption,
-    canPickEnvironment: hasMultipleEnvironments,
-  });
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
       if (!canCheckoutPullRequestIntoThread) {
@@ -3021,28 +2930,19 @@ export default function ChatView(props: ChatViewProps) {
   const envLocked = Boolean(activeThread && (activeMessageCount > 0 || activeRuntime !== null));
 
   const loadBalancingSettings = useClientSettings();
-  const automaticEnvironment = Boolean(
+  const automaticPool = Boolean(
     clientSettingsHydrated &&
     draftId &&
     !envLocked &&
-    canAutoBalanceEnvironments &&
     loadBalancingSettings.loadBalancingEnabled &&
-    draftThread?.environmentSelection !== "manual" &&
-    (!composerHasAttachments || Boolean(draftThread?.loadBalancedEnvironmentId)) &&
-    (!draftThread?.branch || draftThread.environmentSelection === "auto") &&
-    !draftThread?.worktreePath,
+    draftThread?.executionPoolSelection !== "manual",
   );
-  const autoUpdateEnvironments = useMemo(
-    () =>
-      automaticEnvironment
-        ? logicalProjectEnvironments.flatMap(({ environmentId }) => {
-            const environment = environmentById.get(environmentId);
-            return environment ? [environment] : [];
-          })
-        : [],
-    [automaticEnvironment, logicalProjectEnvironments, environmentById],
+  const poolCatalog = useExecutionPools(
+    environmentId,
+    Boolean(draftId && !draftThread?.executionPoolId),
   );
-  const autoBalanceUpdateBanner = useAutoBalanceUpdateBanner(autoUpdateEnvironments);
+  const selectedExecutionPoolId =
+    draftThread?.executionPoolId ?? activeThreadShell?.executionPoolId ?? null;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -3129,7 +3029,6 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
     if (
-      !automaticEnvironment &&
       serverUpdateEnvironmentId &&
       (serverUpdateState.status === "idle"
         ? showVersionMismatchBanner
@@ -3200,11 +3099,8 @@ export default function ChatView(props: ChatViewProps) {
             }),
       });
     }
-    if (autoBalanceUpdateBanner) items.push(autoBalanceUpdateBanner);
     return items;
   }, [
-    automaticEnvironment,
-    autoBalanceUpdateBanner,
     activeEnvironmentUnavailableState,
     handleReconnectActiveEnvironment,
     canDisconnectActiveEnvironment,
@@ -4268,7 +4164,7 @@ export default function ChatView(props: ChatViewProps) {
     persistInActiveThreads: settings.persistComposerContextStrip,
     hasActiveProject: activeProject !== null && !showProviderSubagentBar,
     isGitRepo,
-    showEnvironmentIndicator: showComposerEnvironmentIndicator,
+    showEnvironmentIndicator: true,
     hostsRestingComposerControls: routeKind === "server",
   });
   const showComposerContextStrip = shouldShowComposerContextStrip({
@@ -4276,7 +4172,7 @@ export default function ChatView(props: ChatViewProps) {
     persistInActiveThreads: settings.persistComposerContextStrip,
     hasActiveProject: activeProject !== null && !showProviderSubagentBar,
     isGitRepo,
-    showEnvironmentIndicator: showComposerEnvironmentIndicator,
+    showEnvironmentIndicator: true,
     hostsRestingComposerControls: routeKind === "server" && restingComposerControlsVisible,
   });
   const mountComposerModelStrip =
@@ -4320,189 +4216,89 @@ export default function ChatView(props: ChatViewProps) {
     }
   }, [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen]);
 
-  const needsLoadBalancing = automaticEnvironment && !draftThread?.loadBalancedEnvironmentId;
-  const loadBalancingCandidates = useMemo(
-    () =>
-      needsLoadBalancing
-        ? logicalProjectEnvironments
-            .filter((candidate) => {
-              const environment = environmentById.get(candidate.environmentId);
-              return (
-                environment?.connection.phase === "connected" &&
-                (loadBalancingSettings.loadBalancingWeights[candidate.environmentId] ?? 50) > 0 &&
-                environment.serverConfig?.providers.some(
-                  (provider) =>
-                    (activeProviderInstanceId === null ||
-                      provider.instanceId === activeProviderInstanceId) &&
-                    provider.driver === selectedProvider &&
-                    provider.enabled &&
-                    provider.installed &&
-                    provider.status !== "error" &&
-                    provider.auth.status !== "unauthenticated" &&
-                    provider.availability !== "unavailable",
-                )
-              );
-            })
-            .map((candidate) => candidate.environmentId)
-        : [],
-    [
-      needsLoadBalancing,
-      logicalProjectEnvironments,
-      environmentById,
-      loadBalancingSettings.loadBalancingWeights,
-      activeProviderInstanceId,
-      selectedProvider,
-    ],
-  );
-  const loadBalancing = useLoadBalancedEnvironment(
-    loadBalancingCandidates,
+  const needsLoadBalancing = automaticPool && !selectedExecutionPoolId;
+  const balancedPoolId = chooseExecutionPool(
+    poolCatalog,
+    selectedProvider,
     loadBalancingSettings.loadBalancingWeights,
+    Date.now(),
   );
+  const poolCompatibility = reconcileExecutionPoolProvider({
+    snapshot: poolCatalog.snapshot,
+    selectedPoolId: selectedExecutionPoolId,
+    driver: selectedProvider,
+    automatic: automaticPool,
+    placementLocked:
+      envLocked ||
+      composerHasAttachments ||
+      Boolean(draftThread?.branch || draftThread?.worktreePath),
+    balancedPoolId,
+  });
+  const poolCompatibilitySendBlock = poolCompatibility.incompatible
+    ? envLocked
+      ? "This pool does not support the selected provider. Choose a compatible provider."
+      : "This pool does not support the selected provider. Choose a compatible pool or provider."
+    : null;
+  const loadBalancing = { pending: poolCatalog.pending, failed: poolCatalog.failed };
   useEffect(() => {
-    if (!needsLoadBalancing || loadBalancing.pending || !draftId || sendInFlightRef.current) return;
-    const target = logicalProjectEnvironments.find(
-      (environment) => environment.environmentId === loadBalancing.environmentId,
-    );
-    if (!target?.projectId) return;
-    setDraftThreadContext(draftId, {
-      projectRef: scopeProjectRef(target.environmentId, target.projectId),
-      environmentSelection: "auto",
-      loadBalancedEnvironmentId: target.environmentId,
-    });
+    if (!poolCompatibility.reselect) return;
+    poolCatalog.refresh();
+    const timer = setInterval(poolCatalog.refresh, 10_000);
+    return () => clearInterval(timer);
+  }, [poolCompatibility.reselect, poolCatalog.refresh]);
+  useEffect(() => {
+    if (
+      !clientSettingsHydrated ||
+      !draftId ||
+      envLocked ||
+      (selectedExecutionPoolId && !poolCompatibility.reselect) ||
+      sendInFlightRef.current
+    )
+      return;
+    const poolId = selectedExecutionPoolId
+      ? poolCompatibility.replacementPoolId
+      : automaticPool
+        ? balancedPoolId
+        : poolCatalog.snapshot?.defaultPoolId;
+    if (poolId) setDraftThreadContext(draftId, { executionPoolId: poolId });
   }, [
-    needsLoadBalancing,
-    loadBalancing.pending,
-    loadBalancing.environmentId,
     draftId,
-    logicalProjectEnvironments,
+    envLocked,
+    selectedExecutionPoolId,
+    poolCompatibility.reselect,
+    poolCompatibility.replacementPoolId,
+    clientSettingsHydrated,
+    automaticPool,
+    balancedPoolId,
+    poolCatalog.snapshot,
     setDraftThreadContext,
   ]);
   const onAutoEnvironment = useCallback(() => {
-    if (envLocked || !draftId) return;
-    if (composerHasAttachments) {
+    if (!draftId || envLocked) return;
+    if (
+      selectedExecutionPoolId &&
+      (composerHasAttachments || draftThread?.branch || draftThread?.worktreePath)
+    ) {
       toastManager.add({
         type: "warning",
-        id: "load-balancing-attachments",
-        title: "Keep attachments on this machine",
+        title: "Choose a pool directly",
         description:
-          "Remove attachments before choosing automatic routing, then attach them on the selected machine.",
+          "This draft already has attachments or workspace settings. Choose its pool directly to preserve that context.",
       });
       return;
     }
-    loadBalancing.refresh(
-      logicalProjectEnvironments.map((environment) => environment.environmentId),
-    );
-    setDraftThreadContext(draftId, {
-      environmentSelection: "auto",
-      loadBalancedEnvironmentId: null,
-      branch: null,
-      worktreePath: null,
-    });
+    poolCatalog.refresh();
+    setDraftThreadContext(draftId, { executionPoolSelection: "auto", executionPoolId: null });
   }, [
-    envLocked,
     draftId,
-    setDraftThreadContext,
-    loadBalancing.refresh,
-    logicalProjectEnvironments,
+    envLocked,
+    selectedExecutionPoolId,
     composerHasAttachments,
+    draftThread?.branch,
+    draftThread?.worktreePath,
+    poolCatalog.refresh,
+    setDraftThreadContext,
   ]);
-  const autoEnvironmentLabel = automaticEnvironment
-    ? draftThread?.loadBalancedEnvironmentId
-      ? "Auto balance"
-      : loadBalancing.pending
-        ? "Checking machines…"
-        : loadBalancing.failed
-          ? "Auto balance unavailable"
-          : "Auto balance"
-    : undefined;
-
-  // The machine an in-flight switch is heading to; a newer switch replaces it.
-  const environmentChangeRef = useRef<{ readonly environmentId: EnvironmentId } | null>(null);
-  const [isEnvironmentChanging, setIsEnvironmentChanging] = useState(false);
-  useLayoutEffect(() => {
-    return () => {
-      environmentChangeRef.current = null;
-      setIsEnvironmentChanging(false);
-    };
-  }, [draftId, activeProjectKey]);
-
-  const onEnvironmentChange = useCallback(
-    (nextEnvironmentId: EnvironmentId) => {
-      if (envLocked || !draftId || sendInFlightRef.current) return;
-      const originalDraft = getDraftSession(draftId);
-      if (!originalDraft || originalDraft.promotedTo) return;
-      const target = logicalProjectEnvironments.find(
-        (env) => env.environmentId === nextEnvironmentId,
-      );
-      if (!target) return;
-      const request = { environmentId: target.environmentId };
-      environmentChangeRef.current = request;
-      setIsEnvironmentChanging(false);
-      const retarget = (project: (typeof allProjects)[number]) => {
-        const currentDraft = getDraftSession(draftId);
-        if (
-          environmentChangeRef.current !== request ||
-          sendInFlightRef.current ||
-          !currentDraft ||
-          currentDraft.promotedTo ||
-          currentDraft.environmentId !== originalDraft.environmentId ||
-          currentDraft.projectId !== originalDraft.projectId
-        )
-          return;
-        const projectRef = scopeProjectRef(target.environmentId, project.id);
-        if (activeProjectIsScratch) {
-          // Scratch projects are machine-local, so move their logical mapping too.
-          setLogicalProjectDraftThreadId(
-            deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings),
-            projectRef,
-            draftId,
-            { environmentSelection: "manual", loadBalancedEnvironmentId: null },
-          );
-        } else {
-          setDraftThreadContext(draftId, {
-            projectRef,
-            environmentSelection: "manual",
-            loadBalancedEnvironmentId: null,
-          });
-        }
-      };
-      const finish = () => {
-        if (environmentChangeRef.current === request) {
-          environmentChangeRef.current = null;
-          setIsEnvironmentChanging(false);
-        }
-      };
-      if (target.projectId !== null) {
-        const project = allProjects.find(
-          (project) =>
-            project.environmentId === target.environmentId && project.id === target.projectId,
-        );
-        if (project) retarget(project);
-        finish();
-        return;
-      }
-      // Keep send disabled until the destination Scratch project is ready.
-      setIsEnvironmentChanging(true);
-      void openScratchProject(target.environmentId, "Could not switch machine")
-        .then((project) => {
-          if (project) retarget(project);
-        })
-        .finally(finish);
-    },
-    [
-      activeProjectIsScratch,
-      allProjects,
-      draftId,
-      envLocked,
-      getDraftSession,
-      logicalProjectEnvironments,
-      openScratchProject,
-      projectGroupingSettings,
-      sendInFlightRef,
-      setDraftThreadContext,
-      setLogicalProjectDraftThreadId,
-    ],
-  );
 
   const activeTerminalGroup =
     terminalUiState.terminalGroups.find(
@@ -5328,25 +5124,6 @@ export default function ChatView(props: ChatViewProps) {
       return result;
     },
     [activeProject, activeProjectScripts, persistProjectScripts],
-  );
-
-  const handleRuntimeModeChange = useCallback(
-    (mode: RuntimeMode) => {
-      if (mode === runtimeMode) return;
-      setComposerDraftRuntimeMode(composerDraftTarget, mode);
-      if (isLocalDraftThread) {
-        setDraftThreadContext(composerDraftTarget, { runtimeMode: mode });
-      }
-      scheduleComposerFocus();
-    },
-    [
-      isLocalDraftThread,
-      runtimeMode,
-      scheduleComposerFocus,
-      composerDraftTarget,
-      setComposerDraftRuntimeMode,
-      setDraftThreadContext,
-    ],
   );
 
   const handleInteractionModeChange = useCallback(
@@ -8080,17 +7857,21 @@ export default function ChatView(props: ChatViewProps) {
       }
 
       if (command === "composer.cycleHost") {
-        if (envLocked || !draftId || !hasMultipleEnvironments) return;
+        if (envLocked || !draftId) return;
         event.preventDefault();
         event.stopPropagation();
         if (event.repeat) return;
-        // Step from where a pending switch is heading, so repeated presses keep advancing.
-        const currentId = environmentChangeRef.current?.environmentId ?? environmentId;
-        const index = logicalProjectEnvironments.findIndex(
-          (env) => env.environmentId === currentId,
-        );
-        const next = logicalProjectEnvironments[(index + 1) % logicalProjectEnvironments.length];
-        if (next) onEnvironmentChange(next.environmentId);
+        const candidates =
+          poolCatalog.snapshot?.pools.filter(
+            (pool) => pool.available && pool.providerDrivers.includes(selectedProvider),
+          ) ?? [];
+        const index = candidates.findIndex((pool) => pool.id === selectedExecutionPoolId);
+        const next = candidates[(index + 1) % candidates.length];
+        if (next)
+          setDraftThreadContext(draftId, {
+            executionPoolId: next.id,
+            executionPoolSelection: "manual",
+          });
         return;
       }
 
@@ -8213,9 +7994,10 @@ export default function ChatView(props: ChatViewProps) {
     draftId,
     environmentId,
     envLocked,
-    hasMultipleEnvironments,
-    logicalProjectEnvironments,
-    onEnvironmentChange,
+    poolCatalog.snapshot,
+    selectedExecutionPoolId,
+    selectedProvider,
+    setDraftThreadContext,
   ]);
 
   // Paste-to-focus: the resting composer blurs on a click into the timeline,
@@ -8653,22 +8435,27 @@ export default function ChatView(props: ChatViewProps) {
       isRevertingCheckpoint ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
-      environmentChangeRef.current !== null ||
       sendInFlightRef.current ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
       notifyDirectAnnotationAttached();
       return;
     }
+    if (poolCompatibilitySendBlock) {
+      toastManager.add({
+        type: "warning",
+        title: "Choose a compatible pool or provider",
+        description: poolCompatibilitySendBlock,
+      });
+      return;
+    }
     if (needsLoadBalancing) {
       toastManager.add({
         type: "warning",
-        title: loadBalancing.pending
-          ? "Checking machine resources"
-          : "Choose a machine to continue",
+        title: loadBalancing.pending ? "Checking pool resources" : "Choose a pool to continue",
         description: loadBalancing.pending
-          ? "Resource checks are still running. You can choose a machine in the composer."
-          : "No eligible machine has available resources. Choose a machine in the composer to override.",
+          ? "Resource checks are still running. You can choose a pool in the composer."
+          : "No eligible pool has available resources. Choose a pool in the composer to override.",
       });
       return;
     }
@@ -9414,6 +9201,9 @@ export default function ChatView(props: ChatViewProps) {
                   interactionMode: target.interactionMode,
                   bootstrap: {
                     createThread: {
+                      ...(selectedExecutionPoolId
+                        ? { executionPoolId: selectedExecutionPoolId }
+                        : {}),
                       projectId: activeProject.id,
                       title,
                       modelSelection: target.selection,
@@ -9754,6 +9544,9 @@ export default function ChatView(props: ChatViewProps) {
               ...(isLocalDraftThread
                 ? {
                     createThread: {
+                      ...(selectedExecutionPoolId
+                        ? { executionPoolId: selectedExecutionPoolId }
+                        : {}),
                       projectId: activeProject.id,
                       title,
                       modelSelection: threadCreateModelSelection,
@@ -10444,6 +10237,7 @@ export default function ChatView(props: ChatViewProps) {
       environmentId,
       input: {
         threadId: nextThreadId,
+        ...(selectedExecutionPoolId ? { executionPoolId: selectedExecutionPoolId } : {}),
         projectId: activeProject.id,
         title: nextThreadTitle,
         modelSelection: nextThreadModelSelection,
@@ -10545,6 +10339,7 @@ export default function ChatView(props: ChatViewProps) {
     navigate,
     resetLocalDispatch,
     defaultRuntimeMode,
+    selectedExecutionPoolId,
     startThreadTurn,
     environmentId,
     composerRef,
@@ -10731,6 +10526,7 @@ export default function ChatView(props: ChatViewProps) {
     !threadDetailLoading &&
     clientSettingsHydrated &&
     !needsLoadBalancing &&
+    !poolCompatibilitySendBlock &&
     !activeEnvironmentUnavailable &&
     !activePendingProgress &&
     !feedbackUploading;
@@ -10977,6 +10773,23 @@ export default function ChatView(props: ChatViewProps) {
       </Suspense>
     ) : null
   ) : null;
+  const executionPoolControl = (
+    <ExecutionPoolSelector
+      catalog={poolCatalog}
+      selectedId={selectedExecutionPoolId}
+      driver={selectedProvider}
+      locked={!draftId || envLocked}
+      automatic={automaticPool}
+      onSelect={(executionPoolId) => {
+        if (draftId)
+          setDraftThreadContext(draftId, {
+            executionPoolId,
+            executionPoolSelection: "manual",
+          });
+      }}
+      onAutomatic={loadBalancingSettings.loadBalancingEnabled ? onAutoEnvironment : undefined}
+    />
+  );
   const threadDetailsPanelProps: ThreadDetailsPanelProps = {
     anchor: threadPanelPopoverAnchorRef,
     handle: threadPanelPopoverHandle,
@@ -10996,16 +10809,7 @@ export default function ChatView(props: ChatViewProps) {
     gitCwd,
     isGitRepo,
     envLocked,
-    availableEnvironments: logicalProjectEnvironments,
-    autoEnvironmentLabel,
-    onAutoEnvironment:
-      draftId &&
-      !envLocked &&
-      canAutoBalanceEnvironments &&
-      loadBalancingSettings.loadBalancingEnabled
-        ? onAutoEnvironment
-        : undefined,
-    onEnvironmentChange,
+    executionPoolControl,
     onEnvModeChange,
     envMode,
     ...(canOverrideServerThreadEnvMode
@@ -11454,8 +11258,8 @@ export default function ChatView(props: ChatViewProps) {
                               sendDisabledReason={
                                 !canOperateThread
                                   ? "This connection cannot change threads."
-                                  : isEnvironmentChanging
-                                    ? "Preparing machine"
+                                  : poolCompatibilitySendBlock
+                                    ? poolCompatibilitySendBlock
                                     : isRevertingCheckpoint
                                       ? "Rewinding conversation"
                                       : feedbackUploading
@@ -11518,7 +11322,6 @@ export default function ChatView(props: ChatViewProps) {
                               threadSyncPhase={
                                 activeEnvironmentUnavailable ? null : threadSyncPhase
                               }
-                              runtimeMode={runtimeMode}
                               interactionMode={interactionMode}
                               lockedProvider={modelPickerLockedProvider}
                               providerStatuses={providerStatuses as ServerProvider[]}
@@ -11545,10 +11348,7 @@ export default function ChatView(props: ChatViewProps) {
                                 supportsPullRequests ? activeProjectRepository : null
                               }
                               restingControlsHost={restingComposerControlsHost}
-                              restingControlsHaveLeadingContext={
-                                mountComposerContextStrip &&
-                                (isGitRepo || showComposerEnvironmentIndicator)
-                              }
+                              restingControlsHaveLeadingContext={mountComposerContextStrip}
                               onRestingControlsVisibilityChange={setRestingComposerControlsVisible}
                               getTimelineScrollableNode={getTimelineScrollableNode}
                               isTimelineAtLogicalEnd={isTimelineAtLogicalEnd}
@@ -11583,7 +11383,6 @@ export default function ChatView(props: ChatViewProps) {
                               onOpenProviderSetup={openProviderSetup}
                               getModelDisabledReason={getModelDisabledReason}
                               toggleInteractionMode={toggleInteractionMode}
-                              handleRuntimeModeChange={handleRuntimeModeChange}
                               handleInteractionModeChange={handleInteractionModeChange}
                               focusComposer={focusComposer}
                               scheduleComposerFocus={scheduleComposerFocus}
@@ -11621,6 +11420,7 @@ export default function ChatView(props: ChatViewProps) {
                           {mountComposerContextStrip && (
                             <div className="pointer-events-auto">
                               <BranchToolbar
+                                executionPoolControl={executionPoolControl}
                                 forceNewWorktree={multipleModelSelections !== null}
                                 ref={branchToolbarRef}
                                 environmentId={activeThread.environmentId}
@@ -11643,17 +11443,6 @@ export default function ChatView(props: ChatViewProps) {
                                 {...(canCheckoutPullRequestIntoThread
                                   ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                                   : {})}
-                                {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
-                                autoEnvironmentLabel={autoEnvironmentLabel}
-                                onAutoEnvironment={
-                                  draftId &&
-                                  !envLocked &&
-                                  canAutoBalanceEnvironments &&
-                                  loadBalancingSettings.loadBalancingEnabled
-                                    ? onAutoEnvironment
-                                    : undefined
-                                }
-                                availableEnvironments={logicalProjectEnvironments}
                                 composerControlsHostRef={setRestingComposerControlsHost}
                                 contextStripVisible={showComposerContextStrip}
                               />

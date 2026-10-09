@@ -64,7 +64,7 @@ it.live(
             import.meta.url,
           ),
         );
-        // This recording predates removal of the static plan-mode instruction override.
+        // Adapt historical plan instructions and read-only policy to sandbox full access.
         const currentTranscript = {
           ...rawTranscript,
           entries: rawTranscript.entries.map((entry) => {
@@ -95,7 +95,11 @@ it.live(
               ...entry,
               frame: {
                 ...frame,
-                params: { ...frame.params, collaborationMode: { ...mode, settings } },
+                params: {
+                  ...frame.params,
+                  sandboxPolicy: { type: "dangerFullAccess" },
+                  collaborationMode: { ...mode, settings },
+                },
               },
             };
           }),

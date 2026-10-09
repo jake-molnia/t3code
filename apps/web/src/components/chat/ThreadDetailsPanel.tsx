@@ -8,14 +8,14 @@ import type {
 
 import type { DraftId } from "../../composerDraftStore";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
-import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
+import { type EnvMode } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import GitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
@@ -39,10 +39,7 @@ export interface ThreadDetailsPanelProps extends Pick<
   gitCwd: string | null;
   isGitRepo: boolean;
   envLocked: boolean;
-  availableEnvironments: readonly EnvironmentOption[];
-  autoEnvironmentLabel?: string | undefined;
-  onAutoEnvironment?: (() => void) | undefined;
-  onEnvironmentChange: (environmentId: EnvironmentId) => void;
+  executionPoolControl?: ReactNode;
   onEnvModeChange: (mode: EnvMode) => void;
   /** The thread's env mode as ChatView resolves it. */
   envMode: EnvMode;
@@ -110,10 +107,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 <BranchToolbar
                   layout="panel"
                   panelSection="workspace"
-                  availableEnvironments={props.availableEnvironments}
-                  onEnvironmentChange={props.onEnvironmentChange}
-                  autoEnvironmentLabel={props.autoEnvironmentLabel}
-                  onAutoEnvironment={props.onAutoEnvironment}
+                  executionPoolControl={props.executionPoolControl}
                   {...branchToolbarProps}
                 />
               ) : null}

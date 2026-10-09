@@ -7,6 +7,7 @@ import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { ChevronDownIcon, FolderGit2Icon, FolderGitIcon, FolderIcon } from "lucide-react";
 import {
   type Ref,
+  type ReactNode,
   type MouseEvent as ReactMouseEvent,
   memo,
   useImperativeHandle,
@@ -22,7 +23,6 @@ import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useProject, useThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
 import {
   type EnvMode,
-  type EnvironmentOption,
   resolveContextStripLabelsCompact,
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
@@ -66,6 +66,7 @@ export interface BranchToolbarHandle {
 
 interface BranchToolbarProps {
   layout?: "composer" | "panel";
+  executionPoolControl?: ReactNode;
   panelSection?: "all" | "workspace" | "branch";
   forceNewWorktree?: boolean;
   ref?: Ref<BranchToolbarHandle>;
@@ -80,13 +81,9 @@ interface BranchToolbarProps {
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
-  autoEnvironmentLabel?: string | undefined;
-  onAutoEnvironment?: (() => void) | undefined;
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
-  availableEnvironments?: readonly EnvironmentOption[];
-  onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   composerControlsHostRef?: (element: HTMLDivElement | null) => void;
   contextStripVisible?: boolean;
 }
@@ -482,6 +479,7 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
 
 export const BranchToolbar = memo(function BranchToolbar({
   layout = "composer",
+  executionPoolControl,
   panelSection = "all",
   forceNewWorktree = false,
   ref,
@@ -586,6 +584,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   if (layout === "panel") {
     return (
       <div className="flex w-full flex-col" data-thread-panel-run-context>
+        {executionPoolControl}
         {panelSection !== "branch" ? (
           <RunContextSelector
             displayMode="panel"
@@ -634,6 +633,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         !contextStripVisible && "pointer-events-none invisible absolute inset-x-0 top-full",
       )}
     >
+      {executionPoolControl}
       {showGitControls ? (
         <div className="contents @3xl/composer-surface:hidden">
           <RunContextSelector
@@ -649,6 +649,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           />
         </div>
       ) : null}
+      {executionPoolControl}
       {showGitControls ? (
         <div
           className={cn(
@@ -657,6 +658,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             composerControlsHostRef ? "shrink" : "flex-1",
           )}
         >
+          {executionPoolControl}
           {showGitControls ? (
             <BranchToolbarEnvModeSelector
               forceNewWorktree={forceNewWorktree}
@@ -684,6 +686,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         />
       ) : null}
 
+      {executionPoolControl}
       {showGitControls ? (
         <BranchToolbarBranchSelector
           forceNewWorktree={forceNewWorktree}

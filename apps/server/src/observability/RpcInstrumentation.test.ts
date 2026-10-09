@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   AuthEnvironmentMaintainScope,
+  ExecutionPoolId,
   AuthOrchestrationReadScope,
   type AuthEnvironmentScope,
   ScheduledTaskError,
@@ -334,3 +335,27 @@ describe("WS RPC instrumentation middleware", () => {
     ),
   );
 });
+
+it.effect("execution pool discovery uses read authorization and server instrumentation", () =>
+  withTelemetry((ended) =>
+    Effect.gen(function* () {
+      const group = groupOf(WS_METHODS.serverExecutionPools);
+      const snapshot = { defaultPoolId: ExecutionPoolId.make("gompers"), pools: [] };
+      const handler = group.toLayerHandler(WS_METHODS.serverExecutionPools, () =>
+        Effect.succeed(snapshot),
+      );
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(Layer.merge(handler, readOnlyConnection)),
+      );
+      assert.deepStrictEqual(yield* client[WS_METHODS.serverExecutionPools]({}), snapshot);
+      const deniedClient = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(Layer.merge(handler, connectionMiddleware([]))),
+      );
+      const rejection = yield* deniedClient[WS_METHODS.serverExecutionPools]({}).pipe(Effect.flip);
+      assert.equal(rejection._tag, "EnvironmentAuthorizationError");
+      const spans = rpcSpans(ended);
+      assert.equal(spans.length, 2);
+      assert.isTrue(spans.every((span) => span.attributes.get("rpc.aggregate") === "server"));
+    }),
+  ),
+);

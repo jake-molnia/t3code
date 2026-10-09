@@ -1,3 +1,4 @@
+import * as ExecutionPools from "./agentRuntime/ExecutionPools.ts";
 import * as AgentRuntimeClient from "./agentRuntime/RuntimeClient.ts";
 import * as RuntimeContracts from "@t3tools/contracts";
 import * as WorkspaceRouting from "./agentRuntime/WorkspaceRouting.ts";
@@ -1312,6 +1313,7 @@ const layerWsRpc = (
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const hostResources = yield* HostResources.HostResources;
+      const executionPools = yield* ExecutionPools.ExecutionPools;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -2012,6 +2014,9 @@ const layerWsRpc = (
                 .enqueueCommand(
                   ThreadMessageIntake.launchThread({
                     commandId: input.commandId,
+                    ...(input.executionPoolId === undefined
+                      ? {}
+                      : { executionPoolId: input.executionPoolId }),
                     ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
                     ...(input.reuseExistingThread === undefined
                       ? {}
@@ -2422,6 +2427,7 @@ const layerWsRpc = (
             maxFiles: config.traceMaxFiles,
           }),
         [WS_METHODS.serverGetProcessDiagnostics]: (_input) => processDiagnostics.read,
+        [WS_METHODS.serverExecutionPools]: () => executionPools.snapshot,
         [WS_METHODS.serverGetHostResources]: (_input) => hostResources.read,
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),

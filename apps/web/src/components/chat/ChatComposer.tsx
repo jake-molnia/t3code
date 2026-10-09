@@ -1,6 +1,5 @@
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
-import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useRightPanelStore } from "~/rightPanelStore";
@@ -31,7 +30,6 @@ import type {
   ThreadContextRecord,
   ProviderInteractionMode,
   ResolvedKeybindingsConfig,
-  RuntimeMode,
   RuntimeRequestId,
   ScopedThreadRef,
   ServerProvider,
@@ -97,7 +95,6 @@ import {
 } from "./composerMentionDrag";
 import {
   composerFloatingLayerProps,
-  useComposerMenuProps,
   isInsideCollapsedComposerControls,
   isInsideRestingComposerControlScope,
 } from "./composerEventScope";
@@ -125,7 +122,6 @@ import {
 } from "../../promptStashStore";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
-import { useComposerMenuState } from "./useComposerMenuState";
 import { useComposerTriggerState } from "./useComposerTriggerState";
 import { useComposerFocusState } from "./useComposerFocusState";
 import { useComposerMultilinePrompt } from "./useComposerMultilinePrompt";
@@ -269,12 +265,7 @@ import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
-import {
-  ComposerControl,
-  ComposerControlIcon,
-  ComposerControlSeparator,
-  ComposerSelectControl,
-} from "./ComposerControl";
+import { ComposerControl, ComposerControlIcon, ComposerControlSeparator } from "./ComposerControl";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
 import {
@@ -1024,7 +1015,6 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
   );
 }
 import { Button } from "../ui/button";
-import { Select, SelectItem, SelectPopup, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
@@ -1179,29 +1169,14 @@ function useRestingComposerControlsLayout(host: HTMLDivElement | null, useContro
   };
 }
 
-type RuntimeModeOption = { mode: RuntimeMode } & (typeof runtimeModeConfig)[RuntimeMode];
-const runtimeModeOptions = runtimeModes.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
-const supervisedRuntimeModeOption = {
-  mode: "approval-required" as const,
-  ...runtimeModeConfig["approval-required"],
-};
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
-  runtimeMode: RuntimeMode;
-  runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   size?: "sm" | "xs";
   hidden?: boolean;
   onToggleInteractionMode: () => void;
-  onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const size = props.size ?? "sm";
-  const composerFloatingLayerProps = useComposerMenuProps();
-  const [open, setOpen] = useComposerMenuState(props.hidden);
-  const runtimeModeOption =
-    props.runtimeModeOptions.find((option) => option.mode === props.runtimeMode) ??
-    supervisedRuntimeModeOption;
-  const RuntimeModeIcon = runtimeModeOption.icon;
   const interactionModeTooltip =
     props.interactionMode === "plan"
       ? "Plan mode — click to return to normal build mode"
@@ -1245,61 +1220,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
     </>
   ) : null;
 
-  return (
-    <>
-      <ComposerControlSeparator size={size} />
-
-      <Tooltip>
-        <Select
-          open={open}
-          onOpenChange={setOpen}
-          value={props.runtimeMode}
-          onValueChange={(value) => props.onRuntimeModeChange(value!)}
-        >
-          <TooltipTrigger
-            render={
-              <ComposerSelectControl
-                data-composer-shortcut="composer.mode"
-                size={size}
-                aria-label="Runtime mode"
-              />
-            }
-          >
-            <ComposerControlIcon icon={RuntimeModeIcon} size={size} />
-            <SelectValue data-composer-control-label>{runtimeModeOption.label}</SelectValue>
-          </TooltipTrigger>
-          <SelectPopup alignItemWithTrigger={false} {...composerFloatingLayerProps}>
-            {props.runtimeModeOptions.map((option) => {
-              const OptionIcon = option.icon;
-              return (
-                <SelectItem
-                  key={option.mode}
-                  value={option.mode}
-                  hideIndicator
-                  className="min-w-64"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="grid min-w-0 flex-1 gap-0.5">
-                      <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-                        <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        {option.label}
-                      </span>
-                      <span className="text-muted-foreground text-xs leading-4">
-                        {option.description}
-                      </span>
-                    </div>
-                  </div>
-                </SelectItem>
-              );
-            })}
-          </SelectPopup>
-        </Select>
-        <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
-      </Tooltip>
-
-      {interactionModeToggle}
-    </>
-  );
+  return interactionModeToggle;
 });
 
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
@@ -1544,7 +1465,6 @@ export interface ChatComposerProps {
   threadSyncPhase: ThreadSyncPhase | null;
 
   // Mode
-  runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
 
   // Provider / model
@@ -1639,7 +1559,6 @@ export interface ChatComposerProps {
   onOpenProviderSetup: (instanceId: ProviderInstanceId) => void;
   getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
   toggleInteractionMode: () => void;
-  handleRuntimeModeChange: (mode: RuntimeMode) => void;
   handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
 
   focusComposer: () => void;
@@ -1696,7 +1615,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     respondingRequestIds,
     showPlanFollowUpPrompt,
     activeProposedPlan,
-    runtimeMode,
     interactionMode: requestedInteractionMode,
     lockedProvider,
     providerStatuses,
@@ -1746,7 +1664,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onOpenProviderSetup,
     getModelDisabledReason,
     toggleInteractionMode,
-    handleRuntimeModeChange,
     handleInteractionModeChange,
     focusComposer,
     scheduleComposerFocus,
@@ -2093,20 +2010,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // disabled.
   const selectedProvider: ProviderDriverKind =
     selectedProviderEntry?.driverKind ?? requestedDriverKind;
-  const supportedRuntimeModes = selectedProviderEntry?.snapshot.supportedRuntimeModes;
-  const compatibleRuntimeModeOptions =
-    supportedRuntimeModes && supportedRuntimeModes.length > 0
-      ? runtimeModeOptions.filter((option) => supportedRuntimeModes.includes(option.mode))
-      : runtimeModeOptions;
-  // Older threads can contain a mode their current provider no longer offers.
-  // Display the provider's first supported mode, which is also its safe legacy
-  // fallback, without mutating persisted state until the user makes a choice.
-  const compatibleRuntimeMode = compatibleRuntimeModeOptions.some(
-    (option) => option.mode === runtimeMode,
-  )
-    ? runtimeMode
-    : (compatibleRuntimeModeOptions[0]?.mode ?? runtimeMode);
-
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadRef: composerDraftTarget,
     providers: providerStatuses,
@@ -5383,12 +5286,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         <ComposerFooterModeControls
           showInteractionModeToggle={planModeUiEnabled}
           interactionMode={interactionMode}
-          runtimeMode={compatibleRuntimeMode}
-          runtimeModeOptions={compatibleRuntimeModeOptions}
           size={composerControlsCollapsed ? "xs" : "sm"}
           hidden={composerControlsHidden || restingHiddenBlockCount > 0}
           onToggleInteractionMode={toggleInteractionMode}
-          onRuntimeModeChange={handleRuntimeModeChange}
         />
       ),
     },
@@ -5545,8 +5445,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         >
           <CompactComposerControlsMenu
             interactionMode={interactionMode}
-            runtimeMode={compatibleRuntimeMode}
-            runtimeModeOptions={compatibleRuntimeModeOptions}
             size={composerControlsCollapsed ? "xs" : "sm"}
             hidden={composerControlsHidden || hiddenRestingBlockIds.length === 0}
             showInteractionModeToggle={planModeUiEnabled && hiddenRestingBlockIds.includes("mode")}
@@ -5554,7 +5452,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               hiddenRestingBlockIds.includes("traits") ? providerTraitsMenuContent : undefined
             }
             onToggleInteractionMode={toggleInteractionMode}
-            onRuntimeModeChange={handleRuntimeModeChange}
           />
         </div>
       </>

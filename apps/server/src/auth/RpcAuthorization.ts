@@ -91,6 +91,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverGetProcessDiagnostics]: AuthDiagnosticsReadScope,
   // Load-balancing new threads reads host load; that is part of operating
   // threads, not of inspecting diagnostics.
+  [WS_METHODS.serverExecutionPools]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetHostResources]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetProcessResourceHistory]: AuthDiagnosticsReadScope,
   [WS_METHODS.serverGetResourceTelemetryHistory]: AuthDiagnosticsReadScope,

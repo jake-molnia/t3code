@@ -1336,6 +1336,12 @@ export function codexThreadRuntimeParams(input: {
         ? {}
         : {
             mcp_servers: {
+              ...Object.fromEntries(
+                Object.entries(mcpSession.additionalHttpServers ?? {}).map(([name, server]) => [
+                  name,
+                  { url: server.url, http_headers: server.headers },
+                ]),
+              ),
               "t3-code": {
                 url: mcpSession.endpoint,
                 http_headers: {

@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import {
   defaultInstanceIdForDriver,
   EnvironmentId,
+  ExecutionPoolId,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -1820,6 +1821,32 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(file?.uploadedAttachmentId).toBeUndefined();
     expect(file?.uploadEnvironmentId).toBeUndefined();
     expect(file && composerFileNeedsReattach(file)).toBe(true);
+  });
+
+  it("pins execution placement without moving the project or clearing draft content", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId, branch: "main" });
+    const before = store.getDraftThread(draftId)!;
+    const poolId = ExecutionPoolId.make("portal");
+    store.setDraftThreadContext(draftId, {
+      executionPoolId: poolId,
+      executionPoolSelection: "manual",
+    });
+    expect(store.getDraftThread(draftId)).toMatchObject({
+      environmentId: before.environmentId,
+      projectId: before.projectId,
+      branch: "main",
+      executionPoolId: poolId,
+      executionPoolSelection: "manual",
+    });
+    store.setDraftThreadContext(draftId, { branch: "feature" });
+    expect(store.getDraftThread(draftId)?.executionPoolId).toBe(poolId);
+    store.setDraftThreadContext(draftId, { executionPoolId: null, executionPoolSelection: "auto" });
+    expect(store.getDraftThread(draftId)).toMatchObject({
+      executionPoolId: null,
+      executionPoolSelection: "auto",
+      branch: "feature",
+    });
   });
 
   it("rechecks balancing when an empty draft is remapped to another project member", () => {

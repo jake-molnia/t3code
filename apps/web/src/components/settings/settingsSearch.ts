@@ -176,15 +176,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["new thread project provider reasoning effort"],
   },
   {
-    id: "default-permissions",
-    title: "Permissions",
-    to: "/settings/general",
-    scope: "project-defaults",
-    searchTerms: [
-      "new thread default runtime mode supervised approvals auto accept edits full access",
-    ],
-  },
-  {
     id: "color-scheme",
     title: "Color scheme",
     to: "/settings/appearance",
@@ -830,9 +821,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "load-balancing",
     title: "Load balancing",
     to: "/settings/connections",
-    searchTerms: [
-      "automatic machine environment resources cpu memory capacity preference weight shared projects",
-    ],
+    searchTerms: ["automatic pool resources cpu memory capacity preference weight routing"],
   },
   {
     id: "github-routing",

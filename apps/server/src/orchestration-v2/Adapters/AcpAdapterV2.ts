@@ -693,8 +693,21 @@ function acpMcpContext(threadId: ThreadId | null, self: SelfInvocation): AcpMcpC
   // every ACP session gets the `t3 acp-mcp-bridge` stdio server, which
   // forwards JSON-RPC to T3's authenticated MCP endpoint. The credential
   // travels via environment variables, never the command line.
+  const additionalServers = Object.entries(session.additionalHttpServers ?? {}).map(
+    ([name, server]) => ({
+      name,
+      command: self.command,
+      args: [...selfInvocationArgs(self, ["acp-mcp-bridge"])],
+      env: [
+        { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+        { name: "T3_ACP_MCP_ENDPOINT", value: server.url },
+        { name: "T3_ACP_MCP_AUTHORIZATION", value: server.headers.Authorization ?? "" },
+      ],
+    }),
+  );
   return {
     servers: [
+      ...additionalServers,
       {
         name: "t3-code",
         command: self.command,
@@ -706,7 +719,7 @@ function acpMcpContext(threadId: ThreadId | null, self: SelfInvocation): AcpMcpC
         ],
       },
     ],
-    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+    acpServers: [...additionalServers, { type: "acp", name: "t3-code", serverId: "t3-code" }],
     endpoint: session.endpoint,
     authorization: session.authorizationHeader,
     processEnvironment: {

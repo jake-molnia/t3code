@@ -1006,6 +1006,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:process-diagnostics",
       tag: WS_METHODS.serverGetProcessDiagnostics,
     }),
+    executionPools: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:execution-pools",
+      tag: WS_METHODS.serverExecutionPools,
+    }),
     hostResources: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:server:host-resources",
       idleTtlMs: 0,

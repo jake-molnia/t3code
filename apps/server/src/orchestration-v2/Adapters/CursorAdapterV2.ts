@@ -208,6 +208,12 @@ export function cursorMcpServers(threadId: ThreadId): Record<string, McpServerCo
     return undefined;
   }
   return {
+    ...Object.fromEntries(
+      Object.entries(session.additionalHttpServers ?? {}).map(([name, server]) => [
+        name,
+        { type: "http" as const, ...server },
+      ]),
+    ),
     "t3-code": {
       type: "http",
       url: session.endpoint,

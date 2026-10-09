@@ -1,3 +1,5 @@
+import { filterApertureSnapshot } from "./ApertureCatalog.ts";
+import { deploymentHarnessDefaults } from "./HarnessDefaults.ts";
 import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -94,6 +96,7 @@ export const make = Effect.gen(function* () {
   const registry = yield* Registry.ProviderInstanceRegistry;
   const mutator = yield* Mutator.ProviderInstanceRegistryMutator;
   const settings = yield* Settings.ServerSettingsService;
+  const normalizeHarness = yield* Effect.try(() => deploymentHarnessDefaults());
   const configurations: Record<string, C.ProviderInstanceConfig> = {};
   const adapters = new Map<C.ProviderInstanceId, ProviderAdapterV2Shape>();
   const lock = yield* Semaphore.make(1);
@@ -104,7 +107,9 @@ export const make = Effect.gen(function* () {
         yield* lock.withPermits(1)(
           Effect.gen(function* () {
             yield* settings.updateSettings(input.settings);
-            configurations[input.instanceId] = input.config;
+            configurations[input.instanceId] = yield* Effect.try(() =>
+              normalizeHarness(input.config),
+            );
             yield* mutator.reconcile(configurations);
             const instance = yield* registry.getInstance(input.instanceId);
             if (!instance) return yield* new WorkerProviderError({ operation: "configure" });
@@ -210,15 +215,19 @@ export const make = Effect.gen(function* () {
           return null;
         }
         case "provider.snapshot":
-          return yield* encodeServerProvider(yield* instance.snapshot.getSnapshot);
+          return yield* encodeServerProvider(
+            filterApertureSnapshot(yield* instance.snapshot.getSnapshot),
+          );
         case "provider.refresh":
-          return yield* encodeServerProvider(yield* instance.snapshot.refresh);
+          return yield* encodeServerProvider(
+            filterApertureSnapshot(yield* instance.snapshot.refresh),
+          );
         case "provider.snapshotForCwd": {
           const cwd = yield* decodeRpcValue2(command.input);
           const snapshot = instance.snapshotForCwd
             ? yield* instance.snapshotForCwd(cwd)
             : yield* instance.snapshot.getSnapshot;
-          return yield* encodeServerProvider(snapshot);
+          return yield* encodeServerProvider(filterApertureSnapshot(snapshot));
         }
         case "text.commit":
           return yield* instance.textGeneration.generateCommitMessage(

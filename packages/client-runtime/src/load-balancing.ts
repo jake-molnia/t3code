@@ -1,4 +1,8 @@
-import type { HostResourcesSnapshot } from "@t3tools/contracts";
+import type {
+  ExecutionPoolsSnapshot,
+  HostResourcesSnapshot,
+  ProviderDriverKind,
+} from "@t3tools/contracts";
 
 /** Callers supply only connected machines hosting the project and selected provider. */
 export function chooseLoadBalancedEnvironment(
@@ -37,4 +41,44 @@ export function chooseLoadBalancedEnvironment(
     }
   }
   return selected;
+}
+
+export function chooseExecutionPool(
+  catalog: { snapshot: ExecutionPoolsSnapshot | null; receivedAt: number },
+  driver: ProviderDriverKind,
+  weights: Readonly<Record<string, number>>,
+  now: number,
+) {
+  const pools = catalog.snapshot?.pools ?? [];
+  const id = chooseLoadBalancedEnvironment(
+    pools
+      .filter((pool) => pool.available && pool.providerDrivers.includes(driver))
+      .map((pool) => ({
+        environmentId: pool.id,
+        resources: pool.resources,
+        receivedAt: catalog.receivedAt,
+        weight: weights[pool.id] ?? 50,
+      })),
+    now,
+  );
+  return pools.find((pool) => pool.id === id)?.id ?? null;
+}
+
+/** A pinned draft may follow a provider change only while its workspace context is untouched. */
+export function reconcileExecutionPoolProvider(input: {
+  snapshot: ExecutionPoolsSnapshot | null;
+  selectedPoolId: ExecutionPoolsSnapshot["defaultPoolId"] | null;
+  driver: ProviderDriverKind;
+  automatic: boolean;
+  placementLocked: boolean;
+  balancedPoolId: ExecutionPoolsSnapshot["defaultPoolId"] | null;
+}) {
+  const selected = input.snapshot?.pools.find((pool) => pool.id === input.selectedPoolId);
+  const incompatible = selected !== undefined && !selected.providerDrivers.includes(input.driver);
+  return {
+    incompatible,
+    reselect: incompatible && input.automatic && !input.placementLocked,
+    replacementPoolId:
+      incompatible && input.automatic && !input.placementLocked ? input.balancedPoolId : null,
+  };
 }

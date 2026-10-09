@@ -1,6 +1,6 @@
 # Release deployment images
 
-Build this fork with the corresponding agent-runtime commit. The [T3 images workflow](https://github.com/jake-molnia/agent-runtime/blob/t3/sandbox-session-lifecycle/.github/workflows/t3-images.yml) produces `t3-web`, `t3-worker`, and `t3-runtime` images for Linux amd64. It exports verified image archives without publishing or deploying them.
+Build this fork with the corresponding agent-runtime commit. The [T3 images workflow](https://github.com/jake-molnia/agent-runtime/blob/t3/sandbox-session-lifecycle/.github/workflows/t3-images.yml) produces `t3-web`, `t3-worker`, and `t3-runtime` images for Linux amd64. It exports verified image archives and publishes commit-tagged images to GHCR after verification. Deployment remains owned by the config repository.
 
 ## Build a release
 
