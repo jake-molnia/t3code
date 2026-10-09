@@ -1121,6 +1121,15 @@ export const make = Effect.gen(function* () {
       }),
     ),
   );
+  const decodeGraphqlRoutingIdentity = Schema.decodeUnknownEffect(
+    Schema.fromJsonString(
+      Schema.Struct({
+        data: Schema.Struct({
+          viewer: Schema.Struct({ databaseId: PositiveInt, login: TrimmedNonEmptyString }),
+        }),
+      }),
+    ),
+  );
   const captureVerifiedCredential = Effect.fn("GitHubPullRequestApi.captureVerifiedCredential")(
     function* (input: { readonly cwd: string; readonly host: string }) {
       const unavailable = () => new GitHubViewerLoginUnavailableError({ cwd: input.cwd });
@@ -1145,15 +1154,38 @@ export const make = Effect.gen(function* () {
               if (cached !== undefined && now - cached.at < 10 * 60_000)
                 return { ...credential, ...cached.value };
               // Pin this read so an auth switch cannot poison its cache entry.
-              const response = yield* api
+              const identity = yield* api
                 .rest({ host, operation: "getRoutingIdentity", path: "user", allowReserve: true })
                 .pipe(
+                  Effect.flatMap((response) =>
+                    decodeRoutingIdentity(response.body).pipe(Effect.mapError(unavailable)),
+                  ),
+                  Effect.catchTags({
+                    GitHubApiResponseError: (error) =>
+                      error.status === 403
+                        ? api
+                            .graphql({
+                              host,
+                              operation: "getRoutingIdentity",
+                              query: "query T3RoutingIdentity { viewer { databaseId login } }",
+                              allowReserve: true,
+                            })
+                            .pipe(
+                              Effect.flatMap((body) =>
+                                decodeGraphqlRoutingIdentity(body).pipe(
+                                  Effect.mapError(unavailable),
+                                ),
+                              ),
+                              Effect.map(({ data }) => ({
+                                id: data.viewer.databaseId,
+                                login: data.viewer.login,
+                              })),
+                            )
+                        : Effect.fail(error),
+                  }),
                   Effect.provideService(GitHubApi.PinnedGitHubCredential, credential),
                   Effect.provideService(SourceControlRateLimit.CredentialScope, key),
                 );
-              const identity = yield* decodeRoutingIdentity(response.body).pipe(
-                Effect.mapError(unavailable),
-              );
               const value = { accountId: String(identity.id), viewer: identity.login };
               if (routingIdentities.size >= 128)
                 routingIdentities.delete(routingIdentities.keys().next().value!);

@@ -716,12 +716,23 @@ export const make = Effect.gen(function* () {
   const readViewerLogin = Effect.fn("GitHubSourceControlProvider.readViewerLogin")(function* (
     host: string,
   ) {
-    const response = yield* rest({
-      host,
-      operation: "getViewer",
-      path: "user",
-      allowReserve: true,
-    });
+    const response = yield* api
+      .rest({
+        host,
+        operation: "getViewer",
+        path: "user",
+        allowReserve: true,
+      })
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "GitHubApiResponseError" && error.status === 403
+            ? failure(
+                "GitHub refused the user-identity check required by this repository-creation flow. GitHub App installation tokens cannot create personal repositories; use an existing repository or a user credential with repository-creation permission.",
+                error,
+              )
+            : fromGitHubApiError(error),
+        ),
+      );
     const decoded = decodeViewerLogin(response.body);
     if (Result.isFailure(decoded)) {
       return yield* failure("GitHub request failed.", decoded.failure);

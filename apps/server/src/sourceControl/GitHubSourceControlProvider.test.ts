@@ -475,6 +475,37 @@ describe("GitHubSourceControlProvider writes", () => {
     }).pipe(Effect.provide(Layer.merge(layer, NodeServices.layer)), Effect.scoped);
   });
 
+  it.effect(
+    "reports installation-token user-identity denial without attempting repository creation",
+    () => {
+      const requests: string[] = [];
+      const { layer } = harness({
+        remotes: "",
+        api: {
+          rest: (input) => {
+            requests.push(`${input.method ?? "GET"} ${input.path}`);
+            return Effect.fail(
+              new GitHubApi.GitHubApiResponseError({
+                host: input.host,
+                operation: input.operation,
+                status: 403,
+              }),
+            );
+          },
+        },
+      });
+      return Effect.gen(function* () {
+        const gh = yield* GitHubSourceControlProvider.make;
+        const error = yield* gh
+          .createRepository({ cwd: "/repo", repository: "acme/new", visibility: "private" })
+          .pipe(Effect.flip);
+        assert.include(error.message, "repository-creation flow");
+        assert.include(error.message, "user credential");
+        assert.deepStrictEqual(requests, ["GET user"]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect("creates a repository under an organization the viewer is not", () => {
     const requests: Array<string> = [];
     const { layer } = harness({
