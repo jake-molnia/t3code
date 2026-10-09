@@ -42,7 +42,7 @@ describe("shouldShowOpenInPicker", () => {
     ).toBe(true);
   });
 
-  it("hides the picker for non-primary local backends", () => {
+  it("shows the browser IDE for non-primary local backends", () => {
     expect(
       shouldShowOpenInPicker({
         activeProjectName: "codething-mvp",
@@ -50,7 +50,7 @@ describe("shouldShowOpenInPicker", () => {
         primaryEnvironmentId,
         remoteOpenMode: "local-exec",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("hides the picker when there is no active project", () => {

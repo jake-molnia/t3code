@@ -8,15 +8,5 @@ export function shouldShowOpenInPicker(input: {
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly remoteOpenMode: RemoteOpenMode;
 }): boolean {
-  if (!input.activeProjectName) return false;
-  if (
-    input.primaryEnvironmentId !== null &&
-    input.activeThreadEnvironmentId === input.primaryEnvironmentId
-  ) {
-    return true;
-  }
-  // Remote environments get the picker in deep-link mode (or its explicit
-  // "no SSH route" state). Non-primary local backends (e.g. WSL) keep it
-  // hidden, matching pre-remote behavior.
-  return input.remoteOpenMode !== "local-exec";
+  return Boolean(input.activeProjectName);
 }

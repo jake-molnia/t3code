@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Standalone Node HTTP application boundary.
 import * as NodeHttp from "node:http";
 import * as NodeEvents from "node:events";
+import { createWorkerIdeProxy, type WorkerIdeOptions } from "./WorkerIdeProxy.ts";
 
 /** Bind inside the sandbox. Authentication remains mandatory on every control route. */
 export async function listenWorker(options: {
@@ -8,8 +9,20 @@ export async function listenWorker(options: {
   port: number;
   handle: (request: Request) => Promise<Response>;
   maxBodyBytes?: number;
+  ide?: WorkerIdeOptions;
 }) {
+  const ide = options.ide ? createWorkerIdeProxy(options.ide) : undefined;
+  const sockets = new Set<import("node:stream").Duplex>();
   const server = NodeHttp.createServer(async (incoming, outgoing) => {
+    if (ide?.matches(incoming.url ?? "")) {
+      try {
+        await ide.request(incoming, outgoing);
+      } catch {
+        if (!outgoing.headersSent) outgoing.writeHead(502);
+        outgoing.end();
+      }
+      return;
+    }
     const abort = new AbortController();
     outgoing.on("close", () => abort.abort());
     try {
@@ -59,6 +72,16 @@ export async function listenWorker(options: {
       outgoing.end();
     }
   });
+  server.on("upgrade", (incoming, socket, head) => {
+    if (!ide?.matches(incoming.url ?? "")) {
+      socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
+      return;
+    }
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => socket.destroy());
+    void ide.upgrade(incoming, socket, head).catch(() => socket.destroy());
+  });
   server.listen(options.port, options.host);
   await NodeEvents.EventEmitter.once(server, "listening");
   const address = server.address();
@@ -69,6 +92,7 @@ export async function listenWorker(options: {
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
         server.closeAllConnections();
+        for (const socket of sockets) socket.destroy();
       }),
   };
 }

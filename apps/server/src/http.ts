@@ -386,7 +386,11 @@ const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((
   const queryIndex = request.url.indexOf("?");
   const path = queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
   // Webhook URLs carry their secret token in the path, so they never reach a trace.
-  return UNTRACED_REQUEST_PATHS.has(path) || path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`);
+  return (
+    UNTRACED_REQUEST_PATHS.has(path) ||
+    path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`) ||
+    path.startsWith("/api/sandbox-ide/")
+  );
 });
 
 export const withUntracedRequests = Layer.provide(layerUntracedRequests);

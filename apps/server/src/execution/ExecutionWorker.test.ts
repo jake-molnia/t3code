@@ -158,6 +158,34 @@ test("a live provider callback prevents quiesce after HTTP operations finish", a
   expect((await quiesce()).status).toBe(200);
 });
 
+test("IDE stream leases fence quiescence and exclusive mutations until released", async () => {
+  const { worker, client } = await fixture(async () => null);
+  const transition = (action: "quiesce" | "resume", revision: number) =>
+    worker.handle(
+      new Request(`http://worker/v1/${action}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ identity, revision, operationId: `${action}-${revision}` }),
+      }),
+    );
+  const release = await worker.acquireLease();
+  expect(release).toBeTypeOf("function");
+  const busy = await transition("quiesce", 1);
+  expect(busy.status).toBe(409);
+  expect(await busy.json()).toMatchObject({ activeOperations: 1, quiescent: false });
+  await expect(client.call("git.restore", {})).rejects.toThrow("worker_busy");
+  release?.();
+  release?.();
+  expect((await transition("quiesce", 1)).status).toBe(200);
+  expect(await worker.acquireLease()).toBeUndefined();
+  await expect(client.call("computer.action", {})).rejects.toThrow("worker_quiescent");
+  expect((await transition("resume", 2)).status).toBe(200);
+  const resumed = await worker.acquireLease();
+  expect(resumed).toBeTypeOf("function");
+  resumed?.();
+  expect((await transition("quiesce", 3)).status).toBe(200);
+});
+
 test.each(["git.restore", "workspace.discardClone"])(
   "%s holds exclusive admission until its result is durable",
   async (exclusiveMethod) => {

@@ -4130,6 +4130,7 @@ export default function ChatView(props: ChatViewProps) {
     remoteOpenMode: remoteOpenState.mode,
   });
   useOpenFavoriteEditorShortcut({
+    threadId,
     enabled: showOpenInPicker,
     environmentId: activeThread?.environmentId ?? environmentId,
     keybindings,

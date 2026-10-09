@@ -1,9 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
-// --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
 import {
   FILL_PREVIEW_VIEWPORT,
-  INCOGNITO_BROWSER_PROFILE_ID,
   PREVIEW_AUTOMATION_SERVER_OPERATIONS,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type PreviewAppearancePreference,
@@ -39,6 +37,7 @@ import {
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
 import * as Context from "effect/Context";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { constVoid } from "effect/Function";
@@ -283,8 +282,6 @@ interface ServerTab {
   readonly networkEntries: Array<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: Array<PreviewAutomationActionEvent>;
   readonly control: SessionControl;
-  /** The tab's own storage context, closed with it. Popups share their opener's. */
-  readonly isolatedContext: boolean;
   /**
    * Set when the desktop app renders this tab. The server drives the desktop's
    * page; the desktop owns its size, storage, and window.
@@ -437,6 +434,12 @@ const make = Effect.gen(function* () {
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
+  const cdpEndpoint = yield* Config.String("T3CODE_SANDBOX_CDP_URL").pipe(
+    Config.withDefault("http://127.0.0.1:9222"),
+  );
+  const cdpUrl = yield* Effect.try(() => new URL(cdpEndpoint)).pipe(Effect.orDie);
+  if (cdpUrl.protocol !== "http:" || cdpUrl.hostname !== "127.0.0.1")
+    return yield* Effect.die(new Error("The sandbox browser CDP endpoint must use loopback HTTP."));
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
@@ -455,6 +458,7 @@ const make = Effect.gen(function* () {
 
   const contexts = new ServerBrowserContexts({
     profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
+    cdpEndpoint,
     executable: () => Effect.runPromise(previewBrowser.executable),
     // Playwright's launch error drops Chrome's own output; its sandbox note survives.
     diagnose: (executable, cause) =>
@@ -649,7 +653,6 @@ const make = Effect.gen(function* () {
     // The desktop owns its page; letting go only ends this connection.
     if (tab.desktop) void tab.desktop.close().catch(constVoid);
     else void tab.page.close().catch(constVoid);
-    if (tab.isolatedContext) void tab.page.context().close().catch(constVoid);
     void tab.recording?.encoder.close().catch(constVoid);
     void NodeFSP.rm(downloadDir(tab), { recursive: true, force: true }).catch(constVoid);
     reportLiveTabs();
@@ -702,18 +705,10 @@ const make = Effect.gen(function* () {
       adopted === undefined && (await desktopRenders(snapshot))
         ? await connectDesktop(snapshot)
         : null;
-    const isolatedContext =
-      adopted === undefined &&
-      desktop === null &&
-      (snapshot.automationOwner !== undefined ||
-        snapshot.profileId === INCOGNITO_BROWSER_PROFILE_ID);
     const context =
       adopted?.page.context() ??
       desktop?.page.context() ??
-      (await contexts.contextFor(
-        snapshot.profileId ?? "default",
-        isolatedContext ? tabKey(snapshot.threadId, snapshot.tabId) : undefined,
-      ));
+      (await contexts.contextFor(snapshot.profileId ?? "default"));
     if (adopted?.page.isClosed()) throw new Error("The popup closed before it opened.");
     // The desktop page already has its own clipboard; the bridge script is for headless tabs.
     if (!desktop) await prepareContext(context);
@@ -736,7 +731,6 @@ const make = Effect.gen(function* () {
       networkEntries: [],
       actionTimeline: [],
       control,
-      isolatedContext,
       desktop: desktop === null ? null : { close: desktop.close },
       profileId: snapshot.profileId,
       openerTabId: adopted?.openerTabId,
@@ -824,7 +818,6 @@ const make = Effect.gen(function* () {
       await control.close().catch(constVoid);
       if (desktop) await desktop.close().catch(constVoid);
       else await page.close().catch(constVoid);
-      if (isolatedContext) await context.close().catch(constVoid);
       throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
     }
     page.on("close", () => dropTab(tab, true));
