@@ -1,3 +1,4 @@
+import * as SandboxComputer from "../../../computer/SandboxComputer.ts";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -28,6 +29,7 @@ import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 
 const layerStubServices = Layer.mergeAll(
+  Layer.mock(SandboxComputer.SandboxComputer)({}),
   Layer.mock(RuntimeClient.RuntimeClient)({ enabled: true }),
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
@@ -126,6 +128,9 @@ it.effect("production mcp layer lists worktree tools over http", () =>
       // The worktree registration merges alongside the other toolkits rather
       // than replacing them.
       expect(toolNames).toContain("preview_status");
+      expect(toolNames).toContain("computer_status");
+      expect(toolNames).toContain("computer_screenshot");
+      expect(toolNames).toContain("computer_action");
       expect(toolNames).toContain("delegate_task");
 
       // The handoff tool mutates thread state, reaches the network (origin

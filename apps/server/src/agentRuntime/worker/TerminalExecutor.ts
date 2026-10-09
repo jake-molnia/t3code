@@ -1,3 +1,4 @@
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -12,6 +13,17 @@ export const makeTerminalExecutor = <E, R>(options: {
 }) =>
   Effect.gen(function* () {
     const terminals = yield* TerminalManager.TerminalManager;
+    const environment = yield* HostProcessEnvironment;
+    const desktopEnvironment = (input: Readonly<Record<string, string>> | undefined) => {
+      const env = { ...input };
+      // Desktop processes belong to this worker, never to the requesting server or browser.
+      for (const key of ["DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"]) {
+        delete env[key];
+        const value = environment[key];
+        if (value !== undefined) env[key] = value;
+      }
+      return env;
+    };
     const owned = new Map<string, { threadId: string; terminalId: string }>();
     const key = (threadId: string, terminalId: string) => JSON.stringify([threadId, terminalId]);
     const unsubscribe = yield* terminals.subscribe((event) =>
@@ -45,7 +57,7 @@ export const makeTerminalExecutor = <E, R>(options: {
             const id = key(input.threadId, input.terminalId);
             owned.set(id, { threadId: input.threadId, terminalId: input.terminalId });
             return yield* terminals
-              .open({ ...input, cwd, worktreePath })
+              .open({ ...input, cwd, worktreePath, env: desktopEnvironment(input.env) })
               .pipe(Effect.tapError(() => Effect.sync(() => owned.delete(id))));
           }
           case "terminals.snapshot": {
@@ -85,7 +97,12 @@ export const makeTerminalExecutor = <E, R>(options: {
               threadId: input.threadId,
               terminalId: input.terminalId,
             });
-            return yield* terminals.restart({ ...input, cwd, worktreePath });
+            return yield* terminals.restart({
+              ...input,
+              cwd,
+              worktreePath,
+              env: desktopEnvironment(input.env),
+            });
           }
           case "terminals.write": {
             const input = yield* Schema.decodeUnknownEffect(C.TerminalWriteInput)(raw);

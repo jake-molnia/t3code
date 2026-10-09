@@ -179,6 +179,7 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
+import * as SandboxIde from "./agentRuntime/SandboxIde.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
@@ -1254,6 +1255,7 @@ const layerWsRpc = (
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
+      const sandboxIde = yield* SandboxIde.SandboxIde;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const directEndpoints = yield* DirectEndpoints.DirectEndpoints;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -2712,6 +2714,7 @@ const layerWsRpc = (
             ),
           ),
         [WS_METHODS.shellOpenInEditor]: (input) => externalLauncher.launchEditor(input),
+        [WS_METHODS.sandboxIdeOpen]: (input) => sandboxIde.open(input),
         [WS_METHODS.filesystemBrowse]: (input) =>
           workspaceEntries.browse(input).pipe(
             Effect.mapError(

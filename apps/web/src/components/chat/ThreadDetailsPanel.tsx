@@ -114,6 +114,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
               {density !== "essential" && props.showOpenInPicker ? (
                 <OpenInPicker
+                  threadId={props.threadId}
+                  enableShortcut={false}
                   keybindings={props.keybindings}
                   environmentId={props.environmentId}
                   availableEditors={props.availableEditors}

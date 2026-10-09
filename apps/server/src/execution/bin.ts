@@ -9,12 +9,14 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as WorkerWorkspaceLayers from "../agentRuntime/worker/WorkerWorkspaceLayers.ts";
 import { makeWorkspaceExecutor } from "../agentRuntime/worker/WorkspaceExecutor.ts";
 import { makeTerminalExecutor } from "../agentRuntime/worker/TerminalExecutor.ts";
+import { makeComputerExecutor } from "../agentRuntime/worker/ComputerExecutor.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Standalone worker application boundary.
 import * as NodeCrypto from "node:crypto";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as ProviderRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { BUILT_IN_DRIVERS } from "../provider/builtInDrivers.ts";
 import { workerLayers } from "./WorkerLayers.ts";
@@ -32,6 +34,7 @@ const program = Effect.gen(function* () {
   const podUid = yield* Config.String("T3_POD_UID");
   const token = yield* Config.String("T3_WORKER_TOKEN");
   const port = yield* Config.Int("T3_WORKER_PORT").pipe(Config.withDefault(8083));
+  const ideUrl = yield* Config.option(Config.String("T3CODE_SANDBOX_IDE_URL"));
   const cwd = yield* Config.String("T3_WORKSPACE_ROOT").pipe(Config.withDefault("/workspace"));
   const stateDir = yield* Config.String("T3_WORKER_STATE_DIR").pipe(
     Config.withDefault("/workspace/.t3-worker"),
@@ -98,6 +101,7 @@ const program = Effect.gen(function* () {
         return worker.publish(sessionId, event);
       },
     });
+    const computer = yield* makeComputerExecutor;
     const runPromise = yield* captureRunPromise;
     worker = createExecutionWorker({
       identity,
@@ -111,6 +115,7 @@ const program = Effect.gen(function* () {
             const files = yield* workspace.activity;
             const terminal = yield* terminals.activity;
             const browsing = yield* preview.activity;
+            const computing = yield* computer.activity;
             const transferring = yield* assets.activity;
             return {
               activeOperations:
@@ -119,6 +124,7 @@ const program = Effect.gen(function* () {
                 files.activeOperations +
                 terminal.activeOperations +
                 browsing.activeOperations +
+                computing.activeOperations +
                 transferring.activeOperations,
               pendingCallbacks: provider.pendingCallbacks + utility.pendingCallbacks,
             };
@@ -144,20 +150,26 @@ const program = Effect.gen(function* () {
                 ? runPromise(forks.execute(method, input))
                 : method.startsWith("asset.") || method.startsWith("input.")
                   ? runPromise(assets.execute(method, input))
-                  : method.startsWith("preview.") || method.startsWith("html.")
-                    ? runPromise(preview.execute(method, input))
-                    : method.startsWith("terminals.")
-                      ? runPromise(terminals.execute(method, input))
-                      : /^(workspace|files|git|scripts)\./.test(method)
-                        ? runPromise(workspace.execute(method, input))
-                        : runPromise(executor.execute(method, input)),
+                  : method.startsWith("computer.")
+                    ? runPromise(computer.execute(method, input))
+                    : method.startsWith("preview.") || method.startsWith("html.")
+                      ? runPromise(preview.execute(method, input))
+                      : method.startsWith("terminals.")
+                        ? runPromise(terminals.execute(method, input))
+                        : /^(workspace|files|git|scripts)\./.test(method)
+                          ? runPromise(workspace.execute(method, input))
+                          : runPromise(executor.execute(method, input)),
     });
     const handle = worker.handle;
+    const acquireLease = worker.acquireLease;
     yield* Effect.acquireRelease(
       Effect.tryPromise(() =>
         listenWorker({
           host: "0.0.0.0",
           port,
+          ...(Option.isSome(ideUrl)
+            ? { ide: { url: ideUrl.value, token, identity, acquireLease } }
+            : {}),
           handle: (request) =>
             new URL(request.url).pathname.startsWith("/mcp/")
               ? forwarder.handle(request)

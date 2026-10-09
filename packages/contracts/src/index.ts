@@ -66,3 +66,5 @@ export * from "./secretRequest.ts";
 export * from "./clientRpcPermissions.ts";
 
 export * from "./executionPools.ts";
+export * from "./sandboxIde.ts";
+export * from "./sandboxComputer.ts";

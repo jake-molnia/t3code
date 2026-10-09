@@ -1,3 +1,10 @@
+import * as SandboxComputer from "../computer/SandboxComputer.ts";
+import * as ComputerHandlers from "./toolkits/computer/handlers.ts";
+import {
+  ComputerToolkit,
+  ComputerScreenshotToolkit,
+  ComputerScreenshotTool,
+} from "./toolkits/computer/tools.ts";
 import * as RemoteWorkspaceHtmlRender from "../agentRuntime/RemoteWorkspaceHtmlRender.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -704,6 +711,28 @@ const registerImageTool = <T extends Tool.Any, E, R>(
     });
   });
 
+const registerComputerScreenshot = Effect.fn("McpHttpServer.registerComputerScreenshot")(
+  function* () {
+    const computer = yield* SandboxComputer.SandboxComputer;
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const built = yield* ComputerScreenshotToolkit;
+    yield* registerImageTool(
+      ComputerScreenshotTool,
+      (payload) =>
+        built
+          .handle("computer_screenshot", payload)
+          .pipe(Stream.unwrap, Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption)),
+      (effect) =>
+        effect.pipe(
+          Effect.provideService(SandboxComputer.SandboxComputer, computer),
+          Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+        ),
+      "screenshot",
+      "Sandbox computer screenshot failed.",
+    );
+  },
+);
+
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 
 const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(function* () {
@@ -799,6 +828,11 @@ export const layerPullRequestsToolkit = toolkitRegistration(
   PullRequestsHandlers.layer,
 );
 
+export const layerComputerToolkit = Layer.mergeAll(
+  toolkitRegistration(ComputerToolkit, ComputerHandlers.layer),
+  imageToolRegistration(registerComputerScreenshot(), ComputerHandlers.layerScreenshot),
+);
+
 export const layerMcpTransport = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
@@ -807,6 +841,7 @@ export const layerMcpTransport = McpServer.layerHttp({
 }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 export const layer = Layer.mergeAll(
+  layerComputerToolkit,
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,

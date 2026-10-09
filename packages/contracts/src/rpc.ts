@@ -1,4 +1,5 @@
 import { ExecutionPoolsSnapshot } from "./executionPools.ts";
+import { SandboxIdeOpenInput, SandboxIdeOpenResult, SandboxIdeError } from "./sandboxIde.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -364,6 +365,7 @@ export const WS_METHODS = {
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
+  sandboxIdeOpen: "sandbox.ide.open",
 
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
@@ -1141,6 +1143,12 @@ const WsProjectsCreateNewRpc = Rpc.make(WS_METHODS.projectsCreateNew, {
   error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
 });
 
+const WsSandboxIdeOpenRpc = Rpc.make(WS_METHODS.sandboxIdeOpen, {
+  payload: SandboxIdeOpenInput,
+  success: SandboxIdeOpenResult,
+  error: Schema.Union([SandboxIdeError, EnvironmentAuthorizationError]),
+});
+
 const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: LaunchEditorInput,
   error: Schema.Union([ExternalLauncherError, EnvironmentAuthorizationError]),
@@ -1842,6 +1850,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsWriteFileRpc,
   WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,
+  WsSandboxIdeOpenRpc,
   WsFilesystemBrowseRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,

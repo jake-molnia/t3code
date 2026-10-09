@@ -9,11 +9,13 @@ import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 const launches = vi.hoisted(() => ({
   launch: vi.fn<BrowserType["launch"]>(),
   persistent: vi.fn<BrowserType["launchPersistentContext"]>(),
+  connect: vi.fn<BrowserType["connectOverCDP"]>(),
   mkdir: vi.fn().mockResolvedValue(undefined),
   rm: vi.fn().mockResolvedValue(undefined),
 }));
 vi.spyOn(chromium, "launch").mockImplementation(launches.launch);
 vi.spyOn(chromium, "launchPersistentContext").mockImplementation(launches.persistent);
+vi.spyOn(chromium, "connectOverCDP").mockImplementation(launches.connect);
 vi.mock("node:fs/promises", () => ({ mkdir: launches.mkdir, rm: launches.rm }));
 
 const makeContext = () => {
@@ -58,11 +60,68 @@ const options = () => ({
 beforeEach(() => {
   launches.launch.mockReset();
   launches.persistent.mockReset();
+  launches.connect.mockReset();
   launches.mkdir.mockClear();
   launches.rm.mockClear();
 });
 
 describe("ServerBrowserContexts", () => {
+  it("shares the runtime desktop without launching Chromium or closing its existing tabs", async () => {
+    const context = makeContext();
+    const existingPage = { close: vi.fn() };
+    const browser = {
+      contexts: () => [context],
+      on: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    Object.assign(context, { pages: () => [existingPage] });
+    launches.connect.mockResolvedValue(browser as unknown as Browser);
+    const configuration = { ...options(), cdpEndpoint: "http://127.0.0.1:9222" };
+    const pool = new ServerBrowserContexts(configuration);
+    const [first, child] = await Promise.all([
+      pool.contextFor("default", "root"),
+      pool.contextFor("default", "child"),
+    ]);
+    expect(first).toBe(child);
+    expect(first).toBe(context);
+    expect(launches.connect).toHaveBeenCalledTimes(1);
+    expect(launches.launch).not.toHaveBeenCalled();
+    expect(launches.persistent).not.toHaveBeenCalled();
+    expect(configuration.executable).not.toHaveBeenCalled();
+    expect(existingPage.close).not.toHaveBeenCalled();
+    await expect(pool.clearProfile("default")).rejects.toThrow("runtime owns");
+    expect(launches.rm).not.toHaveBeenCalled();
+    await pool.close();
+    expect(context.close).not.toHaveBeenCalled();
+    expect(browser.close).toHaveBeenCalledOnce();
+  });
+
+  it("does not fall back to a new browser when the runtime CDP endpoint is unavailable", async () => {
+    launches.connect.mockRejectedValue(new Error("desktop unavailable"));
+    const pool = new ServerBrowserContexts({
+      ...options(),
+      cdpEndpoint: "http://127.0.0.1:9222",
+    });
+    await expect(pool.contextFor("default")).rejects.toThrow("desktop unavailable");
+    expect(launches.launch).not.toHaveBeenCalled();
+    expect(launches.persistent).not.toHaveBeenCalled();
+    await pool.close();
+  });
+
+  it("disconnects a pending CDP attachment during shutdown without closing the runtime context", async () => {
+    const context = makeContext();
+    const browser = { contexts: () => [context], on: vi.fn(), close: vi.fn(async () => {}) };
+    const connection = Promise.withResolvers<Browser>();
+    launches.connect.mockReturnValue(connection.promise);
+    const pool = new ServerBrowserContexts({ ...options(), cdpEndpoint: "http://127.0.0.1:9222" });
+    const opening = expect(pool.contextFor("default")).rejects.toThrow("closed");
+    const closing = pool.close();
+    connection.resolve(browser as unknown as Browser);
+    await Promise.all([opening, closing]);
+    expect(browser.close).toHaveBeenCalledOnce();
+    expect(context.close).not.toHaveBeenCalled();
+  });
+
   it("lazily shares one browser across concurrent isolated sessions and reuses each context", async () => {
     const browser = makeBrowser();
     const launch = Promise.withResolvers<Browser>();

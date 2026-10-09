@@ -57,6 +57,8 @@ const READ_ONLY_EXECUTION_METHODS = new Set([
   "preview.list",
   "preview.snapshot",
   "preview.screenshot",
+  "computer.status",
+  "computer.screenshot",
   "terminals.list",
   "terminals.snapshot",
 ]);
@@ -92,6 +94,7 @@ export function createExecutionWorker(options: {
   let admission = Promise.resolve();
   let exclusiveOperation: string | undefined;
   let activeTransient = 0;
+  let activeLeases = 0;
   const readers = new Set<{ sessionId: string | null; wake: () => void }>();
   let eventWrites = Promise.resolve();
   let quiescent = false;
@@ -148,6 +151,7 @@ export function createExecutionWorker(options: {
         if (
           inFlight.size ||
           activeTransient ||
+          activeLeases ||
           activity.activeOperations ||
           activity.pendingCallbacks
         ) {
@@ -206,6 +210,23 @@ export function createExecutionWorker(options: {
   }
   return {
     identity: options.identity,
+    /** Streaming transports share the same admission barrier as operations and lifecycle changes. */
+    async acquireLease(): Promise<(() => void) | undefined> {
+      let release: (() => void) | undefined;
+      const accepted = admission.then(() => {
+        if (quiescent || exclusiveOperation !== undefined) return;
+        activeLeases++;
+        let released = false;
+        release = () => {
+          if (released) return;
+          released = true;
+          activeLeases--;
+        };
+      });
+      admission = accepted.catch(() => {});
+      await accepted;
+      return release;
+    },
     publish(sessionId: string, event: unknown) {
       const write = eventWrites.then(() =>
         options.journal.append({
@@ -336,6 +357,7 @@ export function createExecutionWorker(options: {
             url.pathname === "/v1/quiesce" &&
             (inFlight.size ||
               activeTransient ||
+              activeLeases ||
               activity.activeOperations ||
               activity.pendingCallbacks)
           ) {
@@ -343,7 +365,8 @@ export function createExecutionWorker(options: {
               {
                 ...options.identity,
                 ...activity,
-                activeOperations: activity.activeOperations + inFlight.size + activeTransient,
+                activeOperations:
+                  activity.activeOperations + inFlight.size + activeTransient + activeLeases,
                 quiescent: false,
                 revision,
               },

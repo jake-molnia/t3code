@@ -1,4 +1,9 @@
-import { AuthOrchestrationOperateScope, EnvironmentId, type EditorId } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  EnvironmentId,
+  ThreadId,
+  type EditorId,
+} from "@t3tools/contracts";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { AsyncResult } from "effect/reactivity";
 import { cloneElement, useState, type ReactElement, type ReactNode } from "react";
@@ -11,6 +16,7 @@ const state = vi.hoisted(() => ({
   allowed: new Set<string>(),
   remote: { mode: "local-exec" } as RemoteOpenState,
   run: vi.fn(),
+  openIde: vi.fn(),
   openUrl: vi.fn(),
   setPreferred: vi.fn(),
   markHintSeen: vi.fn(),
@@ -34,7 +40,16 @@ vi.mock("../../state/session", async () => {
       ),
   };
 });
-vi.mock("../../state/shell", () => ({ shellEnvironment: { openInEditor: "openInEditor" } }));
+vi.mock("../../useSandboxIde", () => ({ useSandboxIde: () => state.openIde }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: (environmentId: string) => state.allowed.has(environmentId),
+}));
+vi.mock("../../state/shell", () => ({
+  shellEnvironment: {
+    openInEditor: "openInEditor",
+    openSandboxIde: { permissionAtom: (environmentId: string) => environmentId },
+  },
+}));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.run }));
 vi.mock("../../state/environments", () => ({ useEnvironment: () => ({ label: "Test host" }) }));
 vi.mock("../../editorPreferences", () => ({
@@ -103,6 +118,7 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
   state.allowed.clear();
+  state.openIde.mockReset();
   state.remote = { mode: "local-exec" };
   state.run.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   state.openUrl.mockReset().mockResolvedValue(true);
@@ -134,6 +150,7 @@ async function renderPicker() {
     const node = (
       <OpenInPicker
         environmentId={selected}
+        threadId={ThreadId.make("thread")}
         keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
         availableEditors={editors}
         openInCwd="/work/project"
@@ -167,6 +184,7 @@ describe("host editor access", () => {
       keydown(event);
     });
     expect(state.run).not.toHaveBeenCalled();
+    expect(state.openIde).not.toHaveBeenCalled();
     expect(state.setPreferred).not.toHaveBeenCalled();
     expect(event.preventDefault).not.toHaveBeenCalled();
 
@@ -190,37 +208,27 @@ describe("host editor access", () => {
     await renderPicker();
     expect(renderer!.root.findByProps({ "data-menu-open": false })).toBeDefined();
     await act(async () => primaryButton().props.onClick());
-    expect(state.run).toHaveBeenCalledExactlyOnceWith({
-      environmentId: selected,
-      input: { cwd: "/work/project", editor: "vscode" },
-    });
+    expect(state.openIde).toHaveBeenCalledOnce();
+    expect(state.run).not.toHaveBeenCalled();
   });
 });
 
-describe("client editor links", () => {
-  it("opens an SSH editor URL without host operate permission", async () => {
+describe("sandbox VS Code", () => {
+  it("uses the browser IDE for a remote connection without launching an SSH editor", async () => {
     state.remote = { mode: "remote-links", host: { kind: "ssh-alias", host: "test-host" } };
+    state.allowed.add(selected);
     await renderPicker();
-    expect(primaryButton().props.disabled).toBe(false);
     await act(async () => primaryButton().props.onClick());
-    expect(state.openUrl).toHaveBeenCalledExactlyOnceWith(
-      "vscode://vscode-remote/ssh-remote+test-host/work/project",
-    );
+    expect(state.openIde).toHaveBeenCalledOnce();
+    expect(state.openUrl).not.toHaveBeenCalled();
     expect(state.run).not.toHaveBeenCalled();
-    expect(state.markHintSeen).toHaveBeenCalledOnce();
-    expect(state.setPreferred).toHaveBeenCalledExactlyOnceWith("vscode");
   });
-
-  it("does not change preferences when the client rejects the SSH URL", async () => {
+  it("requires sandbox operate permission even when an SSH route exists", async () => {
     state.remote = { mode: "remote-links", host: { kind: "ssh-alias", host: "test-host" } };
-    state.openUrl.mockResolvedValue(false);
     await renderPicker();
-    const event = keyboardEvent();
-    await act(async () => state.keydown!(event));
-    expect(state.openUrl).toHaveBeenCalledOnce();
-    expect(event.preventDefault).toHaveBeenCalledOnce();
-    expect(state.run).not.toHaveBeenCalled();
-    expect(state.setPreferred).not.toHaveBeenCalled();
-    expect(state.markHintSeen).not.toHaveBeenCalled();
+    expect(primaryButton().props.disabled).toBe(true);
+    await act(async () => primaryButton().props.onClick());
+    expect(state.openIde).not.toHaveBeenCalled();
+    expect(state.openUrl).not.toHaveBeenCalled();
   });
 });

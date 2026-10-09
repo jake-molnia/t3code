@@ -14,6 +14,7 @@ export const ExecutionPool = Schema.Struct({
 });
 export type ExecutionPool = typeof ExecutionPool.Type;
 export const ExecutionPoolsSnapshot = Schema.Struct({
+  sandboxIdeAvailable: Schema.optional(Schema.Boolean),
   defaultPoolId: ExecutionPoolId,
   pools: Schema.Array(ExecutionPool),
 });

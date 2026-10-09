@@ -4019,13 +4019,16 @@ export default function ChatView(props: ChatViewProps) {
     DEFAULT_RESOLVED_KEYBINDINGS;
   const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
   const remoteOpenState = useRemoteOpenState(activeThread?.environmentId ?? environmentId);
-  const showOpenInPicker = shouldShowOpenInPicker({
-    activeProjectName: activeProject?.title,
-    activeThreadEnvironmentId: activeThread?.environmentId ?? environmentId,
-    primaryEnvironmentId,
-    remoteOpenMode: remoteOpenState.mode,
-  });
+  const showOpenInPicker =
+    poolCatalog.snapshot?.sandboxIdeAvailable === true &&
+    shouldShowOpenInPicker({
+      activeProjectName: activeProject?.title,
+      activeThreadEnvironmentId: activeThread?.environmentId ?? environmentId,
+      primaryEnvironmentId,
+      remoteOpenMode: remoteOpenState.mode,
+    });
   useOpenFavoriteEditorShortcut({
+    threadId,
     enabled: showOpenInPicker,
     environmentId: activeThread?.environmentId ?? environmentId,
     keybindings,

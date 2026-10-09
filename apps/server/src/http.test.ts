@@ -39,6 +39,7 @@ describe("untraced requests", () => {
           const router = yield* HttpRouter.HttpRouter;
           yield* router.add("POST", "/api/observability/v1/traces", HttpServerResponse.empty());
           yield* router.add("GET", "/api/environment", HttpServerResponse.empty());
+          yield* router.add("GET", "/api/sandbox-ide/session/", HttpServerResponse.empty());
         }),
       );
       const services = yield* Layer.build(
@@ -50,6 +51,7 @@ describe("untraced requests", () => {
 
       yield* client.post("/api/observability/v1/traces");
       yield* client.post("/api/observability/v1/traces?x=1");
+      yield* client.get("/api/sandbox-ide/session/?ticket=one-use-secret");
       expect(spanNames).toEqual([]);
 
       yield* client.get("/api/environment");

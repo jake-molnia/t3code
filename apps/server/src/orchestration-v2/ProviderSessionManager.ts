@@ -503,7 +503,10 @@ export const layerWithOptions = (
                 const capabilities = new Set<
                   import("../mcp/McpInvocationContext.ts").McpCapability
                 >(["orchestration", "worktree", "pull-requests"]);
-                if (browserToolsAvailable) capabilities.add("preview");
+                if (browserToolsAvailable) {
+                  capabilities.add("preview");
+                  capabilities.add("computer");
+                }
                 if (deviceToolsAvailable) capabilities.add("device");
                 const existing = McpProviderSession.readMcpProviderSession(threadId);
                 if (existing !== undefined) {
@@ -529,6 +532,7 @@ export const layerWithOptions = (
                     // A flipped browser-access setting must not survive through
                     // credential reuse: rotate so the new scope reflects it.
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
+                    resolved.capabilities.has("computer") === browserToolsAvailable &&
                     resolved.capabilities.has("device") === deviceToolsAvailable
                   ) {
                     return { mcpCredentialId: existing.providerSessionId, issued: false };

@@ -3,6 +3,10 @@ import * as RemoteAssets from "./agentRuntime/RemoteAssets.ts";
 import * as LifecyclePolicy from "./agentRuntime/LifecyclePolicy.ts";
 import * as AttachmentStaging from "./agentRuntime/AttachmentStaging.ts";
 import * as RemoteWorkspacePreview from "./agentRuntime/RemoteWorkspacePreview.ts";
+import * as SandboxComputer from "./computer/SandboxComputer.ts";
+import * as SandboxIde from "./agentRuntime/SandboxIde.ts";
+import * as SandboxIdeHttp from "./agentRuntime/sandboxIdeHttp.ts";
+import * as SandboxIdeIsolation from "./agentRuntime/sandboxIdeIsolation.ts";
 import * as RemoteWorkspaceTerminals from "./agentRuntime/RemoteWorkspaceTerminals.ts";
 import * as RemoteWorkspaceGitStatus from "./agentRuntime/RemoteWorkspaceGitStatus.ts";
 import * as RemoteRestoreSafety from "./agentRuntime/RestoreSafety.ts";
@@ -21,6 +25,7 @@ import * as NodeHttp from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -581,6 +586,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
+  Layer.provideMerge(SandboxIde.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
@@ -618,6 +624,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
     ServerBrowserStream.routeLayer,
+    SandboxIdeHttp.layer.pipe(Layer.provide(NodeSocket.layerWebSocketConstructorWS)),
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
   ),
@@ -627,6 +634,7 @@ const layerMakeRoutes = Layer.mergeAll(
   // orchestrator uses, so MCP capability reporting can never drift from
   // what dispatch can actually serve.
   McpHttpServer.layer.pipe(
+    Layer.provide(SandboxComputer.layer),
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
   ),
@@ -634,6 +642,7 @@ const layerMakeRoutes = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(layerPullRequestService),
+  Layer.provide(SandboxIdeIsolation.layer),
   // The stream route and the WebSocket RPCs share one browser.
   Layer.provide(RemoteWorkspacePreview.browserLayer),
   // Server browser tabs and HTML render previews install and run the same headless browser.
