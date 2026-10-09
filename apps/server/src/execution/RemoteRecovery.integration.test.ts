@@ -412,6 +412,6 @@ it.live(
           ),
         );
       }),
-    ).pipe(Effect.provide(IdAllocator.layer), Effect.provide(NodeServices.layer)),
+    ).pipe(Effect.provide(IdAllocator.layer.pipe(Layer.provideMerge(NodeServices.layer)))),
   { timeout: 30000 },
 );

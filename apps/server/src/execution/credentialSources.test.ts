@@ -180,7 +180,10 @@ it.live(
       const persisted = yield* fs.readFileString(journalPath);
       assert.isFalse(persisted.includes("fake-access"));
       assert.isFalse(persisted.includes(token));
-    }).pipe(Effect.scoped, Effect.provide(Credentials.layer), Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Credentials.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+    ),
 );
 
 it.live(

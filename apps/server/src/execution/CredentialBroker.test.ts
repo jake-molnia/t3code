@@ -104,17 +104,17 @@ it.live(
           environment: [],
           config: driver.defaultConfig(),
         });
-      }).pipe(Effect.provide(runtime), Effect.provide(Settings.layerTest()));
+      }).pipe(Effect.provide(Layer.merge(runtime, Settings.layerTest())));
       const registry = yield* Sessions.__testing.make().pipe(
         Effect.provide(
-          Layer.mock(Environment.ServerEnvironment)({
-            getEnvironmentId: Effect.succeed(C.EnvironmentId.make("environment")),
-          }),
-        ),
-        Effect.provide(
-          Layer.mock(HttpServer.HttpServer)({
-            address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 8080),
-          }),
+          Layer.mergeAll(
+            Layer.mock(Environment.ServerEnvironment)({
+              getEnvironmentId: Effect.succeed(C.EnvironmentId.make("environment")),
+            }),
+            Layer.mock(HttpServer.HttpServer)({
+              address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 8080),
+            }),
+          ),
         ),
       );
       const http = yield* Effect.acquireRelease(

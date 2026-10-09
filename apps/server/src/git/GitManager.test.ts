@@ -782,8 +782,9 @@ function makeManager(input?: {
       yield* input.seed.pipe(Effect.provideContext(stores), Effect.orDie);
     }
     const manager = yield* GitManager.make.pipe(
-      Effect.provide(layerManager),
-      Effect.provide(RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
+      Effect.provide(
+        Layer.merge(layerManager, RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
+      ),
       Effect.provideContext(stores),
     );
     return { manager, ghCalls };

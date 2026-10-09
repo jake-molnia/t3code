@@ -506,9 +506,9 @@ it.effect(
         ),
       );
       const cli = yield* GitHubPullRequestApi.make.pipe(
-        Effect.provide(RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
         Effect.provide(
           GitHubApi.layer.pipe(
+            Layer.merge(RepositoryFiles.layer),
             Layer.provide(Layer.mergeAll(credentials, http)),
             Layer.provide(GitHubQuota.layer),
             Layer.provide(SourceControlRateLimit.layer),
