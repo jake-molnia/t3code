@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Node transport and durable journal boundary, also consumed outside Effect.
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off -- Fetch transport is consumed outside Effect; request deadlines are cleared after response decoding.
 import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
 import {
@@ -26,8 +26,8 @@ export class ExecutionOperationError extends Error {
 }
 
 export class ExecutionTransportError extends Error {
-  readonly code: "unavailable" | "identity_changed" | "authorization";
-  constructor(code: "unavailable" | "identity_changed" | "authorization") {
+  readonly code: "unavailable" | "identity_changed" | "authorization" | "timeout";
+  constructor(code: "unavailable" | "identity_changed" | "authorization" | "timeout") {
     super(`Worker transport ${code}`);
     this.code = code;
   }
@@ -39,11 +39,54 @@ export function createExecutionClient(options: {
   token: string;
   identity: ExecutionIdentity;
   fetch?: typeof fetch;
+  requestTimeoutMs?: number;
 }) {
   const request = options.fetch ?? fetch;
   const endpoint = (path: string) =>
     new URL(path.replace(/^\//, ""), options.endpoint.replace(/\/+$/, "") + "/");
   const headers = { authorization: `Bearer ${options.token}`, "content-type": "application/json" };
+  async function exchange<T>(
+    path: string,
+    init: RequestInit,
+    decode: (response: Response) => Promise<T>,
+    timeoutMs?: number,
+  ): Promise<T> {
+    const deadline = new AbortController();
+    const duration = options.requestTimeoutMs ?? timeoutMs;
+    const timer = duration === undefined ? undefined : setTimeout(() => deadline.abort(), duration);
+    const signal = init.signal ? AbortSignal.any([init.signal, deadline.signal]) : deadline.signal;
+    try {
+      const response = await request(endpoint(path), { ...init, signal });
+      if (response.status === 401 || response.status === 403) {
+        await response.body?.cancel();
+        throw new ExecutionTransportError("authorization");
+      }
+      if (response.status >= 500) {
+        await response.body?.cancel();
+        throw new ExecutionTransportError("unavailable");
+      }
+      return await decode(response);
+    } catch (error) {
+      if (error instanceof ExecutionOperationError || error instanceof ExecutionTransportError)
+        throw error;
+      throw new ExecutionTransportError(deadline.signal.aborted ? "timeout" : "unavailable");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function operationResult(response: Response) {
+    const result = decodeExecutionResultSync(await response.json());
+    if (!result.ok) throw new ExecutionOperationError(result.code);
+    if (!response.ok) throw new ExecutionTransportError("unavailable");
+    return result.value;
+  }
+  async function successfulJSON(response: Response): Promise<unknown> {
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new ExecutionTransportError("unavailable");
+    }
+    return response.json();
+  }
   return {
     identity: options.identity,
     credentialSource: () => ({
@@ -52,69 +95,72 @@ export function createExecutionClient(options: {
       identity: options.identity,
     }),
     async transient(method: string, input: unknown) {
-      const response = await request(endpoint("/v1/transient"), {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ identity: options.identity, method, input }),
-      });
-      if (response.status === 401) throw new Error("Worker authorization rejected");
-      const result = decodeExecutionResultSync(await response.json());
-      if (!result.ok) throw new ExecutionOperationError(result.code);
-      return result.value;
+      return exchange(
+        "/v1/transient",
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ identity: options.identity, method, input }),
+        },
+        operationResult,
+        30_000,
+      );
     },
     async ack(sessionId: string, sequence: number) {
       if (sequence === 0) return;
-      const response = await request(endpoint("/v1/events/ack"), {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ identity: options.identity, sessionId, sequence }),
-      });
-      if (!response.ok) throw new Error("Worker replay acknowledgement failed");
+      await exchange(
+        "/v1/events/ack",
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ identity: options.identity, sessionId, sequence }),
+        },
+        async (response) => {
+          if (!response.ok) throw new ExecutionTransportError("unavailable");
+          await response.body?.cancel();
+        },
+        15_000,
+      );
     },
     async operationStatus(operationId: string) {
-      const response = await request(
-        endpoint(`/v1/operations/${encodeURIComponent(operationId)}`),
+      return exchange(
+        `/v1/operations/${encodeURIComponent(operationId)}`,
         { headers },
+        async (response) => decodeStateInputSync(await successfulJSON(response)),
+        15_000,
       );
-      if (!response.ok) throw new Error("Worker operation status unavailable");
-      return decodeStateInputSync(await response.json());
     },
     async inspectIdentity() {
-      const response = await request(endpoint("/v1/identity"), { headers });
-      if (!response.ok) throw new Error("Worker identity unavailable");
-      return decodeExecutionIdentitySync(await response.json());
+      return exchange(
+        "/v1/identity",
+        { headers },
+        async (response) => decodeExecutionIdentitySync(await successfulJSON(response)),
+        15_000,
+      );
     },
     async call(method: string, input: unknown, operationId: string = NodeCrypto.randomUUID()) {
-      const response = await request(endpoint("/v1/operations"), {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ identity: options.identity, operationId, method, input }),
-      });
-      if (response.status === 401) throw new Error("Worker authorization rejected");
-      const result = decodeExecutionResultSync(await response.json());
-      if (!result.ok) throw new ExecutionOperationError(result.code);
-      return result.value;
+      return exchange(
+        "/v1/operations",
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ identity: options.identity, operationId, method, input }),
+        },
+        operationResult,
+      );
     },
     async events(after: number, signal?: AbortSignal, sessionId?: string, waitMs = 25000) {
-      const response = await request(
-        endpoint(
-          `/v1/events?after=${after}${sessionId === undefined ? "" : `&sessionId=${encodeURIComponent(sessionId)}&waitMs=${waitMs}`}`,
-        ),
-        {
-          headers,
-          ...(signal ? { signal } : {}),
+      return exchange(
+        `/v1/events?after=${after}${sessionId === undefined ? "" : `&sessionId=${encodeURIComponent(sessionId)}&waitMs=${waitMs}`}`,
+        { headers, ...(signal ? { signal } : {}) },
+        async (response) => {
+          const batch = Schema.decodeUnknownSync(Batch)(await successfulJSON(response));
+          if (!sameIdentity(batch.identity, options.identity))
+            throw new ExecutionTransportError("identity_changed");
+          return batch.events;
         },
-      ).catch(() => {
-        throw new ExecutionTransportError("unavailable");
-      });
-      if (!response.ok)
-        throw new ExecutionTransportError(
-          response.status === 401 ? "authorization" : "unavailable",
-        );
-      const batch = Schema.decodeUnknownSync(Batch)(await response.json());
-      if (!sameIdentity(batch.identity, options.identity))
-        throw new ExecutionTransportError("identity_changed");
-      return batch.events;
+        35_000,
+      );
     },
   };
 }

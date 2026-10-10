@@ -237,7 +237,7 @@ test("committed acknowledgements compact replay without losing another session's
   const restored = await openWorkerJournal(path);
   cleanup.push(restored.close);
   expect(restored.events.map((event) => event.sessionId)).toEqual(["session-b"]);
-  await expect(client.ack("session-b", 999)).rejects.toThrow("acknowledgement");
+  await expect(client.ack("session-b", 999)).rejects.toMatchObject({ code: "unavailable" });
   expect((await client.events(0)).map((event) => event.event)).toEqual([{ text: "b" }]);
 });
 
