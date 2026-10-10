@@ -38,6 +38,7 @@ import {
   checkOpenCodeProviderStatus,
   loadOpenCode2Workspace,
   makeOpenCode2ModelLoader,
+  openCode2ModelsAfterConfiguration,
   makePendingOpenCodeProvider,
   openCode2CommandsToServerProviderSlashCommands,
   openCode2SkillsToServerProviderSkills,
@@ -299,8 +300,13 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       });
       const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
         openCode2Server.withConnection((connection) =>
-          connection.client.model.list({ location: { directory: serverConfig.cwd } }).pipe(
-            Effect.map((models) => models.data),
+          Effect.all({
+            models: connection.client.model.list({ location: { directory: serverConfig.cwd } }),
+            entries: connection.client.config.get({ location: { directory: serverConfig.cwd } }),
+          }).pipe(
+            Effect.map(({ models, entries }) =>
+              openCode2ModelsAfterConfiguration(models.data, entries),
+            ),
             Effect.mapError(
               (cause) =>
                 new OpenCodeRuntime.OpenCodeRuntimeError({

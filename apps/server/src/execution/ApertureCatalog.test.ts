@@ -1,5 +1,12 @@
 import { expect, test } from "@effect/vitest";
-import { nativeApertureConfigs, managedApertureCatalog } from "./ApertureCatalog.ts";
+import {
+  nativeApertureConfigs,
+  managedApertureCatalog,
+  filterApertureSnapshot,
+  setApertureCatalog,
+} from "./ApertureCatalog.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import { buildServerProvider } from "@t3tools/provider-core/server/snapshotProbe";
 
 test("native configs preserve endpoint compatibility and reference credentials instead of copying them", () => {
   const result = nativeApertureConfigs(
@@ -44,4 +51,39 @@ test("subscription routes requiring personal credentials are not advertised as m
       ],
     }).data.map((model) => model.id),
   ).toEqual(["managed"]);
+});
+
+test("managed OpenCode snapshots advertise only compatible Aperture routes", () => {
+  const snapshot = {
+    ...buildServerProvider({
+      presentation: { displayName: "OpenCode" },
+      enabled: true,
+      checkedAt: "2026-10-10T00:00:00Z",
+      probe: {
+        installed: true,
+        version: "2.0.26",
+        status: "ready",
+        auth: { status: "authenticated" },
+      },
+      models: [
+        "opencode/big-pickle",
+        "aperture/responses-only",
+        "aperture-chat/chat-only",
+        "aperture-chat/responses-only",
+      ].map((slug) => ({ slug, name: slug, isCustom: false, capabilities: null })),
+    }),
+    instanceId: ProviderInstanceId.make("opencode"),
+    driver: ProviderDriverKind.make("opencode"),
+  };
+  expect(filterApertureSnapshot(snapshot)).toEqual(snapshot);
+  setApertureCatalog({
+    data: [
+      { id: "responses-only", supported_endpoints: ["/v1/responses"] },
+      { id: "chat-only", supported_endpoints: ["/v1/chat/completions"] },
+    ],
+  });
+  expect(filterApertureSnapshot(snapshot).models.map((model) => model.slug)).toEqual([
+    "aperture/responses-only",
+    "aperture-chat/chat-only",
+  ]);
 });

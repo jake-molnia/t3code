@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { beforeEach } from "vite-plus/test";
+import { Config } from "@opencode/schema/config";
 
 import { OpenCodeSettings } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
@@ -20,6 +21,7 @@ import {
   checkOpenCodeProviderStatus,
   loadOpenCode2Workspace,
   makeOpenCode2ModelLoader,
+  openCode2ModelsAfterConfiguration,
   type OpenCode2Model,
   type OpenCode2Workspace,
   openCode2CommandsToServerProviderSlashCommands,
@@ -34,6 +36,7 @@ import {
   replayOpenCodeServer,
 } from "./testFixtures/opencodeProbeResponses.ts";
 const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
+const decodeOpenCodeConfigEntries = Schema.decodeUnknownSync(Schema.Array(Config.Entry));
 
 const DEFAULT_VERSION_STDOUT = "opencode 1.14.19\n";
 
@@ -781,6 +784,40 @@ const bigPickle: OpenCode2Model = {
   name: "Big Pickle",
   variants: [],
 };
+
+it.effect("waits past builtin models until configured providers are discovered", () =>
+  Effect.gen(function* () {
+    const configured = decodeOpenCodeConfigEntries([
+      { type: "document", info: { providers: { aperture: { models: { "gpt-6-luna": {} } } } } },
+    ]);
+    const aperture: OpenCode2Model = {
+      providerID: "aperture",
+      id: "gpt-6-luna",
+      name: "GPT-6 Luna",
+      variants: [],
+    };
+    const replies = [[bigPickle], [bigPickle], [bigPickle, aperture]];
+    const load = yield* makeOpenCode2ModelLoader(
+      Effect.sync(() =>
+        openCode2ModelsAfterConfiguration(replies.shift() ?? [bigPickle, aperture], configured),
+      ),
+    );
+    const fiber = yield* load.pipe(Effect.forkChild);
+    yield* TestClock.adjust("1 second");
+    NodeAssert.deepEqual(yield* Fiber.join(fiber), [bigPickle, aperture]);
+  }).pipe(Effect.provide(TestClock.layer())),
+);
+
+it("does not wait for models disabled by a higher-priority config entry", () => {
+  const entries = decodeOpenCodeConfigEntries([
+    { type: "document", info: { providers: { aperture: { models: { missing: {} } } } } },
+    {
+      type: "document",
+      info: { providers: { aperture: { models: { missing: { disabled: true } } } } },
+    },
+  ]);
+  NodeAssert.deepEqual(openCode2ModelsAfterConfiguration([bigPickle], entries), [bigPickle]);
+});
 
 it.effect("waits for a fresh OpenCode 2 server to list its models", () =>
   Effect.gen(function* () {

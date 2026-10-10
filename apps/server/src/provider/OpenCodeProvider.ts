@@ -24,6 +24,7 @@ import * as OpenCodeRuntime from "./opencodeRuntime.ts";
 import type { ProbedOpenCode } from "./opencodeVersionProbe.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
+import type { Config } from "@opencode/schema/config";
 
 const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
@@ -384,6 +385,29 @@ export interface OpenCode2Model {
   readonly id: string;
   readonly name: string;
   readonly variants: ReadonlyArray<{ readonly id: string }>;
+}
+
+export function openCode2ModelsAfterConfiguration(
+  models: ReadonlyArray<OpenCode2Model>,
+  entries: ReadonlyArray<Config.Entry>,
+): ReadonlyArray<OpenCode2Model> {
+  const configured = new Map<string, boolean>();
+  for (const entry of entries) {
+    if (entry.type !== "document") continue;
+    for (const [providerId, provider] of Object.entries(entry.info.providers ?? {})) {
+      for (const [modelId, model] of Object.entries(provider.models ?? {})) {
+        const key = `${providerId}/${modelId}`;
+        configured.set(
+          key,
+          model.disabled === undefined ? (configured.get(key) ?? true) : !model.disabled,
+        );
+      }
+    }
+  }
+  const available = new Set(models.map((model) => `${model.providerID}/${model.id}`));
+  return Array.from(configured).every(([id, enabled]) => !enabled || available.has(id))
+    ? models
+    : [];
 }
 
 /**

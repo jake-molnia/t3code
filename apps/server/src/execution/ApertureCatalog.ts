@@ -26,6 +26,21 @@ export function setApertureCatalog(catalog: Catalog) {
 }
 export function filterApertureSnapshot(snapshot: ServerProvider): ServerProvider {
   if (!active) return snapshot;
+  if (snapshot.driver === "opencode") {
+    const groups = [
+      ["aperture", "/v1/responses"],
+      ["aperture-chat", "/v1/chat/completions"],
+      ["aperture-anthropic", "/v1/messages"],
+    ] as const;
+    const allowed = new Set(
+      active.data.flatMap((model) =>
+        groups
+          .filter(([, endpoint]) => model.supported_endpoints.includes(endpoint))
+          .map(([provider]) => `${provider}/${model.id}`),
+      ),
+    );
+    return { ...snapshot, models: snapshot.models.filter((model) => allowed.has(model.slug)) };
+  }
   const endpoint =
     snapshot.driver === "grok"
       ? "/v1/chat/completions"
