@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Schedule from "effect/Schedule";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
@@ -207,7 +208,14 @@ export const layer = Layer.effect(
             const current = yield* request(
               pool,
               `/v1/workspaces/${encodeURIComponent(workspaceId)}?profile=${encodeURIComponent(profile)}`,
-            ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Access)));
+            ).pipe(
+              Effect.retry({
+                while: (error) =>
+                  error._tag === "AgentRuntimeClientError" && error.httpStatus === 503,
+                schedule: Schedule.spaced("250 millis"),
+              }),
+              Effect.flatMap(Schema.decodeUnknownEffect(Access)),
+            );
             if (
               current.state.request.revision > admittedRevision &&
               current.state.request.action !== "ensure_running"
