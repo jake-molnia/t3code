@@ -46,6 +46,16 @@ export interface SelfInvocation {
  * assemble the pair themselves.
  */
 export const resolveSelfInvocation = Effect.fn("nodeRuntime.resolveSelfInvocation")(function* () {
+  const environment = yield* HostProcessEnvironment;
+  if (environment.T3_ACP_MCP_NODE) {
+    const path = yield* Path.Path;
+    return {
+      command: environment.T3_ACP_MCP_NODE,
+      entrypoint: environment.T3_ACP_MCP_ENTRYPOINT
+        ? path.resolve(environment.T3_ACP_MCP_ENTRYPOINT)
+        : undefined,
+    } satisfies SelfInvocation;
+  }
   const command = yield* HostProcessExecutablePath;
   if (yield* HostProcessIsExecutable)
     return { command, entrypoint: undefined } satisfies SelfInvocation;

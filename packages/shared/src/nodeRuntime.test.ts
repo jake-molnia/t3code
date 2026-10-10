@@ -8,6 +8,7 @@ import * as Result from "effect/Result";
 import {
   HostProcessArguments,
   HostProcessExecutablePath,
+  HostProcessEnvironment,
   HostProcessIsExecutable,
   HostProcessPlatform,
 } from "./hostProcess.ts";
@@ -20,6 +21,7 @@ describe("Self invocation", () => {
       const path = yield* Path.Path;
       const invocation = yield* resolveSelfInvocation().pipe(
         Effect.provideService(HostProcessExecutablePath, "/runtime/node"),
+        Effect.provideService(HostProcessEnvironment, {}),
         Effect.provideService(HostProcessIsExecutable, false),
         Effect.provideService(HostProcessArguments, ["/runtime/node", "dist/bin.mjs", "serve"]),
       );
@@ -37,10 +39,40 @@ describe("Self invocation", () => {
       // Node repeats the binary at argv[1] for a single-executable; it is not a script.
       const invocation = yield* resolveSelfInvocation().pipe(
         Effect.provideService(HostProcessExecutablePath, "/packaged/t3"),
+        Effect.provideService(HostProcessEnvironment, {}),
         Effect.provideService(HostProcessIsExecutable, true),
         Effect.provideService(HostProcessArguments, ["/packaged/t3", "/packaged/t3", "serve"]),
       );
       expect(invocation).toEqual({ command: "/packaged/t3", entrypoint: undefined });
+      expect(selfInvocationArgs(invocation, ["acp-mcp-bridge"])).toEqual(["acp-mcp-bridge"]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("uses the configured CLI bridge when running an execution worker", () =>
+    Effect.gen(function* () {
+      const invocation = yield* resolveSelfInvocation().pipe(
+        Effect.provideService(HostProcessExecutablePath, "/usr/local/bin/node"),
+        Effect.provideService(HostProcessIsExecutable, false),
+        Effect.provideService(HostProcessArguments, ["node", "/opt/t3/dist/execution-worker.mjs"]),
+        Effect.provideService(HostProcessEnvironment, {
+          T3_ACP_MCP_NODE: "/usr/local/bin/node",
+          T3_ACP_MCP_ENTRYPOINT: "/opt/t3/dist/bin.mjs",
+        }),
+      );
+      expect(invocation.command).toBe("/usr/local/bin/node");
+      expect(selfInvocationArgs(invocation, ["acp-mcp-bridge"])).toEqual([
+        "/opt/t3/dist/bin.mjs",
+        "acp-mcp-bridge",
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("supports an explicitly configured standalone bridge", () =>
+    Effect.gen(function* () {
+      const invocation = yield* resolveSelfInvocation().pipe(
+        Effect.provideService(HostProcessEnvironment, { T3_ACP_MCP_NODE: "/opt/t3/bin/t3" }),
+      );
+      expect(invocation).toEqual({ command: "/opt/t3/bin/t3", entrypoint: undefined });
       expect(selfInvocationArgs(invocation, ["acp-mcp-bridge"])).toEqual(["acp-mcp-bridge"]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
