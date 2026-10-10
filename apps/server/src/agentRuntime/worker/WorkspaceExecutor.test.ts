@@ -1,3 +1,8 @@
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
+import { createExecutionWorker } from "../../execution/ExecutionWorker.ts";
+import { createExecutionClient } from "../../execution/ExecutionClient.ts";
+import { openWorkerJournal } from "../../execution/WorkerJournal.ts";
 import { seedWorkspace } from "../SeedWorkspace.ts";
 import { makeForkExecutor } from "./ForkExecutor.ts";
 import { makeAssetExecutor } from "./AssetExecutor.ts";
@@ -125,7 +130,7 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
         });
         const config = yield* ServerConfig.ServerConfig;
         const run = yield* captureRunPromise;
-        const makeClient = (workspaceRoot: string) =>
+        const makeClient = (workspaceRoot: string, failMethod?: "asset.stage" | "git.importFork") =>
           Effect.gen(function* () {
             const workspace = yield* makeWorkspaceExecutor({
               root: workspaceRoot,
@@ -143,7 +148,13 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
             const assets = yield* makeAssetExecutor.pipe(
               Effect.provideService(ServerConfig.ServerConfig, workerConfig),
             );
-            const receipts = new Map<string, unknown>();
+            const journal = yield* Effect.acquireRelease(
+              Effect.tryPromise(() =>
+                openWorkerJournal(path.join(workerConfig.stateDir, "operations.jsonl")),
+              ),
+              (journal) => Effect.promise(journal.close),
+            );
+            let rejectNext = failMethod !== undefined;
             const execute = (method: string, input: unknown) =>
               Effect.gen(function* () {
                 if (method.startsWith("asset.")) return yield* assets.execute(method, input);
@@ -151,17 +162,37 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
                   return yield* fork.execute(method, input);
                 return yield* workspace.execute(method, input);
               });
-            return {
-              call: async (method: string, input: unknown, id?: string) => {
-                if (id && receipts.has(id)) return receipts.get(id);
-                const result = await run(execute(method, input));
-                if (id) receipts.set(id, result);
-                return result;
-              },
-              transient: (method: string, input: unknown) => run(execute(method, input)),
+            const identity = {
+              workspaceId: workspaceRoot,
+              generation: 1,
+              allocationId: "test",
+              podUid: "test",
+              incarnation: "test",
+              protocolVersion: 1 as const,
             };
+            const token = "seed-test-token-000000000000000000000000";
+            const handler = createExecutionWorker({
+              identity,
+              token,
+              journal,
+              execute: (method, input) => {
+                if (method === failMethod && rejectNext) {
+                  rejectNext = false;
+                  return Promise.reject(new Error("Interrupted asset transfer"));
+                }
+                return run(execute(method, input));
+              },
+            });
+            return createExecutionClient({
+              endpoint: "http://worker.invalid",
+              token,
+              identity,
+              fetch: (url, init) => handler.handle(new Request(url, init)),
+            });
           });
-        const source = yield* makeClient(root);
+        let sourceScope = yield* Scope.make();
+        yield* Effect.addFinalizer(() => Scope.close(sourceScope, Exit.void));
+        let source = yield* makeClient(root).pipe(Effect.provideService(Scope.Scope, sourceScope));
         const firstRoot = yield* fs.makeTempDirectoryScoped({ prefix: "seed-first-" });
         const secondRoot = yield* fs.makeTempDirectoryScoped({ prefix: "seed-second-" });
         const first = yield* makeClient(firstRoot);
@@ -201,6 +232,33 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
             ),
           ).toMatchObject({ contents: "untracked design" });
         }
+        const interruptedRoot = yield* fs.makeTempDirectoryScoped({ prefix: "seed-interrupted-" });
+        const interrupted = yield* makeClient(
+          interruptedRoot,
+          remote ? "git.importFork" : "asset.stage",
+        );
+        const interruptedInput = {
+          source,
+          destination: interrupted,
+          sourceCwd: "repo",
+          destinationCwd: "repo",
+          key: "interrupted",
+        };
+        expect((yield* seedWorkspace(interruptedInput).pipe(Effect.exit))._tag).toBe("Failure");
+        // Blob storage and temporary exports can disappear independently of durable receipts.
+        yield* fs.remove(path.join(root, ".state/worker-blobs"), { recursive: true, force: true });
+        yield* fs.writeFileString(
+          path.join(root, "repo/README.md"),
+          "source changed after interruption",
+        );
+        yield* Scope.close(sourceScope, Exit.void);
+        sourceScope = yield* Scope.make();
+        source = yield* makeClient(root).pipe(Effect.provideService(Scope.Scope, sourceScope));
+        yield* seedWorkspace({ ...interruptedInput, source });
+        expect(yield* fs.readFileString(path.join(interruptedRoot, "repo/README.md"))).toBe(
+          "named project",
+        );
+        yield* fs.writeFileString(path.join(root, "repo/README.md"), "named project");
         yield* Effect.tryPromise(() =>
           first.call("files.write", {
             cwd: "repo",

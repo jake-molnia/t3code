@@ -17,28 +17,29 @@ export const seedWorkspace = (input: {
   key: string;
 }) =>
   Effect.gen(function* () {
+    // Checkpoint refs and atomic import receipts provide retry safety. Transport
+    // receipts cannot be reused for temporary exports or failed transfers.
     const checkpointRef = `refs/t3/seeds/${input.key}`;
-    const operation = `seed:${input.key}`;
+    const prepared = yield* Effect.tryPromise(() =>
+      input.destination.call("git.isRepository", { cwd: input.destinationCwd }),
+    ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)));
+    if (prepared) return;
     yield* Effect.tryPromise(() =>
-      input.source.call(
-        "git.captureCheckpoint",
-        { cwd: input.sourceCwd, checkpointRef },
-        `${operation}:capture`,
-      ),
+      input.source.call("git.captureCheckpoint", { cwd: input.sourceCwd, checkpointRef }),
     );
     const bundle = yield* Effect.tryPromise(() =>
-      input.source.call(
-        "git.bundleFork",
-        { cwd: input.sourceCwd, checkpointRef },
-        `${operation}:bundle`,
-      ),
+      input.source.call("git.bundleFork", { cwd: input.sourceCwd, checkpointRef }),
     ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Fork.ForkBundle)));
     const blob = yield* Effect.tryPromise(() =>
-      input.source.call("asset.snapshot", { path: bundle.bundlePath }, `${operation}:snapshot`),
-    ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Assets.Blob)));
-    yield* Effect.tryPromise(() =>
-      input.source.call("git.cleanupFork", { bundlePath: bundle.bundlePath }),
-    ).pipe(Effect.ignore);
+      input.source.call("asset.snapshot", { path: bundle.bundlePath }),
+    ).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(Assets.Blob)),
+      Effect.ensuring(
+        Effect.tryPromise(() =>
+          input.source.call("git.cleanupFork", { bundlePath: bundle.bundlePath }),
+        ).pipe(Effect.ignore),
+      ),
+    );
     for (let offset = 0; ; offset += Assets.CHUNK_BYTES) {
       const part = yield* Effect.tryPromise(() =>
         input.source.transient("asset.read", {
@@ -64,14 +65,10 @@ export const seedWorkspace = (input: {
     }
     const { bundlePath: _path, ...snapshot } = bundle;
     yield* Effect.tryPromise(() =>
-      input.destination.call(
-        "git.importFork",
-        {
-          ...snapshot,
-          cwd: input.destinationCwd,
-          blobId: blob.blobId,
-        },
-        `${operation}:import`,
-      ),
+      input.destination.call("git.importFork", {
+        ...snapshot,
+        cwd: input.destinationCwd,
+        blobId: blob.blobId,
+      }),
     );
   });
