@@ -1,3 +1,4 @@
+import { withCodexStartup } from "../../provider/CodexStartup.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
@@ -1281,7 +1282,7 @@ export interface CodexAppServerClientFactoryShape {
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
   }) => Effect.Effect<
-    CodexClient.CodexAppServerClient["Service"],
+    CodexClient.CodexAppServerClient["Service"] & { readonly initializeResponseReceived?: true },
     ProviderAdapter.ProviderAdapterOpenSessionError,
     Scope.Scope
   >;
@@ -1555,10 +1556,31 @@ export const layerAppServerClientFactory: Layer.Layer<
                   logger: protocolLogger,
                 };
           const context = yield* Layer.build(CodexClient.layerChildProcess(handle, clientOptions));
-          return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+          const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
             Effect.provide(context),
           );
-        }),
+          yield* Effect.gen(function* () {
+            yield* client.request("initialize", {
+              clientInfo: buildCodexInitializeParams().clientInfo,
+              capabilities: CODEX_CLIENT_CAPABILITIES,
+            });
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CODEX_PROVIDER,
+                  providerSessionId: input.providerSessionId,
+                  cause,
+                }),
+            ),
+          );
+          return {
+            ...client,
+            initializeResponseReceived: true,
+          } satisfies CodexClient.CodexAppServerClient["Service"] & {
+            readonly initializeResponseReceived: true;
+          };
+        }).pipe((startup) => withCodexStartup(input.settings.homePath, input.environment, startup)),
     });
   }),
 );
@@ -1782,23 +1804,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return;
             }
 
-            yield* client
-              .request("initialize", {
-                // Codex uses the client name as the request originator, so sessions
-                // identify themselves exactly like the provider probe.
-                clientInfo: buildCodexInitializeParams().clientInfo,
-                capabilities: CODEX_CLIENT_CAPABILITIES,
-              })
-              .pipe(
-                Effect.catchTags({
-                  // A caller interrupted after its `initialize` reached Codex
-                  // leaves the app-server initialized but the flag unset.
-                  CodexAppServerRequestError: (error) =>
-                    error.code === -32600 && error.errorMessage === "Already initialized"
-                      ? Effect.void
-                      : Effect.fail(error),
-                }),
-              );
+            if (!client.initializeResponseReceived)
+              yield* client
+                .request("initialize", {
+                  // Codex uses the client name as the request originator, so sessions
+                  // identify themselves exactly like the provider probe.
+                  clientInfo: buildCodexInitializeParams().clientInfo,
+                  capabilities: CODEX_CLIENT_CAPABILITIES,
+                })
+                .pipe(
+                  Effect.catchTags({
+                    // A caller interrupted after its `initialize` reached Codex
+                    // leaves the app-server initialized but the flag unset.
+                    CodexAppServerRequestError: (error) =>
+                      error.code === -32600 && error.errorMessage === "Already initialized"
+                        ? Effect.void
+                        : Effect.fail(error),
+                  }),
+                );
             yield* client.notify("initialized", undefined);
             yield* Ref.set(initialized, true);
           }),

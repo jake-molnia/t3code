@@ -1,3 +1,5 @@
+import { codexHomeInitialized } from "../provider/CodexStartup.ts";
+import { withCodexAppServerClient } from "../provider/CodexProvider.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -188,6 +190,20 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
         DEFAULT_TEXT_GENERATION_REASONING_EFFORT;
       const serviceTier = resolved ? undefined : getCodexServiceTierOptionValue(modelSelection);
+      if (!(yield* codexHomeInitialized(effectiveConfig.homePath, effectiveEnvironment))) {
+        yield* withCodexAppServerClient({
+          binaryPath: effectiveConfig.binaryPath || "codex",
+          homePath: effectiveConfig.homePath,
+          launchArgs,
+          cwd,
+          environment: effectiveEnvironment,
+        }).pipe(
+          Effect.scoped,
+          Effect.mapError((cause) =>
+            normalizeCliError("codex", operation, cause, "Failed to initialize Codex state"),
+          ),
+        );
+      }
       const spawnCommand = yield* resolveSpawnCommand(
         effectiveConfig.binaryPath || "codex",
         [

@@ -33,6 +33,7 @@ interface FakeCodexInput {
   exitCode?: number;
   stderr?: string;
   requireImage?: boolean;
+  requireWarmup?: boolean;
   requireServiceTier?: string;
   requireReasoningEffort?: string;
   forbidReasoningEffort?: boolean;
@@ -49,6 +50,7 @@ interface FakeCodexInput {
 function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
   const check = JSON.stringify({
     requireImage: input.requireImage ?? false,
+    requireWarmup: input.requireWarmup ?? false,
     requireServiceTier: input.requireServiceTier ?? null,
     requireReasoningEffort: input.requireReasoningEffort ?? null,
     forbidReasoningEffort: input.forbidReasoningEffort ?? false,
@@ -69,6 +71,17 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         'import * as NodeFS from "node:fs";',
         `const check = ${check};`,
         "const args = process.argv.slice(2);",
+        'if (args[0] === "app-server") {',
+        '  const { createInterface } = await import("node:readline");',
+        "  for await (const line of createInterface({ input: process.stdin })) {",
+        "    const message = JSON.parse(line);",
+        '    if (message.method === "initialize") NodeFS.writeFileSync(new URL("./.initialized", import.meta.url), "ready");',
+        '    if (message.method === "initialize") process.stdout.write(JSON.stringify({ id: message.id, result: { userAgent: "test/0.161.0", codexHome: process.env.CODEX_HOME ?? "/tmp/test", platformFamily: "unix", platformOs: "linux" } }) + "\\n");',
+        "  }",
+        "  process.exit(0);",
+        "}",
+
+        'if (check.requireWarmup && !NodeFS.existsSync(new URL("./.initialized", import.meta.url))) { process.stderr.write("home was not initialized"); process.exit(10); }',
         'const originalArgs = ` ${args.join(" ")} `;',
         "let outputPath = null;",
         "let seenImage = false;",
@@ -170,6 +183,32 @@ function withFakeCodexEnv<A, E, R>(
 }
 
 it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
+  it.effect("initializes a fresh home before native exec begins", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "codex-exec-startup-" });
+      yield* withFakeCodexEnv(
+        {
+          output: JSON.stringify({ title: "Initialized title" }),
+          requireWarmup: true,
+          environment: { CODEX_HOME: home },
+        },
+        (textGeneration) =>
+          textGeneration
+            .generateThreadTitle({
+              cwd: process.cwd(),
+              message: "Name the change",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            })
+            .pipe(
+              Effect.tap((result) =>
+                Effect.sync(() => expect(result.title).toBe("Initialized title")),
+              ),
+            ),
+      );
+    }),
+  );
+
   it.effect.each(["gpt-5.6-luna", "openai.gpt-5.6-luna"])(
     "dispatches the qualified live model for %s",
     (selectedModel) =>
