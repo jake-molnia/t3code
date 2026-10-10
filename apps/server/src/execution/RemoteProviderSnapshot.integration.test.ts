@@ -11,6 +11,8 @@ import type { ExecutionIdentity } from "../../../../packages/contracts/src/execu
 import * as Runtime from "../agentRuntime/RuntimeClient.ts";
 import * as Settings from "../serverSettings.ts";
 import { buildUnavailableProviderSnapshot } from "../provider/unavailableProviderSnapshot.ts";
+import { makeProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
+import { ConfigureProvider } from "./WorkerProviders.ts";
 import { makeRemoteDrivers } from "./RemoteProviderDrivers.ts";
 import { createExecutionClient } from "./ExecutionClient.ts";
 import { createExecutionWorker } from "./ExecutionWorker.ts";
@@ -138,3 +140,94 @@ it.live("disabled instances do not allocate or probe utility or project workspac
     );
   }).pipe(Effect.scoped),
 );
+
+const decodeFrame = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ method: Schema.String, input: Schema.Unknown })),
+);
+const decodeConfigure = Schema.decodeUnknownSync(Schema.toCodecJson(ConfigureProvider));
+
+for (const kind of ["grok", "opencode", "pi"]) {
+  it.live(
+    `preserves resolved ${kind} enablement across central and worker registry hydration`,
+    () =>
+      Effect.gen(function* () {
+        const instanceId = C.ProviderInstanceId.make(kind);
+        const snapshot = yield* buildUnavailableProviderSnapshot({
+          instanceId,
+          driverKind: C.ProviderDriverKind.make(kind),
+          reason: "probe fixture",
+        });
+        const encodedSnapshot = yield* Schema.encodeEffect(Schema.toCodecJson(C.ServerProvider))(
+          snapshot,
+        );
+        const sent: C.ProviderInstanceConfig[] = [];
+        const client = createExecutionClient({
+          identity: {
+            workspaceId: "utility",
+            allocationId: "one",
+            generation: 1,
+            podUid: "pod",
+            incarnation: "process",
+            protocolVersion: 1,
+          },
+          token: "provider-test-token",
+          endpoint: "http://worker.test",
+          fetch: async (_url, init) => {
+            const frame = decodeFrame(init?.body);
+            if (frame.method === "configureProvider") {
+              sent.push(decodeConfigure(frame.input).config);
+              return Response.json({ ok: true, value: null });
+            }
+            return Response.json({ ok: true, value: encodedSnapshot });
+          },
+        });
+        yield* Effect.gen(function* () {
+          const drivers = yield* makeRemoteDrivers;
+          const driver = drivers.find((d) => d.driverKind === kind);
+          if (!driver) throw new Error("missing driver");
+          const central = yield* makeProviderInstanceRegistry({
+            drivers: [driver],
+            configMap: {
+              [instanceId]: { driver: C.ProviderDriverKind.make(kind), enabled: true, config: {} },
+            },
+          });
+          const instance = yield* central.registry.getInstance(instanceId);
+          if (!instance) throw new Error("central instance missing");
+          expect(instance.enabled).toBe(true);
+          yield* instance.snapshot.refresh;
+          expect(sent).toHaveLength(1);
+          const transported = sent[0];
+          if (!transported) throw new Error("configuration not transported");
+          const worker = yield* makeProviderInstanceRegistry({
+            drivers: [driver],
+            configMap: { [instanceId]: transported },
+          });
+          expect((yield* worker.registry.getInstance(instanceId))?.enabled).toBe(true);
+          for (const disabled of [
+            { enabled: false, config: { enabled: true } },
+            { enabled: true, config: { enabled: false } },
+          ]) {
+            const registry = yield* makeProviderInstanceRegistry({
+              drivers: [driver],
+              configMap: { [instanceId]: { driver: C.ProviderDriverKind.make(kind), ...disabled } },
+            });
+            const disabledInstance = yield* registry.registry.getInstance(instanceId);
+            if (!disabledInstance) throw new Error("disabled instance missing");
+            expect(disabledInstance.enabled).toBe(false);
+            expect((yield* disabledInstance.snapshot.refresh).enabled).toBe(false);
+          }
+          expect(sent).toHaveLength(1);
+        }).pipe(
+          Effect.provide(
+            Layer.merge(
+              Settings.layerTest(),
+              Layer.mock(Runtime.RuntimeClient)({
+                enabled: true,
+                forUtility: () => Effect.succeed(client),
+              }),
+            ),
+          ),
+        );
+      }).pipe(Effect.scoped),
+  );
+}

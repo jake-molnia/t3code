@@ -73,9 +73,20 @@ export const makeRemoteDrivers = Effect.gen(function* () {
         ): Effect.Effect<ExecutionClient, ProviderDriverError> =>
           Effect.gen(function* () {
             const current = yield* settings.getSettings;
+            const encodedConfig = yield* Schema.encodeEffect(driver.configSchema)(input.config);
+            // The registry already resolved explicit disables. Do not turn a
+            // decoded driver's default into a second raw disable at the worker.
+            const workerConfig =
+              encodedConfig !== null &&
+              typeof encodedConfig === "object" &&
+              !Array.isArray(encodedConfig)
+                ? Object.fromEntries(
+                    Object.entries(encodedConfig).filter(([key]) => key !== "enabled"),
+                  )
+                : encodedConfig;
             const config: C.ProviderInstanceConfig = {
               driver: driver.driverKind,
-              config: yield* Schema.encodeEffect(driver.configSchema)(input.config),
+              config: workerConfig,
               enabled: input.enabled,
               environment: input.environment,
               ...(input.displayName ? { displayName: input.displayName } : {}),
