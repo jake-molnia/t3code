@@ -47,6 +47,10 @@ export function isRemoteProviderSession(sessionId: C.ProviderSessionId) {
   return sessionClients.has(sessionId);
 }
 
+export function forgetRemoteProviderSession(sessionId: C.ProviderSessionId) {
+  sessionClients.delete(sessionId);
+}
+
 export function abortRemoteProviderSessionOpen(sessionId: C.ProviderSessionId) {
   return Effect.suspend(() =>
     sessionClients.get(sessionId)?.pendingCreation

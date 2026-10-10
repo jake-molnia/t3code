@@ -1,3 +1,4 @@
+import { createExecutionClient } from "../execution/ExecutionClient.ts";
 import * as AgentRuntime from "../agentRuntime/RuntimeClient.ts";
 import * as NetAddress from "effect/net/NetAddress";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -4418,6 +4419,82 @@ it.effect(
     }),
 );
 
+const remoteClient = createExecutionClient({
+  identity: {
+    workspaceId: "workspace",
+    allocationId: "allocation",
+    podUid: "pod",
+    generation: 1,
+    incarnation: "first",
+    protocolVersion: 1,
+  },
+  endpoint: "http://worker.test",
+  token: "test-token",
+});
+
+it.effect.each(["stopped", "replaced"] as const)(
+  "reopens a cached provider session after its remote worker is %s",
+  (transition) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      let changed = false;
+      const replacement = createExecutionClient({
+        identity: { ...remoteClient.identity, incarnation: "second", podUid: "replacement" },
+        endpoint: "http://worker.test",
+        token: "test-token",
+      });
+      yield* Effect.gen(function* () {
+        const sink = yield* EventSink.EventSinkV2;
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const projectId = yield* allocator.allocate.project({ fixtureName: "remote-replacement" });
+        const threadId = yield* allocator.allocate.thread({
+          fixtureName: "remote-replacement",
+          projectId,
+        });
+        const providerSessionId = yield* allocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* sink.write({
+          events: [
+            yield* makeThreadCreatedEvent({
+              idAllocator: allocator,
+              threadId,
+              now: yield* DateTime.now,
+            }),
+          ],
+        });
+        const input = { threadId, providerSessionId, modelSelection, runtimePolicy };
+        const first = yield* manager.open(input);
+        assert.equal(yield* manager.open(input), first);
+        assert.equal((yield* Ref.get(state)).openCount, 1);
+        changed = true;
+        const reopened = yield* manager.open(input);
+        assert.notEqual(reopened, first);
+        assert.equal((yield* Ref.get(state)).openCount, 2);
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
+      }).pipe(
+        Effect.provide(
+          layerTest({ state, idleTimeoutMs: 1000 }).pipe(
+            Layer.provide(
+              Layer.mock(AgentRuntime.RuntimeClient)({
+                enabled: true,
+                observeThread: () =>
+                  Effect.succeed(
+                    changed && transition === "stopped"
+                      ? { kind: "stopped" as const }
+                      : { kind: "running" as const, client: changed ? replacement : remoteClient },
+                  ),
+                sessionResidency: () => Effect.succeed(remoteClient.identity),
+              }),
+            ),
+          ),
+        ),
+      );
+    }),
+);
+
 it.effect.each([false, true])(
   "ProviderSessionManagerV2 rejects cross-thread reuse for exclusive or remote sessions (remote: %s)",
   (remote) =>
@@ -4483,7 +4560,14 @@ it.effect.each([false, true])(
             capabilities: remote ? CodexProviderCapabilitiesV2 : ExclusiveCapabilities,
           }).pipe(
             Layer.provide(
-              remote ? Layer.mock(AgentRuntime.RuntimeClient)({ enabled: true }) : Layer.empty,
+              remote
+                ? Layer.mock(AgentRuntime.RuntimeClient)({
+                    enabled: true,
+                    observeThread: () =>
+                      Effect.succeed({ kind: "running" as const, client: remoteClient }),
+                    sessionResidency: () => Effect.succeed(null),
+                  })
+                : Layer.empty,
             ),
           ),
         ),

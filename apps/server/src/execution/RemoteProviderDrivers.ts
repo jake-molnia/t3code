@@ -173,11 +173,10 @@ export const makeRemoteDrivers = Effect.gen(function* () {
           openSession: (value) =>
             Effect.gen(function* () {
               const resume = value.resumeFromSession;
-              const attachOnly =
+              let attachOnly =
                 resume !== undefined && resume.status !== "stopped" && resume.status !== "error";
               const observation = attachOnly ? yield* runtime.observeThread(value.threadId) : null;
-              if (observation?.kind === "stopped")
-                return yield* adapterFailure("The previous worker is stopped");
+              if (observation?.kind === "stopped") attachOnly = false;
               const client =
                 observation?.kind === "running"
                   ? observation.client
@@ -185,8 +184,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               if (attachOnly) {
                 const residency = yield* runtime.sessionResidency(value.providerSessionId);
                 const current = yield* Effect.tryPromise(() => client.inspectIdentity());
-                if (!residency || !sameIdentity(residency, current))
-                  return yield* adapterFailure("Provider worker incarnation changed");
+                if (!residency || !sameIdentity(residency, current)) attachOnly = false;
               }
               yield* runtime.rememberSession(
                 value.providerSessionId,

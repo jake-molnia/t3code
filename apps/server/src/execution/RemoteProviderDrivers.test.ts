@@ -1,3 +1,5 @@
+import * as DateTime from "effect/DateTime";
+import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as Schema from "effect/Schema";
 import * as C from "@t3tools/contracts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
@@ -314,4 +316,94 @@ it.live(
         ),
       );
     }).pipe(Effect.scoped),
+);
+
+it.live.each(["live", "stopped", "replaced"] as const)(
+  "reattaches only to a surviving worker session (%s)",
+  (state) =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const identity = {
+        workspaceId: "thread-workspace",
+        allocationId: "one",
+        podUid: "pod",
+        generation: 1,
+        incarnation: "current",
+        protocolVersion: 1 as const,
+      };
+      const client = createExecutionClient({
+        identity,
+        endpoint: "http://worker.test",
+        token: "test-token",
+        fetch: async (url, init) => {
+          if (String(url).endsWith("/v1/identity")) return Response.json(identity);
+          const { method } = decodePollingRequest(init?.body);
+          calls.push(method);
+          return method === "configureProvider"
+            ? Response.json({ ok: true, value: null })
+            : Response.json({ ok: false, code: "test_open_boundary" });
+        },
+      });
+      yield* Effect.gen(function* () {
+        const drivers = yield* makeRemoteDrivers;
+        const driver = drivers.find((entry) => entry.driverKind === "grok");
+        if (!driver) throw new Error("Missing Grok");
+        const instanceId = C.ProviderInstanceId.make("grok");
+        const instance = yield* driver.create({
+          instanceId,
+          displayName: undefined,
+          environment: [],
+          enabled: true,
+          config: driver.defaultConfig(),
+        });
+        const providerSessionId = C.ProviderSessionId.make("resume-session");
+        yield* instance.orchestrationAdapter
+          .openSession({
+            threadId: C.ThreadId.make("root"),
+            providerSessionId,
+            modelSelection: { instanceId, model: "test" },
+            runtimePolicy: {
+              cwd: "/workspace/repo",
+              runtimeMode: "full-access",
+              interactionMode: "default",
+            },
+            resumeFromSession: {
+              id: providerSessionId,
+              driver: C.ProviderDriverKind.make("grok"),
+              providerInstanceId: instanceId,
+              status: "ready",
+              cwd: "/workspace/repo",
+              model: "test",
+              capabilities: CodexProviderCapabilitiesV2,
+              createdAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+              updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+              lastError: null,
+            },
+          })
+          .pipe(Effect.flip);
+        expect(calls.at(-1)).toBe(state === "live" ? "attachSession" : "openSession");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Settings.layerTest(),
+            Layer.mock(Runtime.RuntimeClient)({
+              enabled: true,
+              forUtility: () => Effect.succeed(client),
+              forThread: () => Effect.succeed(client),
+              observeThread: () =>
+                Effect.succeed(
+                  state === "stopped"
+                    ? { kind: "stopped" as const }
+                    : { kind: "running" as const, client },
+                ),
+              sessionResidency: () =>
+                Effect.succeed(
+                  state === "replaced" ? { ...identity, incarnation: "previous" } : identity,
+                ),
+              rememberSession: () => Effect.void,
+            }),
+          ),
+        ),
+      );
+    }),
 );

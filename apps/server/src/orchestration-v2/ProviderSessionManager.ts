@@ -1,9 +1,11 @@
 import * as Deferred from "effect/Deferred";
+import { sameIdentity } from "../execution/ExecutionWorker.ts";
 import * as AgentRuntime from "../agentRuntime/RuntimeClient.ts";
 import {
   closeRemoteProviderSession,
   abortRemoteProviderSessionOpen,
   isRemoteProviderSession,
+  forgetRemoteProviderSession,
   remoteEventEnvelope,
   ackRemoteEvent,
   awaitRemoteTerminal,
@@ -406,9 +408,8 @@ export const layerWithOptions = (
         },
       );
       const layerScope = yield* Effect.scope;
-      const remoteExecution = Option.isSome(
-        yield* Effect.serviceOption(AgentRuntime.RuntimeClient),
-      );
+      const agentRuntime = yield* Effect.serviceOption(AgentRuntime.RuntimeClient);
+      const remoteExecution = Option.isSome(agentRuntime);
       // Ctrl+C, or a stop that signals the whole process group, reaches the
       // provider CLIs with the server. They report their own background work
       // stopped before shutdown captures restart continuations, so provider
@@ -2136,7 +2137,49 @@ export const layerWithOptions = (
                 }
               }
               const key = sessionKey(input.providerSessionId);
-              const existing = (yield* Ref.get(sessions)).get(key);
+              let existing = (yield* Ref.get(sessions)).get(key);
+              if (
+                existing !== undefined &&
+                existing.ownerThreadId === input.threadId &&
+                Option.isSome(agentRuntime)
+              ) {
+                const observation = yield* agentRuntime.value.observeThread(input.threadId).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderSessionOpenError({
+                        instanceId: input.modelSelection.instanceId,
+                        providerSessionId: input.providerSessionId,
+                        cause,
+                      }),
+                  ),
+                );
+                const residency = yield* agentRuntime.value
+                  .sessionResidency(input.providerSessionId)
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ProviderSessionOpenError({
+                          instanceId: input.modelSelection.instanceId,
+                          providerSessionId: input.providerSessionId,
+                          cause,
+                        }),
+                    ),
+                  );
+                if (
+                  observation.kind === "stopped" ||
+                  (observation.kind === "running" &&
+                    residency !== null &&
+                    !sameIdentity(residency, observation.client.identity))
+                ) {
+                  // A replaced worker cannot receive a close. Retire its central scope before resuming native history on the new worker.
+                  forgetRemoteProviderSession(input.providerSessionId);
+                  yield* releaseEntry({
+                    providerSessionId: input.providerSessionId,
+                    reason: "runtime_error",
+                  });
+                  existing = undefined;
+                }
+              }
               if (existing !== undefined) {
                 if (
                   (remoteExecution && existing.ownerThreadId !== input.threadId) ||
