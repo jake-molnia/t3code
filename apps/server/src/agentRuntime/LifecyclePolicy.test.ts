@@ -1,5 +1,10 @@
+import * as TestClock from "effect/testing/TestClock";
 import * as Deferred from "effect/Deferred";
-import { WorkspaceActivity, withWorkspaceActivity } from "./WorkspaceActivity.ts";
+import {
+  WorkspaceActivity,
+  WorkspaceRecentActivity,
+  withWorkspaceActivity,
+} from "./WorkspaceActivity.ts";
 import { expect, it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -355,4 +360,69 @@ it.effect("releases a proven suspended settlement without waking compute", () =>
     expect(h.scriptRuns()).toBe(0);
     expect(h.methods).toEqual([]);
   }).pipe(Effect.scoped),
+);
+
+it.effect.each([false, true])(
+  "recent completed workspace use grants idle grace on old threads (settled: %s)",
+  (settled) =>
+    Effect.gen(function* () {
+      yield* TestClock.adjust("1 hour");
+      const participant = member();
+      if (!settled) participant.thread = { ...participant.thread, settledOverride: "active" };
+      const view = snapshot([participant]);
+      const h = harness(view);
+      const policy = yield* Policy.makePolicy({ ...h.ports, idleMs: 60_000 });
+      yield* withWorkspaceActivity("workspace", TestClock.adjust("10 minutes"));
+      expect(yield* policy.reconcileThread(root)).toBe("grace");
+      expect(h.methods).toEqual([]);
+      yield* TestClock.adjust("30 seconds");
+      for (let i = 0; i < 3; i++) {
+        yield* h.ports.observe("workspace");
+        expect(yield* policy.reconcileThread(root)).toBe("grace");
+      }
+      yield* TestClock.adjust("30 seconds");
+      expect(yield* policy.reconcileThread(root)).toBe(
+        settled ? "release-submitted" : "suspend-submitted",
+      );
+      expect(h.stops).toHaveLength(1);
+    }).pipe(
+      Effect.provideService(WorkspaceActivity, new Map()),
+      Effect.provideService(WorkspaceRecentActivity, new Map()),
+      Effect.scoped,
+    ),
+);
+
+it.effect("completed input during a lifecycle observation prevents idle terminal cleanup", () =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust("1 hour");
+    const h = harness();
+    const policy = yield* Policy.makePolicy({
+      ...h.ports,
+      idleMs: 60_000,
+      observe: (workspaceId) => withWorkspaceActivity(workspaceId, h.ports.observe(workspaceId)),
+    });
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    expect(h.methods).not.toContain("terminals.closeIdle");
+    expect(h.stops).toEqual([]);
+  }).pipe(
+    Effect.provideService(WorkspaceActivity, new Map()),
+    Effect.provideService(WorkspaceRecentActivity, new Map()),
+    Effect.scoped,
+  ),
+);
+
+it.effect("bounds recent workspace activity without retaining completed active leases", () =>
+  Effect.gen(function* () {
+    const active = yield* WorkspaceActivity;
+    const recent = yield* WorkspaceRecentActivity;
+    for (let index = 0; index < 1025; index++)
+      yield* withWorkspaceActivity(`workspace-${index}`, Effect.void);
+    expect(active.size).toBe(0);
+    expect(recent.size).toBe(1024);
+    expect(recent.has("workspace-0")).toBe(false);
+    expect(recent.has("workspace-1024")).toBe(true);
+  }).pipe(
+    Effect.provideService(WorkspaceActivity, new Map()),
+    Effect.provideService(WorkspaceRecentActivity, new Map()),
+  ),
 );

@@ -1,3 +1,4 @@
+import { withWorkspaceActivity } from "./WorkspaceActivity.ts";
 import * as C from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -180,6 +181,17 @@ export const layer = Layer.effect(
           Effect.flatMap(Schema.decodeUnknownEffect(schema)),
         );
       }).pipe(Effect.mapError(() => lookupError(input.threadId, input.terminalId)));
+    const interactive = <A, I>(
+      method: string,
+      input: { threadId: string; terminalId?: string | undefined },
+      schema: Schema.Codec<A, I>,
+    ) =>
+      routes.describeBoundThread(C.ThreadId.make(input.threadId)).pipe(
+        Effect.flatMap((binding) =>
+          withWorkspaceActivity(binding.workspaceId, invoke(method, input, schema)),
+        ),
+        Effect.mapError(() => lookupError(input.threadId, input.terminalId)),
+      );
     const open: TerminalManager.TerminalManager["Service"]["open"] = (input) =>
       Effect.acquireUseRelease(
         Effect.sync(() => pin(input.threadId)),
@@ -259,9 +271,9 @@ export const layer = Layer.effect(
       open,
       attachStream: (input, listener) => attach(input, listener, true),
       observeStream: (input, listener) => attach(input, listener, false),
-      write: (input) => invoke("terminals.write", input, Schema.Null).pipe(Effect.asVoid),
-      resize: (input) => invoke("terminals.resize", input, Schema.Null).pipe(Effect.asVoid),
-      clear: (input) => invoke("terminals.clear", input, Schema.Null).pipe(Effect.asVoid),
+      write: (input) => interactive("terminals.write", input, Schema.Null).pipe(Effect.asVoid),
+      resize: (input) => interactive("terminals.resize", input, Schema.Null).pipe(Effect.asVoid),
+      clear: (input) => interactive("terminals.clear", input, Schema.Null).pipe(Effect.asVoid),
       restart: (input) =>
         routes.callThread(C.ThreadId.make(input.threadId), "terminals.restart", { ...input }).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(C.TerminalSessionSnapshot)),

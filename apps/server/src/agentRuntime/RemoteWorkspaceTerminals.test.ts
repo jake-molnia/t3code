@@ -1,3 +1,4 @@
+import { WorkspaceActivity, WorkspaceRecentActivity } from "./WorkspaceActivity.ts";
 import * as Context from "effect/Context";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -129,11 +130,17 @@ it.layer(layer, { excludeTestServices: true })("remote native terminal", (it) =>
               }
             }),
         );
+        const recentActivity = yield* WorkspaceRecentActivity;
+        const activeRequests = yield* WorkspaceActivity;
+        recentActivity.delete("terminal-workspace");
         yield* remote.write({
           threadId: "child",
           terminalId: "shell",
           data: "printf 'REMOTE_%s\\n' SUCCESS\n",
         });
+        expect(recentActivity.has("terminal-workspace")).toBe(true);
+        expect(activeRequests.has("terminal-workspace")).toBe(false);
+        const inputAt = recentActivity.get("terminal-workspace");
         yield* Deferred.await(received).pipe(Effect.timeout("10 seconds"));
         unsubscribe();
         let replay = "";
@@ -145,6 +152,7 @@ it.layer(layer, { excludeTestServices: true })("remote native terminal", (it) =>
             }),
         );
         expect(replay).toContain("REMOTE_SUCCESS");
+        expect(recentActivity.get("terminal-workspace")).toBe(inputAt);
         detach();
         const before = wakes;
         yield* remote.close({ threadId: "parent" });
