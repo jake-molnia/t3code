@@ -7,8 +7,10 @@ import * as Mutator from "../ProviderInstanceRegistryMutator.ts";
 import { deriveProviderInstanceConfigMap } from "../ProviderInstanceRegistryHydration.ts";
 import { BUILT_IN_DRIVERS } from "../builtInDrivers.ts";
 import * as Infrastructure from "../ProviderOrchestrationAdapterInfrastructure.ts";
-import * as AcpRegistryCatalog from "../AcpRegistryCatalog.ts";
+import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as ProviderHostLive from "../ProviderHostLive.ts";
+import * as ModelManifest from "../ModelManifest.ts";
+import * as AgentScopeLive from "../../process/agentScope.ts";
 
 /** Native adapter integration tests exercise upstream drivers without the cloud control plane. */
 export const layer = Layer.unwrap(
@@ -20,8 +22,10 @@ export const layer = Layer.unwrap(
       configMap: deriveProviderInstanceConfigMap(initial),
     }).pipe(
       Layer.provide(Infrastructure.layer),
-      Layer.provide(AcpRegistryCatalog.layer),
+      Layer.provide(AcpRegistrySupport.layerFromHost),
       Layer.provide(ProviderHostLive.layer),
+      Layer.provide(ModelManifest.layerModelCatalog),
+      Layer.provide(AgentScopeLive.layer),
     );
     const watcher = Layer.effectDiscard(
       Effect.gen(function* () {

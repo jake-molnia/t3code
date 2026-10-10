@@ -1,4 +1,4 @@
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as C from "@t3tools/contracts";
@@ -59,7 +59,7 @@ it.effect("keeps child terminal ownership separate and retains uncertain error a
         }),
     }).pipe(
       Effect.provideService(TerminalManager.TerminalManager, terminalService),
-      Effect.provideService(HostProcessEnvironment, {
+      Effect.provideService(HostProcess.Environment, {
         DISPLAY: ":99",
         XAUTHORITY: "/sandbox/.Xauthority",
         DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/sandbox/bus",

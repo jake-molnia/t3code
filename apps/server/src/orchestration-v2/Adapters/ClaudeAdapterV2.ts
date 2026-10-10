@@ -31,7 +31,8 @@ import type {
   WebSearchOutput,
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { AgentScope } from "@t3tools/shared/AgentScope";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
@@ -98,46 +99,53 @@ import {
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   resolveClaudeCatalogContextWindowTokens,
+  type ClaudeModelCatalog,
+  getClaudeCatalogModelCapabilities,
+  resolveClaudeModelSlug,
+  scopeClaudeModelCatalog,
 } from "../../provider/ClaudeModelCatalog.ts";
 import {
   boundProviderEventForLogging,
-  type EventNdjsonLogger,
   shouldPersistProviderEvent,
 } from "../../provider/EventNdjsonLogger.ts";
-import * as ProviderEventLoggers from "../../provider/ProviderEventLoggers.ts";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
   claudeRateLimitEventToUpdate,
   type ClaudeScopedLimitNames,
 } from "../../provider/claudeUsageLimits.ts";
-import type { ServerProviderShape } from "@t3tools/provider-core/server/snapshot";
+import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
-import { buildRuntimeInstructions } from "../../provider/RuntimeInstructions.ts";
+import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import {
   mcpToolPresentation,
   normalizeMcpText,
 } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import {
   makeProviderFailure,
   makeProviderRetryTurnItem,
 } from "@t3tools/provider-core/server/failure";
 import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
-import { providerMessageTextWithAttachmentPaths } from "../AttachmentPrompt.ts";
+import { providerMessageTextWithAttachmentPaths } from "@t3tools/provider-core/server/attachmentPrompt";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
 } from "@t3tools/provider-core/server/adapterDriver";
-import { type BackgroundWorkReport, backgroundWorkNotification } from "../Notification.ts";
-import * as ProviderContinuationRequests from "@t3tools/provider-core/server/continuationRequests";
+import {
+  type BackgroundWorkReport,
+  backgroundWorkNotification,
+} from "@t3tools/provider-core/server/notification";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import {
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
-} from "../SubagentProjection.ts";
+} from "@t3tools/provider-core/server/subagentProjection";
 
 export const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 export const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const;
@@ -175,6 +183,8 @@ export function claudeProviderTurnTokenUsage(
 }
 export const CLAUDE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CLAUDE_PROVIDER);
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
+// Entry extensions the Claude SDK runs through node instead of executing.
+const CLAUDE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".tsx", ".ts", ".jsx"];
 
 export const ClaudeProviderCapabilitiesV2 = {
   sessions: {
@@ -567,7 +577,7 @@ export function loggedClaudeQueryOptions(
 }
 
 export function makeClaudeAgentSdkProtocolLogger(input: {
-  readonly nativeEventLogger: EventNdjsonLogger | undefined;
+  readonly nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger | undefined;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
 }): ClaudeAgentSdkProtocolLogger | undefined {
@@ -602,6 +612,7 @@ export const layerQueryRunner: Layer.Layer<
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
+    const agentScope = yield* AgentScope;
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: crypto.randomUUIDv4.pipe(
@@ -624,11 +635,35 @@ export const layerQueryRunner: Layer.Layer<
           ),
           Stream.toAsyncIterable,
         );
+        // The SDK spawns a native binary as `path ...executableArgs ...sdkArgs`,
+        // which lets the agent scope wrapper go in front of the CLI while the
+        // SDK keeps its own stderr capture and exit reporting. The SDK runs a
+        // script entry through node instead, so those launch unwrapped.
+        const binaryPath = input.options.pathToClaudeCodeExecutable;
+        const launch =
+          binaryPath === undefined ||
+          CLAUDE_SCRIPT_EXTENSIONS.some((ext) => binaryPath.endsWith(ext))
+            ? undefined
+            : yield* agentScope.wrap({
+                command: binaryPath,
+                args: [],
+                name: "claude",
+                threadId: input.threadId,
+                env: input.options.env,
+              });
+        const options =
+          launch === undefined || launch.args.length === 0
+            ? input.options
+            : {
+                ...input.options,
+                pathToClaudeCodeExecutable: launch.command,
+                executableArgs: [...launch.args, ...(input.options.executableArgs ?? [])],
+              };
         const queryRuntime = yield* Effect.try({
           try: () =>
             query({
               prompt,
-              options: input.options,
+              options,
             }),
           catch: (cause) => queryRunnerError(cause, "query"),
         });
@@ -963,15 +998,23 @@ export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 // not pre-approved), but read-only sandboxes pre-approve only the annotated
 // read-only orchestrator tools so a read-only session cannot silently spawn
 // threads or scheduled tasks.
+//
+// The SDK passes `mcpServers` to the CLI as an inline `--mcp-config` argument,
+// and process arguments are readable by every local user. The credential
+// therefore travels in the child's environment, which only its owner can read,
+// and the CLI expands the `${VAR}` reference when it connects.
+const CLAUDE_T3_MCP_AUTHORIZATION_ENV = "T3_CODE_MCP_AUTHORIZATION";
+
 export function claudeMcpQueryOverrides(input: {
-  readonly threadId: ThreadId;
+  readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly readOnlySandbox: boolean;
   readonly allowedTools?: ReadonlyArray<string>;
 }): {
   readonly allowedTools?: ReadonlyArray<string>;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
+  readonly mcpEnvironment?: Readonly<Record<string, string>>;
 } {
-  const session = McpProviderSession.readMcpProviderSession(input.threadId);
+  const session = input.mcpSession;
   if (session === undefined) {
     return input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools };
   }
@@ -994,11 +1037,12 @@ export function claudeMcpQueryOverrides(input: {
         type: "http",
         url: session.endpoint,
         headers: {
-          Authorization: session.authorizationHeader,
+          Authorization: `\${${CLAUDE_T3_MCP_AUTHORIZATION_ENV}}`,
         },
         timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
       },
     },
+    mcpEnvironment: { [CLAUDE_T3_MCP_AUTHORIZATION_ENV]: session.authorizationHeader },
   };
 }
 
@@ -1115,7 +1159,7 @@ function resultTextFromSdkMessage(
 }
 
 function makeProviderThread(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly providerInstanceId: ProviderInstanceId;
   readonly appThreadId: OrchestrationV2ProviderThread["appThreadId"];
   readonly ownerNodeId?: OrchestrationV2ProviderThread["ownerNodeId"];
@@ -1353,7 +1397,8 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   const textWithAttachmentPaths = providerMessageTextWithAttachmentPaths({
     text: input.text,
     attachments: input.attachments,
-    attachmentsDir: input.attachmentsDir,
+    resolveAttachmentPath: (attachment) =>
+      resolveAttachmentPath({ attachmentsDir: input.attachmentsDir, attachment }),
   });
 
   const dispatch =
@@ -1628,6 +1673,7 @@ export function claudeEffectiveQueryPolicyKey(
   mcpOverrides: {
     readonly allowedTools?: ReadonlyArray<string>;
     readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
+    readonly mcpEnvironment?: Readonly<Record<string, string>>;
   },
 ): string {
   return JSON.stringify({
@@ -1638,6 +1684,7 @@ export function claudeEffectiveQueryPolicyKey(
         : { allowedTools: mcpOverrides.allowedTools }),
     }),
     mcpServers: mcpOverrides.mcpServers,
+    mcpEnvironment: mcpOverrides.mcpEnvironment,
   });
 }
 
@@ -2519,9 +2566,37 @@ function isClaudeTaskNotificationOriginResult(message: SDKMessage): message is S
 
 function providerFailureFromResult(
   message: SDKResultMessage,
+  completedAt: DateTime.Utc,
   failureHint?: string,
   usageLimited = false,
 ): OrchestrationV2ProviderFailure | null {
+  // shortcut: accept 9router's wrapped 429 cooldown; prefer native reset metadata when available.
+  const gatewayLimit =
+    failureHint === undefined &&
+    message.subtype === "success" &&
+    message.is_error &&
+    message.terminal_reason === "api_error" &&
+    message.api_error_status === 503
+      ? /^API Error: 503 \[[^\]\r\n]+\] \[429\]: \{"type":"error","error":\{"type":"rate_limit_error",[^\r\n]*\} \(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)/.exec(
+          message.result,
+        )
+      : null;
+  if (gatewayLimit) {
+    const seconds =
+      Number(gatewayLimit[1] ?? 0) * 3_600 +
+      Number(gatewayLimit[2] ?? 0) * 60 +
+      Number(gatewayLimit[3] ?? 0);
+    const resetMs = DateTime.toEpochMillis(completedAt) + seconds * 1_000;
+    if (seconds > 0 && resetMs < 8.64e15) {
+      return makeProviderFailure({
+        class: "usage_limit",
+        message: "Claude API rate limit reached. Try again later.",
+        code: "api_error_429",
+        retryable: true,
+        resetAt: DateTime.formatIso(DateTime.makeUnsafe(resetMs)),
+      });
+    }
+  }
   const failureClass =
     message.terminal_reason === "blocking_limit" ||
     (message.subtype === "success" && message.api_error_status === 429) ||
@@ -2575,7 +2650,7 @@ function providerFailureFromApiRetry(message: SDKAPIRetryMessage): Orchestration
 }
 
 function buildAssistantArtifacts(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly nativeItemId: string;
@@ -2779,6 +2854,9 @@ interface ActiveClaudeSubagent {
   // The tool call that started the current run: the Agent launch, then each
   // SendMessage that resumes the subagent. A new one means a new prompt.
   readonly runToolUseId: string | null;
+  // The API effort the subagent runs at: its Agent call's, else its owner's,
+  // else the session's. Undefined when none is sent and the model default applies.
+  readonly effort: string | undefined;
   nextChildItemOrdinal: number;
   resultItemOrdinal: number | null;
   // The subagent's latest assistant message routed into its child thread,
@@ -2831,8 +2909,40 @@ interface ActiveClaudeToolCall {
 // keyed by the tool_use_id that launches it.
 interface PendingClaudeSubagentLaunch {
   readonly model?: string;
+  readonly effort?: string;
   // parent_tool_use_id of the subagent whose own Agent call launches this one.
   readonly ownerToolUseId?: string;
+}
+
+/**
+ * Agent calls name aliases ("opus") and replies name dated ids; both resolve
+ * to the catalog slug. A subagent's thread then keeps one model name across
+ * its launch, its replies and a resume after a restart, so a later report of
+ * the same model never reads as a model change that drops its effort. The
+ * catalog is the instance's, so a custom model keeps its own name.
+ */
+function canonicalClaudeSubagentModel(catalog: ClaudeModelCatalog, model: string): string {
+  return resolveClaudeModelSlug(catalog, model);
+}
+
+/**
+ * The selection a subagent's thread shows. An effort its model does not offer
+ * is not sent for it, so it is left out (a nested subagent still inherits it).
+ */
+function claudeSubagentModelSelection(
+  catalog: ClaudeModelCatalog,
+  instanceId: ModelSelection["instanceId"],
+  model: string,
+  effort: string | undefined,
+): ModelSelection {
+  const descriptor = getClaudeCatalogModelCapabilities(catalog, model).optionDescriptors?.find(
+    (candidate) => candidate.id === "effort",
+  );
+  const offered =
+    effort !== undefined &&
+    descriptor?.type === "select" &&
+    descriptor.options.some((option) => option.id === effort);
+  return { instanceId, model, ...(offered ? { options: [{ id: "effort", value: effort }] } : {}) };
 }
 
 const PENDING_CLAUDE_SUBAGENT_CAP = 64;
@@ -2855,11 +2965,13 @@ function rememberPendingClaudeSubagentLaunch(
 }
 
 /**
- * Agent calls carry model overrides even when the SDK omits child assistant
- * snapshots. A subagent's own Agent call arrives only in its snapshot, so the
- * owner recorded here is all that links the subagent it starts back to it.
+ * Agent calls carry model and effort overrides even when the SDK omits child
+ * assistant snapshots. A subagent's own Agent call arrives only in its
+ * snapshot, so the owner recorded here is all that links the subagent it
+ * starts back to it.
  */
 function rememberClaudeSubagentLaunch(
+  catalog: ClaudeModelCatalog,
   context: ActiveClaudeTurnContext,
   pending: Map<string, PendingClaudeSubagentLaunch>,
   toolUseId: string,
@@ -2872,17 +2984,23 @@ function rememberClaudeSubagentLaunch(
   // task_started resolves it.
   const model =
     requested !== "inherit"
-      ? requested
+      ? requested && canonicalClaudeSubagentModel(catalog, requested)
       : ownerToolUseId === null
         ? context.input.modelSelection.model
         : undefined;
+  const effort = firstStringInputField(input, ["effort"]);
   // A model already known (a snapshot's, or an earlier sighting of this
   // call) wins over the requested one.
   const launch: PendingClaudeSubagentLaunch = {
     ...(model === undefined || pending.get(toolUseId)?.model !== undefined ? {} : { model }),
+    ...(effort === undefined ? {} : { effort }),
     ...(ownerToolUseId === null ? {} : { ownerToolUseId }),
   };
-  if (launch.model !== undefined || launch.ownerToolUseId !== undefined) {
+  if (
+    launch.model !== undefined ||
+    launch.effort !== undefined ||
+    launch.ownerToolUseId !== undefined
+  ) {
     rememberPendingClaudeSubagentLaunch(pending, toolUseId, launch);
   }
 }
@@ -3009,10 +3127,10 @@ export interface ClaudeAdapterV2Options {
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly crypto: Crypto.Crypto;
-  readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
-  readonly onUsageLimits?: ServerProviderShape["applyUsageLimits"];
+  readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
   /** Sink for wake-turn continuation requests; defaults to dropping them. */
   readonly continuationRequests?: {
     readonly offer: (
@@ -3021,10 +3139,16 @@ export interface ClaudeAdapterV2Options {
   };
 }
 
-export function makeClaudeAdapterV2(
+export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
   adapterOptions: ClaudeAdapterV2Options,
-): ProviderAdapter.ProviderAdapterV2Shape {
+) {
+  const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { attachmentsDir, fileSystem, path, crypto, idAllocator, queryRunner } = adapterOptions;
+  // Subagent model names and effort levels, including the instance's custom models.
+  const subagentModelCatalog = scopeClaudeModelCatalog(
+    BUNDLED_CLAUDE_MODEL_CATALOG,
+    adapterOptions.settings.customModels,
+  );
   const continuationRequests = adapterOptions.continuationRequests ?? {
     offer: () => Effect.void,
   };
@@ -3350,7 +3474,6 @@ export function makeClaudeAdapterV2(
             type: "turn_item.updated",
             driver: CLAUDE_PROVIDER,
             turnItem: makeProviderRetryTurnItem({
-              idAllocator,
               driver: CLAUDE_PROVIDER,
               threadId: context.input.threadId,
               runId: context.input.runId,
@@ -4103,6 +4226,9 @@ export function makeClaudeAdapterV2(
               `task:${resume.taskId}:subagent`,
             ),
             runToolUseId: launchToolUseId,
+            // The launch's effort went with the old process. Without a task
+            // modelSelection the child thread keeps the one it was given.
+            effort: undefined,
             nextChildItemOrdinal: 100,
             resultItemOrdinal: null,
             lastAssistantText: null,
@@ -4123,8 +4249,9 @@ export function makeClaudeAdapterV2(
           readonly prompt?: string;
           readonly title?: string;
           readonly model?: string;
-          // The subagent whose own Agent call started this one; read only
-          // when this call registers the subagent.
+          // The Agent call's effort and the subagent whose own Agent call
+          // started this one; read only when this call registers the subagent.
+          readonly effort?: string;
           readonly owner?: ActiveClaudeSubagent;
           readonly progress?: string;
           readonly result?: string;
@@ -4223,6 +4350,13 @@ export function makeClaudeAdapterV2(
                     existingSubagent.task,
                   )
                 : existingSubagent.task;
+          const effort =
+            existingSubagent === undefined
+              ? (input.effort ??
+                input.owner?.effort ??
+                compileClaudeModelSelection(input.context.input.modelSelection).effort)
+              : existingSubagent.effort;
+          const model = input.model ?? priorTask?.model ?? null;
           const task = {
             ...(priorTask ?? {
               id: nodeId,
@@ -4261,7 +4395,19 @@ export function makeClaudeAdapterV2(
               : {}),
             ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
             ...(input.title === undefined ? {} : { title: input.title }),
-            ...(input.model === undefined ? {} : { model: input.model }),
+            model,
+            // What the subagent runs with, unless it was recovered after a
+            // restart. The parent's other options belong to the parent's session.
+            ...(existingSubagent === undefined || existingSubagent.task.modelSelection !== undefined
+              ? {
+                  modelSelection: claudeSubagentModelSelection(
+                    subagentModelCatalog,
+                    input.context.input.modelSelection.instanceId,
+                    model || input.context.input.modelSelection.model,
+                    effort,
+                  ),
+                }
+              : {}),
             ...(input.progress === undefined ? {} : { progress: input.progress }),
             ...(input.result === undefined ? {} : { result: input.result }),
             ...(isReopen ? { startedAt: now } : {}),
@@ -4279,6 +4425,7 @@ export function makeClaudeAdapterV2(
               existingSubagent === undefined
                 ? (input.toolUseId ?? null)
                 : (resumeToolUseId ?? existingSubagent.runToolUseId),
+            effort,
             nextChildItemOrdinal: existingSubagent?.nextChildItemOrdinal ?? 100,
             resultItemOrdinal: existingSubagent?.resultItemOrdinal ?? null,
             // Every task_started begins a new run of the subagent (including a
@@ -4326,10 +4473,7 @@ export function makeClaudeAdapterV2(
               parentNodeId: nodeId,
               activeProviderThreadId: null,
               providerInstanceId: input.context.input.modelSelection.instanceId,
-              modelSelection:
-                task.model && task.model !== input.context.input.modelSelection.model
-                  ? { instanceId: input.context.input.modelSelection.instanceId, model: task.model }
-                  : input.context.input.modelSelection,
+              modelSelection: task.modelSelection ?? input.context.input.modelSelection,
               title: subagentThreadTitle({
                 parentTitle: input.context.input.appThread.title,
                 prompt: task.prompt,
@@ -5077,7 +5221,6 @@ export function makeClaudeAdapterV2(
               type: "turn_item.updated",
               driver: CLAUDE_PROVIDER,
               turnItem: makeProviderRetryTurnItem({
-                idAllocator,
                 driver: CLAUDE_PROVIDER,
                 threadId: input.context.input.threadId,
                 runId: input.context.input.runId,
@@ -6083,7 +6226,6 @@ export function makeClaudeAdapterV2(
               type: "turn_item.updated",
               driver: CLAUDE_PROVIDER,
               turnItem: makeProviderRetryTurnItem({
-                idAllocator,
                 driver: CLAUDE_PROVIDER,
                 threadId: context.input.threadId,
                 runId: context.input.runId,
@@ -6134,7 +6276,10 @@ export function makeClaudeAdapterV2(
             const parentToolUseId = message.parent_tool_use_id;
             const snapshotModel =
               typeof message.message.model === "string" ? message.message.model.trim() : "";
-            const model = snapshotModel.length === 0 ? undefined : snapshotModel;
+            const model =
+              snapshotModel.length === 0
+                ? undefined
+                : canonicalClaudeSubagentModel(subagentModelCatalog, snapshotModel);
             if (parentToolUseId !== null && model !== undefined) {
               const subagent = yield* resolveSubagentByToolUseId(context, parentToolUseId);
               if (subagent === undefined) {
@@ -6241,6 +6386,7 @@ export function makeClaudeAdapterV2(
                 ...(message.tool_use_id === undefined ? {} : { toolUseId: message.tool_use_id }),
                 ...(message.prompt === undefined ? {} : { prompt: message.prompt }),
                 ...(model === undefined ? {} : { model }),
+                ...(launch?.effort === undefined ? {} : { effort: launch.effort }),
                 ...(owner === undefined ? {} : { owner }),
                 title: message.description,
                 status: "running",
@@ -6342,6 +6488,7 @@ export function makeClaudeAdapterV2(
             const nativeToolInput = claudeNativeToolInputFromUnknown(toolUse.input);
             if (toolUse.name === "Agent") {
               rememberClaudeSubagentLaunch(
+                subagentModelCatalog,
                 context,
                 pendingSubagentLaunchesByToolUseId,
                 toolUse.id,
@@ -6675,10 +6822,10 @@ export function makeClaudeAdapterV2(
                 : null;
             const resultFailure = interrupted
               ? null
-              : providerFailureFromResult(message, failureHint, usageLimited);
+              : providerFailureFromResult(message, completedAt, failureHint, usageLimited);
             const terminalFailure =
               resultFailure?.class === "usage_limit"
-                ? { ...resultFailure, resetAt }
+                ? { ...resultFailure, resetAt: resetAt ?? resultFailure.resetAt ?? null }
                 : resultFailure;
             yield* finalizeActiveTurn({
               context,
@@ -6940,6 +7087,7 @@ export function makeClaudeAdapterV2(
           const heldForEcho = context.heldRootFrames.length > 0;
           if (toolName === "Agent") {
             rememberClaudeSubagentLaunch(
+              subagentModelCatalog,
               context,
               pendingSubagentLaunchesByToolUseId,
               nativeRequestId,
@@ -7259,7 +7407,7 @@ export function makeClaudeAdapterV2(
         ) {
           const queryPolicy = claudeRuntimeQueryPolicyForRuntimePolicy(turnInput.runtimePolicy);
           const mcpOverrides = claudeMcpQueryOverrides({
-            threadId: turnInput.threadId,
+            mcpSession: yield* mcpSessions.read(turnInput.threadId),
             readOnlySandbox:
               sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
             ...(queryPolicy.allowedTools === undefined
@@ -7343,9 +7491,14 @@ export function makeClaudeAdapterV2(
             cwd: turnInput.runtimePolicy.cwd,
             attachmentsDir,
             settings: adapterOptions.settings,
-            environment: adapterOptions.environment,
+            environment: { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
-            ...mcpOverrides,
+            ...(mcpOverrides.allowedTools === undefined
+              ? {}
+              : { allowedTools: mcpOverrides.allowedTools }),
+            ...(mcpOverrides.mcpServers === undefined
+              ? {}
+              : { mcpServers: mcpOverrides.mcpServers }),
             permissionMode: queryPolicy.permissionMode,
             ...(queryPolicy.allowDangerouslySkipPermissions === undefined
               ? {}
@@ -8149,13 +8302,14 @@ export function makeClaudeAdapterV2(
         ),
     ),
   });
-}
+});
 
 export type ClaudeAdapterV2DriverEnv =
   | ClaudeAgentSdkQueryRunner
   | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
+  | McpProviderSessions.McpProviderSessions
   | Path.Path
   | ServerConfig.ServerConfig;
 
@@ -8166,20 +8320,20 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
   ) {
     const { instanceId, environment, enabled, config } = input;
     const fileSystem = yield* FileSystem.FileSystem;
-    const hostEnvironment = yield* HostProcessEnvironment;
+    const hostEnvironment = yield* HostProcess.Environment;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const queryRunner = yield* ClaudeAgentSdkQueryRunner;
     const serverConfig = yield* ServerConfig.ServerConfig;
     const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
-    const baseEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment);
+    const baseEnvironment = yield* mergeProviderInstanceEnvironment(environment, hostEnvironment);
     const claudeEnvironment = yield* makeClaudeEnvironment(config, baseEnvironment);
     const path = yield* Path.Path;
     const crypto = yield* Crypto.Crypto;
     const binaryPath = yield* resolveClaudeSdkExecutablePath(
-      expandHomePath(config.binaryPath),
+      expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
       claudeEnvironment,
     );
-    return makeClaudeAdapterV2({
+    return yield* makeClaudeAdapterV2({
       instanceId,
       settings: { ...config, enabled, binaryPath },
       environment: claudeEnvironment,
@@ -8221,13 +8375,13 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
-  const hostEnvironment = yield* HostProcessEnvironment;
+  const hostEnvironment = yield* HostProcess.Environment;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const queryRunner = yield* ClaudeAgentSdkQueryRunner;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
 
-  return makeClaudeAdapterV2({
+  return yield* makeClaudeAdapterV2({
     instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
     settings: DEFAULT_CLAUDE_SETTINGS,
     environment: hostEnvironment,
@@ -8248,6 +8402,7 @@ const layer: Layer.Layer<
   | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
+  | McpProviderSessions.McpProviderSessions
   | Path.Path
   | ServerConfig.ServerConfig
 > = Layer.effect(ProviderAdapter.ProviderAdapterV2, makeDefaultClaudeAdapterV2());

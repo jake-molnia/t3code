@@ -1,4 +1,4 @@
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveCommandPath, resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -50,8 +50,8 @@ export const makeCodexInstallation = Effect.fn("CodexInstallation.make")(functio
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const platform = yield* HostProcessPlatform;
-  const environment = options.environment ?? (yield* HostProcessEnvironment);
+  const platform = yield* HostProcess.Platform;
+  const environment = options.environment ?? (yield* HostProcess.Environment);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const cache = new Map<string, { fingerprint: string; executable: CodexExecutable }>();
   const run = Effect.fn("CodexInstallation.probe")(function* (
@@ -59,7 +59,7 @@ export const makeCodexInstallation = Effect.fn("CodexInstallation.make")(functio
     args: ReadonlyArray<string>,
   ) {
     const resolved = yield* resolveSpawnCommand(command, args).pipe(
-      Effect.provideService(HostProcessPlatform, platform),
+      Effect.provideService(HostProcess.Platform, platform),
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
     );

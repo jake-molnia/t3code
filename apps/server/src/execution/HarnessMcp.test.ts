@@ -3,7 +3,7 @@ import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts"
 import { createMcpForwarder } from "./McpForwarder.ts";
 import { codexThreadRuntimeParams } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { claudeMcpQueryOverrides } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
-import { cursorMcpServers } from "../orchestration-v2/Adapters/CursorAdapterV2.ts";
+import { cursorMcpServers } from "@t3tools/provider-cursor/testing";
 
 test("native launch configuration carries Aperture and independently authenticated T3 MCP", () => {
   const forwarder = createMcpForwarder("http://worker", fetch, {
@@ -21,7 +21,7 @@ test("native launch configuration carries Aperture and independently authenticat
     browserToolsAvailable: true,
   });
   try {
-    expect(codexThreadRuntimeParams({ threadId }).config.mcp_servers).toEqual({
+    expect(codexThreadRuntimeParams({ mcpSession: local }).config.mcp_servers).toEqual({
       aperture: {
         url: "http://aperture/v1/mcp",
         http_headers: { Authorization: "Bearer aperture-key" },
@@ -31,14 +31,14 @@ test("native launch configuration carries Aperture and independently authenticat
         http_headers: { Authorization: local.authorizationHeader },
       },
     });
-    const claude = claudeMcpQueryOverrides({ threadId, readOnlySandbox: false });
+    const claude = claudeMcpQueryOverrides({ mcpSession: local, readOnlySandbox: false });
     expect(claude.mcpServers?.aperture).toEqual({
       type: "http",
       url: "http://aperture/v1/mcp",
       headers: { Authorization: "Bearer aperture-key" },
     });
     expect(claude.allowedTools).toContain("mcp__aperture__*");
-    expect(cursorMcpServers(threadId)?.aperture).toEqual({
+    expect(cursorMcpServers(local)?.aperture).toEqual({
       type: "http",
       url: "http://aperture/v1/mcp",
       headers: { Authorization: "Bearer aperture-key" },

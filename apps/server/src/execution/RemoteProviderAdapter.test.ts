@@ -1,8 +1,5 @@
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { captureRunPromise } from "./EffectHttpBoundary.ts";
-import {
-  setMcpProviderSession,
-  clearMcpProviderSession,
-} from "@t3tools/provider-core/server/mcpSession";
 // @effect-diagnostics nodeBuiltinImport:off -- Exercises the real HTTP worker with an external-provider test double.
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -25,6 +22,7 @@ it.live(
   "provider session and events cross JSON with dates intact; central scope disposal preserves native session",
   () =>
     Effect.gen(function* () {
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
       const directory = yield* Effect.tryPromise(() =>
         NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-provider-transport-")),
       );
@@ -60,7 +58,7 @@ it.live(
         lastError: null,
       };
       const unsupported = () => Effect.die("Test did not supply this external provider operation");
-      const adapter: A.ProviderAdapterV2Shape = {
+      const adapter: A.ProviderAdapterV2["Service"] = {
         instanceId,
         driver,
         getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
@@ -158,7 +156,7 @@ it.live(
               token,
               identity,
             });
-            setMcpProviderSession({
+            yield* mcpSessions.set({
               environmentId: C.EnvironmentId.make("central"),
               threadId: C.ThreadId.make("thread"),
               providerSessionId,
@@ -168,6 +166,7 @@ it.live(
               browserToolsAvailable: true,
             });
             const remote = createRemoteProviderAdapter({
+              mcpSessions: yield* McpProviderSessions.McpProviderSessions,
               instanceId,
               driver,
               client,
@@ -329,12 +328,12 @@ it.live(
         );
         expect(closed).toBe(1);
       } finally {
-        clearMcpProviderSession(C.ThreadId.make("thread"));
+        yield* mcpSessions.clear(C.ThreadId.make("thread"));
         yield* Effect.promise(async () => {
           await server?.close();
         });
         yield* Effect.promise(journal.close);
         yield* Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true }));
       }
-    }),
+    }).pipe(Effect.provide(McpProviderSessions.layer)),
 );

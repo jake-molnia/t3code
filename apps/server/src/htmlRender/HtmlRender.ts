@@ -1,5 +1,5 @@
 import type { ThreadId } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   HTML_RENDER_COLUMN_WIDTH,
   HTML_RENDER_MAX_TITLE_LENGTH,
@@ -348,7 +348,7 @@ const make = Effect.gen(function* () {
   const browsers = yield* Semaphore.make(MAX_CONCURRENT_BROWSERS);
   // Chrome's sandbox stays on unless the operator explicitly turns it off.
   // Chrome also refuses it as root, where that opt-out is the only way to run.
-  const noSandbox = PreviewBrowserHost.sandboxDisabled(yield* HostProcessEnvironment);
+  const noSandbox = PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment);
 
   /** Runs one browser launch; a host that cannot start it gets setup steps instead. */
   const launching = <A>(

@@ -4,13 +4,7 @@ import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import {
-  HostProcessArguments,
-  HostProcessEnvironment,
-  HostProcessExecutablePath,
-  HostProcessIsExecutable,
-  HostProcessPlatform,
-} from "./hostProcess.ts";
+import * as HostProcess from "./HostProcess.ts";
 import { CommandResolutionCache, resolveCommandPath } from "./shell.ts";
 
 const NodeRuntimeFeature = Schema.Literals(["Local device support", "Device automation"]);
@@ -46,7 +40,7 @@ export interface SelfInvocation {
  * assemble the pair themselves.
  */
 export const resolveSelfInvocation = Effect.fn("nodeRuntime.resolveSelfInvocation")(function* () {
-  const environment = yield* HostProcessEnvironment;
+  const environment = yield* HostProcess.Environment;
   if (environment.T3_ACP_MCP_NODE) {
     const path = yield* Path.Path;
     return {
@@ -56,11 +50,11 @@ export const resolveSelfInvocation = Effect.fn("nodeRuntime.resolveSelfInvocatio
         : undefined,
     } satisfies SelfInvocation;
   }
-  const command = yield* HostProcessExecutablePath;
-  if (yield* HostProcessIsExecutable)
+  const command = yield* HostProcess.ExecutablePath;
+  if (yield* HostProcess.IsExecutable)
     return { command, entrypoint: undefined } satisfies SelfInvocation;
   const path = yield* Path.Path;
-  const entry = (yield* HostProcessArguments)[1];
+  const entry = (yield* HostProcess.Arguments)[1];
   // Children spawn from their own working directory, so the script path must be absolute.
   return {
     command,
@@ -80,13 +74,13 @@ export const resolveNodeExecutable = Effect.fn("nodeRuntime.resolveNodeExecutabl
   feature: typeof NodeRuntimeFeature.Type,
   environment?: NodeJS.ProcessEnv,
 ) {
-  const executablePath = yield* HostProcessExecutablePath;
-  if (!(yield* HostProcessIsExecutable)) return executablePath;
+  const executablePath = yield* HostProcess.ExecutablePath;
+  if (!(yield* HostProcess.IsExecutable)) return executablePath;
 
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const platform = yield* HostProcessPlatform;
-  const env = environment ?? (yield* HostProcessEnvironment);
+  const platform = yield* HostProcess.Platform;
+  const env = environment ?? (yield* HostProcess.Environment);
   const nodePath = yield* resolveCommandPath(platform === "win32" ? "node.exe" : "node", {
     // Batch wrappers require a shell; helper callers launch the runtime directly.
     env: platform === "win32" ? { ...env, PATHEXT: ".EXE" } : env,

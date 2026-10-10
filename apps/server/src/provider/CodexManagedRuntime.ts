@@ -66,15 +66,16 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
         })),
       ),
     );
-  const remoteAccess = Effect.suspend(() =>
-    Option.isSome(sources)
-      ? sources.value.access(options.instanceId).pipe(Option.getOrElse(() => nativeAuth.access))
-      : nativeAuth.access,
-  );
+  const remoteAccess = Effect.suspend((): typeof nativeAuth.access => {
+    const remote = Option.isSome(sources)
+      ? sources.value.access(options.instanceId)
+      : Option.none();
+    return Option.isSome(remote) ? remote.value : nativeAuth.access;
+  });
   const auth = {
     ...nativeAuth,
     access: remoteAccess,
-    read: Effect.suspend(() => {
+    read: Effect.suspend((): typeof nativeAuth.read => {
       const remote = Option.isSome(sources)
         ? sources.value.access(options.instanceId)
         : Option.none();

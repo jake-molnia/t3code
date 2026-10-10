@@ -9,13 +9,8 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
-import {
-  HostProcessArguments,
-  HostProcessEnvironment,
-  HostProcessIsExecutable,
-  HostProcessPlatform,
-} from "@t3tools/shared/hostProcess";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -111,10 +106,10 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
               Layer.provide(ServerConfig.layer({ ...config, mode })),
             ),
           ),
-          Effect.provideService(HostProcessArguments, ["node", entry]),
-          Effect.provideService(HostProcessIsExecutable, false),
-          Effect.provideService(HostProcessPlatform, "linux"),
-          Effect.provideService(HostProcessEnvironment, {}),
+          Effect.provideService(HostProcess.Arguments, ["node", entry]),
+          Effect.provideService(HostProcess.IsExecutable, false),
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, {}),
         );
         expect(descriptor.capabilities.serverInstallation).toBeUndefined();
         expect(descriptor.capabilities.serverSelfUpdate).toBeUndefined();

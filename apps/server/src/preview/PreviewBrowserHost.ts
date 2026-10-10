@@ -1,4 +1,4 @@
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -43,7 +43,7 @@ export const diagnoseLaunchFailure = Effect.fn("PreviewBrowserHost.diagnoseLaunc
     if (input.output.includes(NO_SANDBOX_SIGNATURE)) {
       return new PreviewBrowserSandboxError({});
     }
-    if ((yield* HostProcessPlatform) !== "linux") return undefined;
+    if ((yield* HostProcess.Platform) !== "linux") return undefined;
     const libraries = yield* missingLibraries(input.executable);
     return libraries.length === 0 ? undefined : new PreviewBrowserLibrariesError({ libraries });
   },

@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as C from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -13,6 +14,7 @@ import * as Broker from "../../mcp/PreviewAutomationBroker.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import { makePreviewExecutor } from "./PreviewExecutor.ts";
 import * as P from "./PreviewProtocol.ts";
+import { captureRunPromise } from "../../execution/EffectHttpBoundary.ts";
 
 const services = Layer.mergeAll(
   PreviewManager.layer,
@@ -24,6 +26,72 @@ const services = Layer.mergeAll(
   }),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 it.layer(services, { excludeTestServices: true })("sandbox preview execution", (it) => {
+  it.effect.each(["tab", "stream"] as const)(
+    "closing the %s releases its viewers and tolerates late viewer close",
+    (closing) =>
+      Effect.gen(function* () {
+        const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
+        const closed = yield* Deferred.make<void>();
+        const viewerReleased = yield* Deferred.make<void>();
+        let released = 0;
+        const runPromise = yield* captureRunPromise;
+        const executor = yield* makePreviewExecutor({
+          publish: (_session, event) =>
+            typeof event === "object" &&
+            event !== null &&
+            "type" in event &&
+            event.type === "closed"
+              ? runPromise(Deferred.succeed(closed, undefined)).then(() => {})
+              : Promise.resolve(),
+        }).pipe(
+          Effect.provideService(ServerBrowser.ServerBrowser, {
+            attachViewer: () =>
+              Effect.gen(function* () {
+                yield* Effect.addFinalizer(() =>
+                  Effect.sync(() => {
+                    released++;
+                  }).pipe(Effect.andThen(Deferred.succeed(viewerReleased, undefined))),
+                );
+                return { output, input: () => Effect.void };
+              }),
+            answerFileChooser: () => Effect.succeed(false),
+            openDownload: () => Effect.succeed(Option.none()),
+            clearProfile: () => Effect.void,
+            reportProfiles: () => Effect.void,
+          }),
+          Effect.provideService(ServerEnvironment.ServerEnvironment, {
+            getEnvironmentId: Effect.succeed(C.EnvironmentId.make("worker-env")),
+            getDescriptor: Effect.die("unused"),
+          }),
+        );
+        const tab = yield* Schema.decodeUnknownEffect(C.PreviewSessionSnapshot)(
+          yield* executor.execute("preview.open", {
+            threadId: "close-thread",
+            url: "http://localhost:3000",
+            runtime: "server",
+          }),
+        );
+        const viewer = yield* executor.execute("preview.viewerOpen", {
+          threadId: "close-thread",
+          tabId: tab.tabId,
+          maxWidth: 100,
+          maxHeight: 100,
+          quality: 50,
+          canOperate: false,
+        });
+        if (closing === "stream") {
+          yield* Queue.shutdown(output);
+          yield* Deferred.await(viewerReleased);
+          expect(released).toBe(1);
+        }
+        yield* executor.execute("preview.close", { threadId: "close-thread", tabId: tab.tabId });
+        yield* Deferred.await(closed);
+        expect(yield* executor.activity).toEqual({ activeOperations: 0, pendingCallbacks: 0 });
+        expect(released).toBe(1);
+        yield* executor.execute("preview.viewerClose", viewer);
+        expect(released).toBe(1);
+      }),
+  );
   it.effect(
     "forces server tabs and holds native frame acknowledgements until the viewer acks",
     () =>
@@ -43,6 +111,7 @@ it.layer(services, { excludeTestServices: true })("sandbox preview execution", (
           answerFileChooser: () => Effect.succeed(true),
           openDownload: () => Effect.succeed(Option.none()),
           clearProfile: () => Effect.void,
+          reportProfiles: () => Effect.void,
         });
         const executor = yield* makePreviewExecutor({ publish: async () => {} }).pipe(
           Effect.provideService(ServerBrowser.ServerBrowser, browser),
@@ -105,6 +174,7 @@ it.layer(services, { excludeTestServices: true })("sandbox preview execution", (
           answerFileChooser: () => Effect.succeed(false),
           openDownload: () => Effect.succeed(Option.none()),
           clearProfile: () => Effect.void,
+          reportProfiles: () => Effect.void,
         }),
         Effect.provideService(ServerEnvironment.ServerEnvironment, {
           getEnvironmentId: Effect.succeed(C.EnvironmentId.make("worker-env")),

@@ -25,14 +25,14 @@ catalog:
   "@clerk/clerk-js": 6.32.1
   "@clerk/react": 6.16.1
   "@clerk/shared": 4.33.0
-  "@effect/atom-react": 4.0.1
-  "@effect/openapi-generator": 4.0.1
-  "@effect/platform-node": 4.0.1
-  "@effect/platform-node-shared": 4.0.1
-  "@effect/sql-pg": 4.0.1
-  "@effect/sql-sqlite-do": 4.0.1
+  "@effect/atom-react": 4.0.2
+  "@effect/openapi-generator": 4.0.2
+  "@effect/platform-node": 4.0.2
+  "@effect/platform-node-shared": 4.0.2
+  "@effect/sql-pg": 4.0.2
+  "@effect/sql-sqlite-do": 4.0.2
   "@effect/tsgo": 0.46.1
-  "@effect/vitest": 4.0.1
+  "@effect/vitest": 4.0.2
   "@legendapp/list": 3.3.5
   "@noble/curves": 1.9.1
   "@noble/hashes": 1.8.0
@@ -41,9 +41,12 @@ catalog:
   "@tailwindcss/oxide": 4.3.3
   "@tailwindcss/vite": 4.3.3
   "@types/node": 24.12.4
-  effect: 4.0.1
+  "@types/plist": 3.0.5
+  "@types/ws": 8.18.2
+  effect: 4.0.2
   jose: 6.2.2
   lightningcss: 1.33.0
+  plist: 3.1.1
   tailwindcss: 4.3.3
   typescript: 7.0.2
   undici: 8.11.2
@@ -76,15 +79,15 @@ minimumReleaseAgeExclude:
   - "@distilled.cloud/core@1.0.0-rc.13"
   - "@distilled.cloud/neon@1.0.0-rc.13"
   - "@distilled.cloud/planetscale@1.0.0-rc.13"
-  - "@effect/atom-react@4.0.1"
-  - "@effect/openapi-generator@4.0.1"
-  - "@effect/platform-node-shared@4.0.1"
-  - "@effect/platform-node@4.0.1"
-  - "@effect/sql-pg@4.0.1"
-  - "@effect/sql-sqlite-do@4.0.1"
-  - "@effect/vitest@4.0.1"
+  - "@effect/atom-react@4.0.2"
+  - "@effect/openapi-generator@4.0.2"
+  - "@effect/platform-node-shared@4.0.2"
+  - "@effect/platform-node@4.0.2"
+  - "@effect/sql-pg@4.0.2"
+  - "@effect/sql-sqlite-do@4.0.2"
+  - "@effect/vitest@4.0.2"
   - alchemy@2.0.0-beta.80
-  - effect@4.0.1
+  - effect@4.0.2
   - "@legendapp/list@3.3.5"
   - "@anthropic-ai/claude-agent-sdk@0.3.276"
   - "@alchemy.run/cloudflare-runtime@2.0.0-beta.80"
@@ -166,10 +169,13 @@ overrides:
   "@opencode/protocol>effect": "catalog:"
   "@opencode/schema>effect": "catalog:"
   node-abi: 4.33.0
+  # The desktop app installs these without a lockfile when it packages them, so
+  # pin the native passkey code that runs in its main process.
   lightningcss: "catalog:"
   tailwindcss: "catalog:"
   # Ranges from @effect/platform-node, jsdom, unifont, Expo and libsql otherwise
   # settle on two patch releases of each major. Older majors stay as they are.
+  "@types/ws@^8": "catalog:"
   "undici@^8": "catalog:"
   "ws@^8": "catalog:"
   vite: "catalog:"
@@ -185,7 +191,7 @@ packageExtensions:
 
 patchedDependencies:
   alchemy@2.0.0-beta.80: patches/alchemy@2.0.0-beta.80.patch
-  "@effect/vitest@4.0.1": patches/@effect__vitest@4.0.1.patch
+  "@effect/vitest@4.0.2": patches/@effect__vitest@4.0.2.patch
   "@ff-labs/fff-node@0.9.4": patches/@ff-labs__fff-node@0.9.4.patch
   "@legendapp/list@3.3.5": patches/@legendapp__list@3.3.5.patch
   "@opencode/client@2.0.23": patches/@opencode__client@2.0.23.patch
@@ -194,7 +200,7 @@ patchedDependencies:
   # Exports the dependency-light subpaths mobile and the web diff parser import, and keeps
   # measured wrapped-row heights above an edit (fileEditorVirtualization.test.ts).
   "@pierre/diffs@1.5.2": patches/@pierre%2Fdiffs@1.5.2.patch
-  effect@4.0.1: patches/effect@4.0.1.patch
+  effect@4.0.2: patches/effect@4.0.2.patch
   node-pty@1.2.0-beta.15: patches/node-pty@1.2.0-beta.15.patch
 
 peerDependencyRules:

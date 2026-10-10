@@ -5,7 +5,7 @@ import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as C from "@t3tools/contracts";
 import * as A from "@t3tools/provider-core/server/ProviderAdapter";
-import { readMcpProviderSession } from "@t3tools/provider-core/server/mcpSession";
+import type * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as P from "./ProviderProtocol.ts";
 import type { ExecutionEvent } from "../../../../packages/contracts/src/execution.ts";
 import * as Schedule from "effect/Schedule";
@@ -127,6 +127,7 @@ export function createRemoteProviderAdapter(options: {
   instanceId: C.ProviderInstanceId;
   driver: C.ProviderDriverKind;
   client: ExecutionClient;
+  mcpSessions: McpProviderSessions.McpProviderSessions["Service"];
   /** Persist/restore this cursor with central ingestion, not with the provider process. */
   eventCursor?: number;
   attachOnly?: boolean;
@@ -137,7 +138,7 @@ export function createRemoteProviderAdapter(options: {
   ) => Effect.Effect<void, A.ProviderAdapterV2Error>;
   requireRemoteMcpEndpoint?: boolean;
   getEventCursor?: (sessionId: string) => Promise<number>;
-}): A.ProviderAdapterV2Shape {
+}): A.ProviderAdapterV2["Service"] {
   const error = (cause: unknown) =>
     new A.ProviderAdapterProtocolError({
       driver: options.driver,
@@ -146,7 +147,7 @@ export function createRemoteProviderAdapter(options: {
     });
   function configureMcp(threadId: C.ThreadId) {
     return Effect.gen(function* () {
-      const mcp = readMcpProviderSession(threadId);
+      const mcp = yield* options.mcpSessions.read(threadId);
       if (!mcp) return;
       const { capabilities, ...configuration } = mcp;
       const endpoint = options.mcpEndpoint ?? configuration.endpoint;

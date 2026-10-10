@@ -6,23 +6,24 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
-import { ProviderHost } from "@t3tools/provider-core/server/ProviderHost";
+import * as ProviderHostLive from "../provider/ProviderHostLive.ts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import * as AgentScopeLive from "../process/agentScope.ts";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as ServerConfig from "../config.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProviderInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
-import * as AcpRegistryCatalog from "../provider/AcpRegistryCatalog.ts";
-import * as ProviderEventLoggers from "../provider/ProviderEventLoggers.ts";
+import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ModelManifest from "../provider/ModelManifest.ts";
 import * as ResetCreditCoordinator from "../provider/resetCreditCoordinator.ts";
-import * as OpenCodeRuntime from "../provider/opencodeRuntime.ts";
-import * as OpenCodeServerLedger from "../provider/OpenCodeServerLedger.ts";
+import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
+import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
 import * as CodexInstallation from "../provider/CodexInstallation.ts";
 import * as WorkerSettings from "./WorkerSettings.ts";
-import { resolveAttachmentPath } from "../attachmentStore.ts";
 
 export function workerLayers(options: { cwd: string; stateDir: string; port: number }) {
   const config = Layer.effect(
@@ -72,38 +73,20 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
       });
     }),
   );
-  const host = Layer.effect(
-    ProviderHost,
-    Effect.gen(function* () {
-      const config = yield* ServerConfig.ServerConfig;
-      const settings = yield* ServerSettings.ServerSettingsService;
-      return ProviderHost.of({
-        paths: {
-          cwd: config.cwd,
-          baseDir: config.baseDir,
-          stateDir: config.stateDir,
-          providerStatusCacheDir: config.providerStatusCacheDir,
-        },
-        settings: {
-          get: settings.getSettings,
-          changes: settings.streamChanges,
-          subscribe: settings.subscribeChanges,
-        },
-        shouldRunBackgroundWork: () => Effect.succeed(true),
-        resolveAttachmentPath: (attachment) =>
-          resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment }),
-      });
-    }),
-  );
   return Layer.mergeAll(
-    T3ProjectFileLoader.layer,
     ProviderInfrastructure.layer,
-    AcpRegistryCatalog.layer,
-    host,
+    AcpRegistrySupport.layerFromHost,
     ResetCreditCoordinator.layer,
-    OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layer)),
+    OpenCodeRuntime.layer.pipe(
+      Layer.provide(OpenCodeServerLedger.layer({ stateDir: options.stateDir })),
+    ),
     CodexInstallation.CodexInstallation.layer,
   ).pipe(
+    Layer.provideMerge(ProviderHostLive.layerWorker),
+    Layer.provideMerge(T3ProjectFileLoader.layer),
+    Layer.provideMerge(AgentScopeLive.layer),
+    Layer.provideMerge(McpProviderSessions.layer),
+    Layer.provideMerge(ProviderLatestVersions.layer),
     Layer.provideMerge(
       Layer.succeed(
         ProviderEventLoggers.ProviderEventLoggers,
@@ -111,7 +94,9 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
       ),
     ),
     Layer.provideMerge(CredentialSources.layer),
-    Layer.provideMerge(ModelManifest.layer),
+    Layer.provideMerge(
+      ModelManifest.layerModelCatalog.pipe(Layer.provideMerge(ModelManifest.layer)),
+    ),
     Layer.provideMerge(ServerEnvironment.layerIdentity),
     Layer.provideMerge(WorkerSettings.layer),
     Layer.provideMerge(ServerSecretStore.layer),

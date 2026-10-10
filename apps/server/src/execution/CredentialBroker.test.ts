@@ -1,3 +1,4 @@
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 // @effect-diagnostics nodeBuiltinImport:off -- Tests own isolated worker HTTP servers and disk journals.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -94,7 +95,7 @@ it.live(
           }),
       });
       const provider = yield* Effect.gen(function* () {
-        const drivers = yield* makeRemoteDrivers;
+        const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
         const driver = drivers.find((driver) => driver.driverKind === "codex");
         if (!driver) throw new Error("Missing Codex driver");
         return yield* driver.create({

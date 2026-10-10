@@ -14,7 +14,7 @@ import * as RuntimeSchema from "./Schema.ts";
 import * as RemoteTerminals from "./RemoteWorkspaceTerminals.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as NodePtyAdapter from "../terminal/NodePtyAdapter.ts";
-import * as PtyAdapter from "../terminal/PtyAdapter.ts";
+import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 import * as ProcessRunner from "../processRunner.ts";
 import { makeTerminalExecutor } from "./worker/TerminalExecutor.ts";
 import { createExecutionWorker } from "../execution/ExecutionWorker.ts";

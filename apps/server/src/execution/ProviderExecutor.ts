@@ -54,7 +54,7 @@ export class ProviderExecutionError extends Schema.TaggedError<ProviderExecution
 export const makeProviderExecutor = (options: {
   configureMcp?: (config: McpProviderSessionConfig) => void;
   closeMcp?: (threadId: C.ThreadId, instanceId: C.ProviderInstanceId) => void;
-  adapters: ReadonlyMap<C.ProviderInstanceId, A.ProviderAdapterV2Shape>;
+  adapters: ReadonlyMap<C.ProviderInstanceId, A.ProviderAdapterV2["Service"]>;
   publish: (sessionId: string, event: unknown) => Promise<void>;
 }) =>
   Effect.gen(function* () {

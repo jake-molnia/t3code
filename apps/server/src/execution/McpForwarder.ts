@@ -1,11 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Node transport and durable journal boundary, also consumed outside Effect.
 import * as NodeCrypto from "node:crypto";
 import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcpSession";
-import {
-  setMcpProviderSession,
-  clearMcpProviderSession,
-  readMcpProviderSession,
-} from "@t3tools/provider-core/server/mcpSession";
 import { authorized } from "./ExecutionWorker.ts";
 
 /** Session endpoints remain stable while central authorization is replaced after reconnect. */
@@ -46,7 +41,6 @@ export function createMcpForwarder(
         endpoint: new URL(`/mcp/${encodeURIComponent(key)}`, localOrigin).href,
         authorizationHeader: `Bearer ${token}`,
       };
-      setMcpProviderSession(local);
       return local;
     },
     upstreamForProvider(instanceId: McpProviderSessionConfig["providerInstanceId"]) {
@@ -64,16 +58,10 @@ export function createMcpForwarder(
           (instanceId === undefined || session.config.providerInstanceId === instanceId)
         )
           sessions.delete(key);
-      if (
-        instanceId === undefined ||
-        readMcpProviderSession(threadId)?.providerInstanceId === instanceId
-      )
-        clearMcpProviderSession(threadId);
     },
     remove(sessionId: string) {
       for (const [key, session] of sessions) {
         if (session.config.providerSessionId !== sessionId) continue;
-        clearMcpProviderSession(session.config.threadId);
         sessions.delete(key);
       }
     },

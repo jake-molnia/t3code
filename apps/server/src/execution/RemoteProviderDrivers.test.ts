@@ -1,3 +1,4 @@
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as DateTime from "effect/DateTime";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as Schema from "effect/Schema";
@@ -49,7 +50,7 @@ it.live(
       );
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const drivers = yield* makeRemoteDrivers;
+          const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
           const driver = drivers.find((driver) => driver.driverKind === "codex");
           if (!driver) throw new Error("Codex driver missing");
           const instance = yield* driver.create({
@@ -95,7 +96,7 @@ const unavailableRuntime = Layer.succeed(
 
 it.live("does not expose invented central auth controllers for CLI-owned accounts", () =>
   Effect.gen(function* () {
-    const drivers = yield* makeRemoteDrivers;
+    const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
     for (const kind of ["claudeAgent", "grok", "opencode", "pi", "muse"]) {
       const driver = drivers.find((driver) => driver.driverKind === kind);
       expect(driver).toBeDefined();
@@ -185,7 +186,7 @@ it.live(
         { name: "CURSOR_BACKEND_URL", value: "https://example.invalid", sensitive: false },
       ];
       yield* Effect.gen(function* () {
-        const drivers = yield* makeRemoteDrivers;
+        const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
         const driver = drivers.find((driver) => driver.driverKind === "cursor");
         if (!driver) throw new Error("Missing Cursor");
         const instance = yield* driver.create({
@@ -270,7 +271,7 @@ it.live(
       let stopped = false;
       let allocations = 0;
       yield* Effect.gen(function* () {
-        const drivers = yield* makeRemoteDrivers;
+        const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
         const driver = drivers.find((entry) => entry.driverKind === "cursor");
         if (!driver) throw new Error("Missing Cursor");
         const instance = yield* driver.create({
@@ -347,7 +348,7 @@ it.live.each(["live", "stopped", "replaced"] as const)(
         },
       });
       yield* Effect.gen(function* () {
-        const drivers = yield* makeRemoteDrivers;
+        const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
         const driver = drivers.find((entry) => entry.driverKind === "grok");
         if (!driver) throw new Error("Missing Grok");
         const instanceId = C.ProviderInstanceId.make("grok");

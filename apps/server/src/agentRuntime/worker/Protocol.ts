@@ -9,12 +9,19 @@ export const Checkpoint = Schema.Struct({
   cwd: Schema.NonEmptyString,
   checkpointRef: C.CheckpointRef,
 });
-export const CheckpointDiff = Schema.Struct({
+export const CheckpointRange = Schema.Struct({
   cwd: Schema.NonEmptyString,
   fromCheckpointRef: C.CheckpointRef,
   toCheckpointRef: C.CheckpointRef,
-  ignoreWhitespace: Schema.Boolean,
 });
+export const CheckpointDiff = Schema.Struct({
+  ...CheckpointRange.fields,
+  ignoreWhitespace: Schema.Boolean,
+  fallbackFromToHead: Schema.optionalKey(Schema.Boolean),
+  format: Schema.optionalKey(Schema.Literals(["patch", "numstat"])),
+  filePaths: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+export const AuthoredPaths = Schema.NullOr(Schema.Array(Schema.String));
 export const Script = Schema.Struct({
   cwd: Schema.NonEmptyString,
   operationId: Schema.NonEmptyString,

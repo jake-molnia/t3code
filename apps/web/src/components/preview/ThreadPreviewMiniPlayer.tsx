@@ -44,6 +44,7 @@ import { useChatCanvas } from "../chat/ChatCanvasContext";
 
 import type { PreviewStreamViewport } from "@t3tools/client-runtime/preview/server-browser-stream";
 import { previewBridge } from "./previewBridge";
+import { showPreviewPopup } from "./showPreviewPopup";
 import {
   NO_PREVIEW_MINI_PLAYER_OBSTACLES,
   PREVIEW_MINI_PLAYER_CORNER_RADIUS,
@@ -212,6 +213,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
               followSize={false}
               controlPosition="bottom"
               onViewport={setStreamViewport}
+              onPopup={(popupTabId) => showPreviewPopup(threadRef, popupTabId, "floating")}
               className="size-full"
             />
           </div>

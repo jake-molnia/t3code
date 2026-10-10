@@ -1,3 +1,4 @@
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { makeGitDriverExecutor } from "../agentRuntime/worker/GitDriverExecutor.ts";
 import { makeMetadataExecutor } from "../agentRuntime/worker/MetadataExecutor.ts";
 import { makeAssetExecutor } from "../agentRuntime/worker/AssetExecutor.ts";
@@ -49,6 +50,7 @@ const program = Effect.gen(function* () {
   };
   const run = Effect.gen(function* () {
     const providers = yield* WorkerProviders.make;
+    const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
     const journal = yield* Effect.acquireRelease(
       Effect.tryPromise(() =>
         openWorkerJournal(`${stateDir}/worker.jsonl`, { incarnation: identity.incarnation }),
@@ -60,12 +62,16 @@ const program = Effect.gen(function* () {
     const executor = yield* makeProviderExecutor({
       adapters: providers.adapters,
       configureMcp: (config) => {
-        forwarder.configure(config);
+        Effect.runSync(mcpSessions.set(forwarder.configure(config)));
         providers.configureCredentialBroker(config.providerInstanceId, () =>
           forwarder.upstreamForProvider(config.providerInstanceId),
         );
       },
-      closeMcp: (threadId, instanceId) => forwarder.removeThread(threadId, instanceId),
+      closeMcp: (threadId, instanceId) => {
+        forwarder.removeThread(threadId, instanceId);
+        const current = Effect.runSync(mcpSessions.read(threadId));
+        if (current?.providerInstanceId === instanceId) Effect.runSync(mcpSessions.clear(threadId));
+      },
       publish: (sessionId, event) => {
         if (!worker) return Promise.reject(new Error("Worker not initialized"));
         return worker.publish(sessionId, event);

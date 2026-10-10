@@ -428,6 +428,15 @@ export const makeWorkspaceExecutor = (options: {
               toCheckpointRef: yield* safeCheckpoint(input.toCheckpointRef),
             });
           }
+          case "git.listAuthoredPaths": {
+            const input = yield* Schema.decodeUnknownEffect(P.CheckpointRange)(raw);
+            const paths = yield* checkpoints.listAuthoredPaths({
+              cwd: yield* resolve(input.cwd),
+              fromCheckpointRef: yield* safeCheckpoint(input.fromCheckpointRef),
+              toCheckpointRef: yield* safeCheckpoint(input.toCheckpointRef),
+            });
+            return paths === null ? null : Array.from(paths);
+          }
           case "scripts.settle":
           case "scripts.run":
             return yield* script(yield* Schema.decodeUnknownEffect(P.Script)(raw));

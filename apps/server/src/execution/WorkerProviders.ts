@@ -1,10 +1,11 @@
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { filterApertureSnapshot } from "./ApertureCatalog.ts";
 import { deploymentHarnessDefaults } from "./HarnessDefaults.ts";
 import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CredentialSources from "./credentialSources.ts";
-import * as CursorCredentialStore from "../provider/CursorCredentialStore.ts";
+import * as CursorCredentialStore from "@t3tools/provider-cursor/server/credentialStore";
 import * as C from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -15,7 +16,7 @@ import * as Registry from "../provider/ProviderInstanceRegistry.ts";
 import * as Mutator from "../provider/ProviderInstanceRegistryMutator.ts";
 import * as Settings from "../serverSettings.ts";
 import { TextGenerationPolicy } from "@t3tools/provider-core/server/textGenerationPolicy";
-import type { ProviderAdapterV2Shape } from "@t3tools/provider-core/server/ProviderAdapter";
+import type { ProviderAdapterV2 } from "@t3tools/provider-core/server/ProviderAdapter";
 
 export const ConfigureProvider = Schema.Struct({
   instanceId: C.ProviderInstanceId,
@@ -88,6 +89,7 @@ export class WorkerProviderError extends Schema.TaggedError<WorkerProviderError>
 ) {}
 
 export const make = Effect.gen(function* () {
+  const providerHost = yield* ProviderHost.ProviderHost;
   const credentialContext = yield* Effect.context<
     Crypto.Crypto | FileSystem.FileSystem | ServerSecretStore.ServerSecretStore
   >();
@@ -98,7 +100,7 @@ export const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
   const normalizeHarness = yield* Effect.try(() => deploymentHarnessDefaults());
   const configurations: Record<string, C.ProviderInstanceConfig> = {};
-  const adapters = new Map<C.ProviderInstanceId, ProviderAdapterV2Shape>();
+  const adapters = new Map<C.ProviderInstanceId, ProviderAdapterV2["Service"]>();
   const lock = yield* Semaphore.make(1);
   const execute = (method: string, raw: unknown) =>
     Effect.gen(function* () {
@@ -138,7 +140,7 @@ export const make = Effect.gen(function* () {
         if (instance.driverKind === "cursor") {
           const credentials = yield* CursorCredentialStore.makeCursorCredentialStore(
             command.instanceId,
-          );
+          ).pipe(Effect.provideService(ProviderHost.ProviderHost, providerHost));
           return (yield* Effect.tryPromise(() => credentials.store.load())) ?? null;
         }
         return yield* new WorkerProviderError({ operation: "credentials_unsupported" });
@@ -148,7 +150,7 @@ export const make = Effect.gen(function* () {
           return yield* new WorkerProviderError({ operation: "credentials_unsupported" });
         const credentials = yield* CursorCredentialStore.makeCursorCredentialStore(
           command.instanceId,
-        );
+        ).pipe(Effect.provideService(ProviderHost.ProviderHost, providerHost));
         const value = yield* Schema.decodeUnknownEffect(
           Schema.NullOr(CursorCredentialStore.ExecutionCredentials),
         )(command.input);

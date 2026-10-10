@@ -1,3 +1,4 @@
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { captureRunPromise } from "./EffectHttpBoundary.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 // @effect-diagnostics nodeBuiltinImport:off -- Tests own real HTTP worker/control endpoints and a temporary SQLite database.
@@ -42,6 +43,7 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
         const root = yield* checkpointWorkspace("remote-recovery");
         const dbPath = `${root}/central.sqlite`;
         const databaseContext = yield* Layer.build(
@@ -233,6 +235,7 @@ it.live(
                       client.identity,
                     );
                     return yield* createRemoteProviderAdapter({
+                      mcpSessions,
                       instanceId: native.instanceId,
                       driver: native.driver,
                       client,
@@ -416,6 +419,13 @@ it.live(
           ),
         );
       }),
-    ).pipe(Effect.provide(IdAllocator.layer.pipe(Layer.provideMerge(NodeServices.layer)))),
+    ).pipe(
+      Effect.provide(
+        Layer.merge(
+          IdAllocator.layer.pipe(Layer.provideMerge(NodeServices.layer)),
+          McpProviderSessions.layer,
+        ),
+      ),
+    ),
   { timeout: 30000 },
 );

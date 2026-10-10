@@ -1,3 +1,5 @@
+import * as Layer from "effect/Layer";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { captureRunPromise } from "./EffectHttpBoundary.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Two isolated HTTP workers exercise the placement decision.
 import * as NodeFSP from "node:fs/promises";
@@ -8,7 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as DateTime from "effect/DateTime";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
-import type { ProviderAdapterV2Shape } from "@t3tools/provider-core/server/ProviderAdapter";
+import type { ProviderAdapterV2 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as C from "@t3tools/contracts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { providerSessionIdFor, SessionPlacement } from "./SessionPlacement.ts";
@@ -20,7 +22,7 @@ import { createRemoteProviderAdapter } from "./RemoteProviderAdapter.ts";
 import { listenWorker } from "./WorkerHttpServer.ts";
 
 // The external provider advertises multiplexing. Placement must still isolate app threads.
-const native: ProviderAdapterV2Shape = {
+const native: ProviderAdapterV2["Service"] = {
   instanceId: C.ProviderInstanceId.make("codex"),
   driver: C.ProviderDriverKind.make("codex"),
   getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
@@ -114,6 +116,7 @@ it.live("multiplexing providers get independent sessions in separate top-level w
           });
           ids.push(providerSessionId);
           const remote = createRemoteProviderAdapter({
+            mcpSessions: yield* McpProviderSessions.McpProviderSessions,
             instanceId: native.instanceId,
             driver: native.driver,
             client,
@@ -135,7 +138,7 @@ it.live("multiplexing providers get independent sessions in separate top-level w
       }),
     ).pipe(
       Effect.provideService(SessionPlacement, "per-thread"),
-      Effect.provide(IdAllocator.layer),
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
     );
   }),
 );

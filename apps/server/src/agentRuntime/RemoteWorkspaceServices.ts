@@ -6,6 +6,9 @@ import * as WorkspaceFileSystem from "../workspace/WorkspaceFileSystem.ts";
 import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as WorkspaceRouting from "./WorkspaceRouting.ts";
+import { AuthoredPaths } from "./worker/Protocol.ts";
+
+const decodeAuthoredPaths = Schema.decodeUnknownEffect(AuthoredPaths);
 
 export const fileSystemLayer = Layer.effect(
   WorkspaceFileSystem.WorkspaceFileSystem,
@@ -105,6 +108,12 @@ export const checkpointLayer = Layer.effect(
         detail: `Remote checkpoint operation failed: ${String(cause)}`,
       });
     return CheckpointStore.CheckpointStore.of({
+      listAuthoredPaths: (input) =>
+        routes.call({ cwd: input.cwd, method: "git.listAuthoredPaths", input: { ...input } }).pipe(
+          Effect.flatMap(decodeAuthoredPaths),
+          Effect.map((paths) => (paths === null ? null : new Set(paths))),
+          Effect.mapError(failure("listAuthoredPaths")),
+        ),
       isGitRepository: (cwd) =>
         routes
           .call({ cwd, method: "git.isRepository", input: {} })

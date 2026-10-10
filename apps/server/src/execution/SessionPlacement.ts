@@ -1,5 +1,5 @@
 import type { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
-import type { ProviderAdapterV2Shape } from "@t3tools/provider-core/server/ProviderAdapter";
+import type { ProviderAdapterV2 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -11,7 +11,7 @@ export const SessionPlacement = Context.Reference<"shared-when-supported" | "per
 );
 
 export const providerSessionIdFor = (input: {
-  adapter: ProviderAdapterV2Shape;
+  adapter: ProviderAdapterV2["Service"];
   providerInstanceId: ProviderInstanceId;
   threadId: ThreadId;
 }) =>

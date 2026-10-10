@@ -12,8 +12,10 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as SecretStore from "../auth/ServerSecretStore.ts";
-import * as Cursor from "../provider/CursorCredentialStore.ts";
+import * as Cursor from "@t3tools/provider-cursor/server/credentialStore";
 import * as Credentials from "./credentialSources.ts";
+import * as ProviderHostLive from "../provider/ProviderHostLive.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 it.effect(
   "shares a Cursor SDK login between isolated secret stores and propagates logout without touching another account",
@@ -27,16 +29,26 @@ it.effect(
         ServerConfig.layerTest(process.cwd(), { prefix: "credential-root-" }),
       );
       const rootSecrets = yield* SecretStore.make.pipe(Effect.provide(rootConfig));
+      const ownerHost = yield* Layer.build(
+        ProviderHostLive.layerWorker.pipe(
+          Layer.provide(ServerSettings.layerTest()),
+          Layer.provide(Layer.succeed(SecretStore.ServerSecretStore, ownerSecrets)),
+          Layer.provide(Layer.succeedContext(ownerConfig)),
+        ),
+      );
+      const rootHost = yield* Layer.build(
+        ProviderHostLive.layerWorker.pipe(
+          Layer.provide(ServerSettings.layerTest()),
+          Layer.provide(Layer.succeed(SecretStore.ServerSecretStore, rootSecrets)),
+          Layer.provide(Layer.succeedContext(rootConfig)),
+        ),
+      );
       const id = C.ProviderInstanceId.make("cursor-personal");
-      const owner = yield* Cursor.makeCursorCredentialStore(id).pipe(
-        Effect.provideService(SecretStore.ServerSecretStore, ownerSecrets),
-      );
-      const root = yield* Cursor.makeCursorCredentialStore(id).pipe(
-        Effect.provideService(SecretStore.ServerSecretStore, rootSecrets),
-      );
+      const owner = yield* Cursor.makeCursorCredentialStore(id).pipe(Effect.provide(ownerHost));
+      const root = yield* Cursor.makeCursorCredentialStore(id).pipe(Effect.provide(rootHost));
       const other = yield* Cursor.makeCursorCredentialStore(
         C.ProviderInstanceId.make("cursor-work"),
-      ).pipe(Effect.provideService(SecretStore.ServerSecretStore, rootSecrets));
+      ).pipe(Effect.provide(rootHost));
       const value = {
         version: 1 as const,
         backendUrl: "https://api.cursor.com",

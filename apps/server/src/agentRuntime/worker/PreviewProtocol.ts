@@ -25,6 +25,7 @@ export const ViewerOutput = Schema.Union([
   }),
   Schema.TaggedStruct("probe", { x: Schema.Number, y: Schema.Number, editable: Schema.Boolean }),
   Schema.TaggedStruct("clipboard", { text: Schema.String }),
+  Schema.TaggedStruct("popup", { tabId: C.PreviewTabId }),
   Schema.TaggedStruct("pointer", {
     phase: Schema.Literals(["move", "click"]),
     x: Schema.Number,

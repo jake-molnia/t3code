@@ -13,6 +13,7 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as Routing from "./WorkspaceRouting.ts";
 import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import * as P from "./worker/GitDriverProtocol.ts";
+import { AuthoredPaths } from "./worker/Protocol.ts";
 
 export class GitActionScope extends Context.Reference<{
   readonly id: string;
@@ -390,6 +391,10 @@ export const registryLayer = Layer.effect(
       getDiffPreview: (input) =>
         invoke("getDiffPreview", { ...input }, P.Vcs.getDiffPreview.output),
       checkpoints: {
+        listAuthoredPaths: (input) =>
+          checkpoint("git.listAuthoredPaths", { ...input }, AuthoredPaths).pipe(
+            Effect.map((paths) => (paths === null ? null : new Set(paths))),
+          ),
         captureCheckpoint: (input) =>
           checkpoint("git.captureCheckpoint", { ...input }, Schema.Unknown).pipe(Effect.asVoid),
         restoreCheckpoint: (input) => checkpoint("git.restore", { ...input }, Schema.Boolean),

@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as C from "@t3tools/contracts";
 import * as Base64 from "effect/encoding/Base64";
 import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
@@ -33,32 +34,59 @@ export const makePreviewExecutor = (options: {
     const environmentId = yield* environment.getEnvironmentId;
     const crypto = yield* Crypto.Crypto;
     const fs = yield* FileSystem.FileSystem;
+    const executorScope = yield* Effect.scope;
     const tabs = new Set<string>();
     const viewers = new Map<
       string,
       {
         viewer: ServerBrowser.ServerBrowserViewer;
+        tabKey: string;
+        closed: Deferred.Deferred<void>;
         scope: Scope.Closeable;
         acks: Map<number, Effect.Effect<void>>;
         sequence: number;
       }
     >();
+    const closeViewer = (viewerId: string) =>
+      Effect.gen(function* () {
+        const value = viewers.get(viewerId);
+        if (!value) return;
+        viewers.delete(viewerId);
+        yield* Deferred.succeed(value.closed, undefined);
+        const acks = Array.from(value.acks.values());
+        value.acks.clear();
+        for (const ack of acks) yield* ack.pipe(Effect.ignore);
+        const queued = yield* Queue.takeBetween(
+          value.viewer.output,
+          0,
+          Number.MAX_SAFE_INTEGER,
+        ).pipe(Effect.exit);
+        if (Exit.isSuccess(queued))
+          for (const item of queued.value)
+            if (item._tag === "frame") yield* item.ack.pipe(Effect.ignore);
+        yield* Scope.close(value.scope, Exit.void);
+      }).pipe(Effect.uninterruptible);
     const subscription = yield* manager.subscribeEvents;
     yield* Stream.fromSubscription(subscription).pipe(
       Stream.runForEach((event) =>
         Effect.gen(function* () {
           const key = `${event.threadId}\0${event.tabId}`;
-          if (event.type === "closed") tabs.delete(key);
-          else tabs.add(key);
+          if (event.type === "closed") {
+            tabs.delete(key);
+            for (const [viewerId, value] of viewers)
+              if (value.tabKey === key) yield* closeViewer(viewerId);
+          } else tabs.add(key);
           yield* Effect.promise(() => options.publish(`preview:${event.threadId}`, event));
         }),
       ),
       Effect.forkScoped,
     );
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(viewers.values(), (value) => Scope.close(value.scope, Exit.void), {
-        discard: true,
-      }),
+      Effect.suspend(() =>
+        Effect.forEach(Array.from(viewers.keys()), closeViewer, {
+          discard: true,
+        }),
+      ),
     );
     const lookupViewer = (id: string) =>
       Effect.gen(function* () {
@@ -130,6 +158,11 @@ export const makePreviewExecutor = (options: {
               (yield* Schema.decodeUnknownEffect(C.PreviewClearProfileInput)(raw)).profileId,
             );
             return null;
+          case "preview.reportProfiles":
+            yield* browser.reportProfiles(
+              yield* Schema.decodeUnknownEffect(C.PreviewReportProfilesInput)(raw),
+            );
+            return null;
           case "preview.automation": {
             const { request } = yield* Schema.decodeUnknownEffect(P.Automation)(raw);
             return yield* broker
@@ -192,16 +225,27 @@ export const makePreviewExecutor = (options: {
               Effect.onError(() => Scope.close(scope, Exit.void)),
             );
             const viewerId = yield* crypto.randomUUIDv4;
-            viewers.set(viewerId, { viewer, scope, acks: new Map(), sequence: 0 });
+            const closed = yield* Deferred.make<void>();
+            viewers.set(viewerId, {
+              viewer,
+              scope,
+              closed,
+              tabKey: `${input.threadId}\0${input.tabId}`,
+              acks: new Map(),
+              sequence: 0,
+            });
+            yield* Queue.await(viewer.output).pipe(
+              Effect.ignoreCause,
+              Effect.onExit(() =>
+                closeViewer(viewerId).pipe(Effect.forkIn(executorScope), Effect.asVoid),
+              ),
+              Effect.forkIn(scope),
+            );
             return { viewerId };
           }
           case "preview.viewerClose": {
             const { viewerId } = yield* Schema.decodeUnknownEffect(P.ViewerRef)(raw);
-            const viewer = viewers.get(viewerId);
-            if (viewer) {
-              viewers.delete(viewerId);
-              yield* Scope.close(viewer.scope, Exit.void);
-            }
+            yield* closeViewer(viewerId);
             return null;
           }
           case "preview.viewerInput": {
@@ -222,7 +266,9 @@ export const makePreviewExecutor = (options: {
           case "preview.viewerPoll": {
             const input = yield* Schema.decodeUnknownEffect(P.ViewerRef)(raw);
             const viewer = yield* lookupViewer(input.viewerId);
-            const outputs = yield* Queue.takeAll(viewer.viewer.output);
+            const outputs = yield* Queue.takeAll(viewer.viewer.output).pipe(
+              Effect.raceFirst(Deferred.await(viewer.closed).pipe(Effect.as([]))),
+            );
             const batch: Array<typeof P.ViewerOutput.Type> = [];
             for (const output of outputs) {
               if (output._tag === "frame") {
@@ -235,6 +281,8 @@ export const makePreviewExecutor = (options: {
                 batch.push({ _tag: "frame", data: Base64.encode(output.data), ackId });
               } else batch.push(output);
             }
+            if (batch.some((output) => output._tag === "gone" || output._tag === "reconnect"))
+              yield* closeViewer(input.viewerId);
             return batch;
           }
           default:

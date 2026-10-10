@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as RuntimeClient from "./RuntimeClient.ts";
@@ -47,6 +48,32 @@ const layerCore = Layer.effect(
     const events = yield* PubSub.unbounded<C.PreviewEvent>();
     const watchers = new Set<string>();
     const sessions = new Map<string, C.PreviewSessionSnapshot>();
+    const profileLock = yield* Semaphore.make(1);
+    let reportedProfiles: C.PreviewReportProfilesInput | undefined;
+    let profileRevision = 0;
+    const profileVersions = new Map<string, { incarnation: string; revision: number }>();
+    const syncProfiles = (client: ExecutionClient) =>
+      Effect.gen(function* () {
+        const input = reportedProfiles;
+        if (input === undefined) return;
+        const key = client.identity.workspaceId;
+        const previous = profileVersions.get(key);
+        if (
+          previous?.incarnation === client.identity.incarnation &&
+          previous.revision === profileRevision
+        )
+          return;
+        yield* Effect.tryPromise(() => client.call("preview.reportProfiles", input));
+        profileVersions.delete(key);
+        profileVersions.set(key, {
+          incarnation: client.identity.incarnation,
+          revision: profileRevision,
+        });
+        if (profileVersions.size > 256) {
+          const oldest = profileVersions.keys().next().value;
+          if (oldest !== undefined) profileVersions.delete(oldest);
+        }
+      });
     const identityKey = (threadId: string, tabId: string) => `${threadId}\0${tabId}`;
     const publish = (event: C.PreviewEvent) =>
       Effect.gen(function* () {
@@ -149,7 +176,7 @@ const layerCore = Layer.effect(
         if (current.kind === "stopped")
           return yield* new C.PreviewSessionLookupError({ threadId, tabId: "unavailable" });
         return current.client;
-      });
+      }).pipe(Effect.tap((client) => profileLock.withPermits(1)(syncProfiles(client))));
     const invoke = <A, I>(
       method: string,
       input: { threadId: string; tabId?: string | undefined } & Readonly<Record<string, unknown>>,
@@ -204,6 +231,21 @@ const layerCore = Layer.effect(
       subscribeEvents: PubSub.subscribe(events),
     });
     const browser = ServerBrowser.ServerBrowser.of({
+      reportProfiles: (input) =>
+        profileLock.withPermits(1)(
+          Effect.gen(function* () {
+            reportedProfiles = input;
+            profileRevision++;
+            for (const workspaceId of Array.from(profileVersions.keys())) {
+              yield* runtime.observeWorkspace(workspaceId).pipe(
+                Effect.flatMap((current) =>
+                  current.kind === "running" ? syncProfiles(current.client) : Effect.void,
+                ),
+                Effect.ignoreCause({ log: true }),
+              );
+            }
+          }),
+        ),
       attachViewer: (input) =>
         Effect.gen(function* () {
           const client = yield* clientFor(input.threadId, false);
@@ -365,6 +407,7 @@ const layerCore = Layer.effect(
       invoke: <A = unknown>(request: Broker.PreviewAutomationInvokeInput) =>
         Effect.gen(function* () {
           const client = yield* runtime.forThread(request.scope.thread.threadId);
+          yield* profileLock.withPermits(1)(syncProfiles(client));
           const bridge = yield* bridgeFor(client, request.scope.environmentId);
           const value = yield* bridge.invoke<A>(request);
           yield* watch(request.scope.thread.threadId);

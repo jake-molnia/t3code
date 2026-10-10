@@ -24,6 +24,7 @@ import { openWorkerJournal } from "../execution/WorkerJournal.ts";
 import { createExecutionWorker } from "../execution/ExecutionWorker.ts";
 import { createExecutionClient } from "../execution/ExecutionClient.ts";
 import { listenWorker } from "../execution/WorkerHttpServer.ts";
+import { captureRunPromise } from "../execution/EffectHttpBoundary.ts";
 
 const layer = Layer.mergeAll(
   PreviewManager.layer,
@@ -41,6 +42,7 @@ it.layer(layer, { excludeTestServices: true })("remote browser transport", (it) 
         const root = yield* fs.makeTempDirectoryScoped({ prefix: "preview-worker-" });
         const frames = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>({ capacity: 16 });
         let acked = 0;
+        const profiles: C.PreviewReportProfilesInput[] = [];
         const manager = yield* PreviewManager.PreviewManager;
         const nativeBroker = yield* Broker.PreviewAutomationBroker;
         const browser = ServerBrowser.ServerBrowser.of({
@@ -48,6 +50,10 @@ it.layer(layer, { excludeTestServices: true })("remote browser transport", (it) 
           answerFileChooser: () => Effect.succeed(true),
           openDownload: () => Effect.succeed(Option.none()),
           clearProfile: () => Effect.void,
+          reportProfiles: (input) =>
+            Effect.sync(() => {
+              profiles.push(input);
+            }),
         });
         const hostReady = yield* Deferred.make<void>();
         const host = yield* nativeBroker.connect(
@@ -78,6 +84,7 @@ it.layer(layer, { excludeTestServices: true })("remote browser transport", (it) 
           (value) => Effect.promise(() => value.close()),
         );
         let worker: ReturnType<typeof createExecutionWorker> | undefined;
+        const runPromise = yield* captureRunPromise;
         const executor = yield* makePreviewExecutor({
           publish: (sessionId, event) =>
             worker
@@ -108,8 +115,8 @@ it.layer(layer, { excludeTestServices: true })("remote browser transport", (it) 
           identity,
           token,
           journal,
-          execute: (method, input) => Effect.runPromise(executor.execute(method, input)),
-          activity: () => Effect.runPromise(executor.activity),
+          execute: (method, input) => runPromise(executor.execute(method, input)),
+          activity: () => runPromise(executor.activity),
         });
         const server = yield* Effect.acquireRelease(
           Effect.tryPromise(() =>
@@ -145,6 +152,8 @@ it.layer(layer, { excludeTestServices: true })("remote browser transport", (it) 
         const remoteManager = Context.get(remoteContext, PreviewManager.PreviewManager);
         const remoteBrowser = Context.get(remoteContext, ServerBrowser.ServerBrowser);
         const remoteBroker = Context.get(remoteContext, Broker.PreviewAutomationBroker);
+        yield* remoteBrowser.reportProfiles({ profiles: [], defaultProfileId: "incognito" });
+        expect(profiles).toHaveLength(0);
         const tab = yield* remoteManager.open({
           threadId: C.ThreadId.make("thread"),
           url: "http://localhost:3000",
@@ -153,6 +162,9 @@ it.layer(layer, { excludeTestServices: true })("remote browser transport", (it) 
         expect(
           (yield* manager.list({ threadId: C.ThreadId.make("thread") })).sessions[0]?.runtime,
         ).toBe("server");
+        expect(profiles).toEqual([{ profiles: [], defaultProfileId: "incognito" }]);
+        yield* remoteBrowser.reportProfiles({ profiles: [], defaultProfileId: "default" });
+        expect(profiles).toHaveLength(2);
         const viewer = yield* remoteBrowser.attachViewer({
           threadId: "thread",
           tabId: tab.tabId,
@@ -176,6 +188,11 @@ it.layer(layer, { excludeTestServices: true })("remote browser transport", (it) 
         yield* frame.ack;
         expect(acked).toBe(1);
         expect(journal.operations.size).toBe(before);
+        yield* Queue.offer(frames, { _tag: "popup", tabId: "popup-tab" });
+        expect(yield* Queue.take(viewer.output).pipe(Effect.timeout("5 seconds"))).toEqual({
+          _tag: "popup",
+          tabId: "popup-tab",
+        });
         const result = yield* remoteBroker.invoke({
           scope: {
             environmentId: C.EnvironmentId.make("central-env"),

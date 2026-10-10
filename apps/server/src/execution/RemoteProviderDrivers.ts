@@ -1,3 +1,4 @@
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { credentialPolicy, applyCredentialPolicy } from "./credentialPolicy.ts";
 import * as AttachmentStaging from "../agentRuntime/AttachmentStaging.ts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
@@ -37,6 +38,7 @@ const encodeRpcValueSync4 = Schema.encodeUnknownSync(Schema.toCodecJson(TitleInp
 /** Keep upstream driver schemas and metadata; replace only their execution factory. */
 export const makeRemoteDrivers = Effect.gen(function* () {
   const runtime = yield* Runtime.RuntimeClient;
+  const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const settings = yield* Settings.ServerSettingsService;
   const workspaceRouting = yield* Effect.serviceOption(WorkspaceRouting.WorkspaceRouting);
   const attachments = yield* Effect.serviceOption(AttachmentStaging.AttachmentStaging);
@@ -140,6 +142,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
         );
         const adapter = (client: ExecutionClient, attachOnly = false) =>
           createRemoteProviderAdapter({
+            mcpSessions,
             instanceId,
             driver: driver.driverKind,
             client,
@@ -157,7 +160,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
             getEventCursor: (sessionId) =>
               runPromise(runtime.getEventCursor(client.identity, sessionId)),
           });
-        const orchestrationAdapter: A.ProviderAdapterV2Shape = {
+        const orchestrationAdapter: A.ProviderAdapterV2["Service"] = {
           instanceId,
           driver: driver.driverKind,
           getCapabilities: () =>

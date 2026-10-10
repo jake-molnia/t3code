@@ -1,4 +1,4 @@
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -13,7 +13,7 @@ export const makeTerminalExecutor = <E, R>(options: {
 }) =>
   Effect.gen(function* () {
     const terminals = yield* TerminalManager.TerminalManager;
-    const environment = yield* HostProcessEnvironment;
+    const environment = yield* HostProcess.Environment;
     const desktopEnvironment = (input: Readonly<Record<string, string>> | undefined) => {
       const env = { ...input };
       // Desktop processes belong to this worker, never to the requesting server or browser.

@@ -17,7 +17,7 @@ import * as VcsProcess from "../../vcs/VcsProcess.ts";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
 import * as NodePtyAdapter from "../../terminal/NodePtyAdapter.ts";
-import * as PtyAdapter from "../../terminal/PtyAdapter.ts";
+import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 
 const terminals = Layer.effect(
   TerminalManager.TerminalManager,

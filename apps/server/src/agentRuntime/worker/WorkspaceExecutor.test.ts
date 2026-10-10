@@ -308,7 +308,38 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
       const first = yield* Schema.decodeUnknownEffect(Oid)(
         yield* worker.execute("git.captureCheckpoint", input),
       );
+      expect(
+        yield* worker.execute("git.listAuthoredPaths", {
+          cwd: "repo",
+          fromCheckpointRef: input.checkpointRef,
+          toCheckpointRef: input.checkpointRef,
+        }),
+      ).toBeNull();
       yield* fs.writeFileString(path.join(cwd, "file.txt"), "later edit");
+      yield* git.execute({
+        operation: "test.commit",
+        cwd,
+        args: ["commit", "-am", "authored change"],
+      });
+      const nextRef = "refs/t3/test/authored";
+      yield* worker.execute("git.captureCheckpoint", { cwd: "repo", checkpointRef: nextRef });
+      expect(
+        yield* worker.execute("git.listAuthoredPaths", {
+          cwd: "repo",
+          fromCheckpointRef: input.checkpointRef,
+          toCheckpointRef: nextRef,
+        }),
+      ).toEqual(["file.txt"]);
+      expect(
+        yield* worker.execute("git.diffCheckpoints", {
+          cwd: "repo",
+          fromCheckpointRef: input.checkpointRef,
+          toCheckpointRef: nextRef,
+          ignoreWhitespace: false,
+          format: "numstat",
+          filePaths: [],
+        }),
+      ).toBe("");
       const retry = yield* Schema.decodeUnknownEffect(Oid)(
         yield* worker.execute("git.captureCheckpoint", input),
       );
