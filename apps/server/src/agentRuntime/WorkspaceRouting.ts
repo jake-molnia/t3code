@@ -35,7 +35,15 @@ export class WorkspaceRouting extends Context.Service<
   WorkspaceRouting,
   {
     readonly enabled: boolean;
+    /** Planned independent root, including before the thread exists. */
     readonly describeThread: (
+      threadId: ThreadId,
+    ) => Effect.Effect<
+      { workspaceId: string; virtualCwd: string; relativeCwd: string },
+      WorkspaceRoutingError
+    >;
+    /** Existing durable binding; descendants resolve their parent's workspace. */
+    readonly describeBoundThread: (
       threadId: ThreadId,
     ) => Effect.Effect<
       { workspaceId: string; virtualCwd: string; relativeCwd: string },
@@ -65,6 +73,10 @@ export class WorkspaceRouting extends Context.Service<
       branch?: string;
       refName?: string;
       submodules?: C.WorktreeSubmodules;
+      onStage?: (
+        stage: "sandbox" | "seed" | "checkout",
+        status: "running" | "done" | "skipped",
+      ) => Effect.Effect<void>;
     }) => Effect.Effect<string, WorkspaceRoutingError>;
     readonly callThread: (
       threadId: ThreadId,
@@ -296,38 +308,58 @@ export const layer = Layer.effect(
         const binding = yield* Bindings.read(input.threadId).pipe(
           Effect.provideService(SqlClient.SqlClient, sql),
         );
-        const root = yield* rootFor(binding.workspaceId);
-        yield* register({
-          ...root,
-          workspaceId: binding.workspaceId,
-          threadId: input.threadId,
-          utilityKey: null,
-          sourceUrl: source.sourceUrl,
-        });
-        const client = yield* runtime.forThread(input.threadId);
-        const prepared = yield* Effect.tryPromise(() =>
-          client.call("git.isRepository", { cwd: root.relativeCwd }),
-        ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)));
-        if (!prepared)
-          yield* seedWorkspace({
-            source: yield* runtime.forWorkspace(source.workspaceId),
-            destination: client,
-            sourceCwd: source.relativeCwd,
-            destinationCwd: root.relativeCwd,
-            key: root.relativeCwd.slice(0, root.relativeCwd.indexOf("/")),
-          });
-        yield* Effect.tryPromise({
-          try: () =>
-            client.call("workspace.prepare", {
-              cwd: root.relativeCwd,
-              ...(source.sourceUrl ? { sourceUrl: source.sourceUrl } : {}),
-              ...(input.branch ? { branch: input.branch } : {}),
-              ...(input.refName ? { refName: input.refName } : {}),
-              ...(input.submodules ? { submodules: input.submodules } : {}),
+        return yield* withWorkspaceActivity(
+          binding.workspaceId,
+          withWorkspaceActivity(
+            source.workspaceId,
+            Effect.gen(function* () {
+              const stage = input.onStage ?? (() => Effect.void);
+              const root = yield* rootFor(binding.workspaceId);
+              yield* stage("sandbox", "running");
+              const client = yield* runtime.forThread(input.threadId);
+              yield* stage("sandbox", "done");
+              if (binding.ownerThreadId !== input.threadId) {
+                yield* stage("seed", "skipped");
+                yield* stage("checkout", "skipped");
+                return root.virtualCwd;
+              }
+              yield* register({
+                ...root,
+                workspaceId: binding.workspaceId,
+                threadId: input.threadId,
+                utilityKey: null,
+                sourceUrl: source.sourceUrl,
+              });
+              yield* stage("seed", "running");
+              const prepared = yield* Effect.tryPromise(() =>
+                client.call("git.isRepository", { cwd: root.relativeCwd }),
+              ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)));
+              if (!prepared)
+                yield* seedWorkspace({
+                  source: yield* runtime.forWorkspace(source.workspaceId),
+                  destination: client,
+                  sourceCwd: source.relativeCwd,
+                  destinationCwd: root.relativeCwd,
+                  key: root.relativeCwd.slice(0, root.relativeCwd.indexOf("/")),
+                });
+              yield* stage("seed", prepared ? "skipped" : "done");
+              yield* stage("checkout", "running");
+              yield* Effect.tryPromise({
+                try: () =>
+                  client.call("workspace.prepare", {
+                    cwd: root.relativeCwd,
+                    ...(source.sourceUrl ? { sourceUrl: source.sourceUrl } : {}),
+                    ...(input.branch ? { branch: input.branch } : {}),
+                    ...(input.refName ? { refName: input.refName } : {}),
+                    ...(input.submodules ? { submodules: input.submodules } : {}),
+                  }),
+                catch: failure("prepare-thread"),
+              });
+              yield* stage("checkout", "done");
+              return root.virtualCwd;
             }),
-          catch: failure("prepare-thread"),
-        });
-        return root.virtualCwd;
+          ),
+        );
       }).pipe(Effect.mapError(failure("prepare-thread")));
     return WorkspaceRouting.of({
       enabled: true,
@@ -336,6 +368,13 @@ export const layer = Layer.effect(
           Effect.map((root) => ({ ...root, workspaceId: `t3:${threadId}` })),
           Effect.mapError(failure("describe-thread")),
         ),
+      describeBoundThread: (threadId) =>
+        Effect.gen(function* () {
+          const binding = yield* Bindings.read(threadId).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+          );
+          return { ...(yield* rootFor(binding.workspaceId)), workspaceId: binding.workspaceId };
+        }).pipe(Effect.mapError(failure("describe-bound-thread"))),
       registerFork: (input) =>
         Effect.gen(function* () {
           const source = yield* lookup(input.sourceCwd);

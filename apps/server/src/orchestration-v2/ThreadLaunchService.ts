@@ -26,6 +26,7 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -251,89 +252,143 @@ const make = Effect.gen(function* () {
     );
 
     if (routes.enabled) {
-      if (
-        input.workspaceStrategy.type === "existing_worktree" &&
-        input.workspaceStrategy.worktreePath !== project.workspaceRoot
-      )
-        return yield* mapError(
-          input,
-          "provision-worktree",
-          threadId,
-        )(
-          "Importing an existing or dirty worktree into a new sandbox requires a workspace snapshot; it cannot use a central machine path.",
-        );
-      const settings = yield* serverSettings.getSettings;
-      const resolved = resolveProjectSettings(settings, input.projectId, project).settings;
-      const cwd = yield* routes
-        .prepareThread({
-          threadId,
-          projectCwd: project.workspaceRoot,
-          ...(resolved.worktreeSubmodules !== null
-            ? { submodules: resolved.worktreeSubmodules }
-            : {}),
-          ...(input.workspaceStrategy.branch ? { branch: input.workspaceStrategy.branch } : {}),
-          ...(input.workspaceStrategy.type === "worktree"
-            ? { refName: input.workspaceStrategy.baseRef }
-            : {}),
-        })
-        .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
-      yield* threads
-        .dispatch({
-          type: "thread.metadata.update",
-          commandId: CommandId.make(`${input.commandId}:workspace`),
-          threadId,
-          worktreePath: cwd,
-          branch: input.workspaceStrategy.branch ?? null,
-        })
-        .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
-      const script = setupProjectScript(resolveProjectScripts(settings, project));
-      if (script) {
-        const runSetup = routes
-          .call({
-            cwd,
-            method: "scripts.run",
-            input: {
-              operationId: `${input.commandId}:setup`,
-              command: "/bin/sh",
-              args: ["-lc", script.command],
-              timeoutMs: 3_600_000,
-              env: { T3CODE_PROJECT_ROOT: cwd, T3CODE_WORKTREE_PATH: cwd },
-            },
+      yield* setupTracker.begin({
+        threadId,
+        branch: input.workspaceStrategy.branch ?? null,
+        baseRef:
+          input.workspaceStrategy.type === "worktree" ? input.workspaceStrategy.baseRef : null,
+        stages: ["sandbox", "seed", "checkout", "setup-script", "agent"],
+        fiber: yield* Effect.fiber,
+      });
+      return yield* Effect.gen(function* () {
+        if (
+          input.workspaceStrategy.type === "existing_worktree" &&
+          input.workspaceStrategy.worktreePath !== project.workspaceRoot &&
+          !(
+            input.reusedWorktree !== undefined &&
+            input.workspaceStrategy.worktreePath ===
+              (yield* routes
+                .describeBoundThread(threadId)
+                .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))).virtualCwd
+          )
+        )
+          return yield* mapError(
+            input,
+            "provision-worktree",
+            threadId,
+          )(
+            "Importing an existing or dirty worktree into a new sandbox requires a workspace snapshot; it cannot use a central machine path.",
+          );
+        const settings = yield* serverSettings.getSettings;
+        const resolved = resolveProjectSettings(settings, input.projectId, project).settings;
+        const cwd = yield* routes
+          .prepareThread({
+            threadId,
+            projectCwd: project.workspaceRoot,
+            onStage: (stage, status) => setupTracker.stageStatus(threadId, stage, status),
+            ...(resolved.worktreeSubmodules !== null
+              ? { submodules: resolved.worktreeSubmodules }
+              : {}),
+            ...(input.workspaceStrategy.branch ? { branch: input.workspaceStrategy.branch } : {}),
+            ...(input.workspaceStrategy.type === "worktree"
+              ? { refName: input.workspaceStrategy.baseRef }
+              : {}),
           })
-          .pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(WorkerProtocol.ScriptResult)),
-            Effect.flatMap((result) =>
-              result.code === 0
-                ? Effect.void
-                : Effect.fail(
-                    mapError(
-                      input,
-                      "run-setup-script",
-                      threadId,
-                    )(`Setup script exited with ${result.code ?? "unknown exit status"}.`),
-                  ),
-            ),
-            Effect.mapError(mapError(input, "run-setup-script", threadId)),
-          );
-        if (script.async !== false)
-          yield* runSetup.pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Remote setup script failed", { threadId, cause }),
-            ),
-            Effect.forkIn(preparationScope),
-          );
-        else yield* runSetup;
-      }
-      if (runId !== null)
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         yield* threads
           .dispatch({
-            type: "prepared-run.release",
-            commandId: CommandId.make(`${input.commandId}:release`),
+            type: "thread.metadata.update",
+            commandId: CommandId.make(`${input.commandId}:workspace`),
             threadId,
-            runId,
+            worktreePath: cwd,
+            branch: input.workspaceStrategy.branch ?? null,
           })
-          .pipe(Effect.mapError(mapError(input, "release-run", threadId)));
-      return;
+          .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+        yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath: cwd }));
+        let awaitAsyncSetup = Effect.void;
+        const script = setupProjectScript(resolveProjectScripts(settings, project));
+        if (script) {
+          yield* setupTracker.stageStatus(threadId, "setup-script", "running", script.name);
+          const runSetup = routes
+            .call({
+              cwd,
+              method: "scripts.run",
+              input: {
+                operationId: `${input.commandId}:setup`,
+                command: "/bin/sh",
+                args: ["-lc", script.command],
+                timeoutMs: 3_600_000,
+                env: { T3CODE_PROJECT_ROOT: cwd, T3CODE_WORKTREE_PATH: cwd },
+              },
+            })
+            .pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(WorkerProtocol.ScriptResult)),
+              Effect.tap((result) =>
+                Effect.forEach(
+                  `${result.stdout}\n${result.stderr}`
+                    .split(/\r?\n/)
+                    .map((line) => ProjectSetupScriptRunner.stripTerminalControl(line).trimEnd())
+                    .filter((line) => line.length > 0)
+                    .slice(-4),
+                  (line) => setupTracker.appendTail(threadId, "setup-script", line),
+                  { discard: true },
+                ),
+              ),
+              Effect.flatMap((result) =>
+                result.code === 0
+                  ? Effect.void
+                  : Effect.fail(
+                      mapError(
+                        input,
+                        "run-setup-script",
+                        threadId,
+                      )(`Setup script exited with ${result.code ?? "unknown exit status"}.`),
+                    ),
+              ),
+              Effect.mapError(mapError(input, "run-setup-script", threadId)),
+            );
+          const trackedSetup = runSetup.pipe(
+            Effect.tap(() => setupTracker.stageStatus(threadId, "setup-script", "done")),
+          );
+          if (script.async !== false) {
+            const fiber = yield* trackedSetup.pipe(
+              Effect.catchCause((cause) =>
+                setupTracker.stageStatus(
+                  threadId,
+                  "setup-script",
+                  "failed",
+                  failureDetail(Cause.squash(cause)),
+                ),
+              ),
+              Effect.forkIn(preparationScope),
+            );
+            awaitAsyncSetup = Fiber.join(fiber);
+          } else yield* trackedSetup;
+        } else yield* setupTracker.stageStatus(threadId, "setup-script", "skipped");
+        yield* setupTracker.markUncancellable(threadId);
+        if (runId !== null) {
+          yield* setupTracker.stageStatus(threadId, "agent", "running");
+          yield* threads
+            .dispatch({
+              type: "prepared-run.release",
+              commandId: CommandId.make(`${input.commandId}:release`),
+              threadId,
+              runId,
+            })
+            .pipe(Effect.mapError(mapError(input, "release-run", threadId)));
+        }
+        yield* setupTracker.stageStatus(threadId, "agent", runId === null ? "skipped" : "done");
+        yield* awaitAsyncSetup;
+        yield* setupTracker.finish(threadId, "done");
+      }).pipe(
+        Effect.onError((cause) =>
+          setupTracker.finish(
+            threadId,
+            Cause.hasInterruptsOnly(cause) ? "cancelled" : "failed",
+            Cause.hasInterruptsOnly(cause) ? null : failureDetail(Cause.squash(cause)),
+          ),
+        ),
+      );
     }
 
     const reused = input.reusedWorktree;

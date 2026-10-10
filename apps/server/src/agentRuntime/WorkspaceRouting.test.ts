@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Routing from "./WorkspaceRouting.ts";
+import { WorkspaceActivity } from "./WorkspaceActivity.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
 import * as RuntimeSchema from "./Schema.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
@@ -20,6 +21,7 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* RuntimeSchema.migrate;
+        const activity = yield* WorkspaceActivity;
         const calls: Array<{ workspaceId: string; method: string; input: unknown }> = [];
         const client = (workspaceId: string): ExecutionClient => ({
           credentialSource: () => {
@@ -56,7 +58,12 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
           ideOrigin: () => Effect.die("IDE origin is not used by this test"),
           enabled: true,
           forWorkspace: (workspaceId) => Effect.succeed(client(workspaceId)),
-          forThread: (threadId) => Effect.succeed(client(`t3:${threadId}`)),
+          forThread: (threadId) =>
+            Effect.sync(() => {
+              expect(activity.get("t3:root-a")).toBeGreaterThan(0);
+              expect(activity.get("t3:utility:project:project-a")).toBeGreaterThan(0);
+              return client(threadId === "child-a" ? "t3:root-a" : `t3:${threadId}`);
+            }),
           forUtility: (key) =>
             Effect.gen(function* () {
               const id = `t3:utility:${key}`;
@@ -122,6 +129,34 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
           workspace_id: string;
         }>`SELECT workspace_id FROM agent_runtime_workspace_paths WHERE virtual_cwd=${root}`;
         expect(rows[0]?.workspace_id).toBe("t3:root-a");
+        const beforeChild = calls.length;
+        const childStages: string[] = [];
+        expect(
+          yield* routes.prepareThread({
+            threadId: ThreadId.make("child-a"),
+            projectCwd: first,
+            onStage: (stage, status) =>
+              Effect.sync(() => {
+                childStages.push(`${stage}:${status}`);
+              }),
+          }),
+        ).toBe(root);
+        expect(calls.length).toBe(beforeChild);
+        expect(childStages).toEqual([
+          "sandbox:running",
+          "sandbox:done",
+          "seed:skipped",
+          "checkout:skipped",
+        ]);
+        const owner = yield* sql<{
+          thread_id: string;
+        }>`SELECT thread_id FROM agent_runtime_workspace_paths WHERE virtual_cwd=${root}`;
+        expect(owner[0]?.thread_id).toBe("root-a");
+        expect((yield* routes.describeBoundThread(ThreadId.make("child-a"))).virtualCwd).toBe(root);
+        expect((yield* routes.describeThread(ThreadId.make("future-root"))).workspaceId).toBe(
+          "t3:future-root",
+        );
+        expect(activity.size).toBe(0);
         yield* routes
           .project("project-a", "https://github.com/example/other.git")
           .pipe(Effect.exit);

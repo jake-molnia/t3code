@@ -3709,7 +3709,7 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   // place instead of remounting the row.
   const shimmer = isPreparingWorktree || isCompacting;
   const label = isPreparingWorktree ? (
-    "Setting up worktree…"
+    "Setting up workspace…"
   ) : isCompacting ? (
     <CompactingLabel />
   ) : row.createdAt ? (
