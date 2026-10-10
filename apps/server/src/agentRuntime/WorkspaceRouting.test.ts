@@ -35,7 +35,9 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
           },
           call: async (method, input) => {
             calls.push({ workspaceId, method, input });
-            return method === "workspace.isEmpty" ? true : { contents: workspaceId };
+            return method === "workspace.isEmpty" || method === "git.isRepository"
+              ? true
+              : { contents: workspaceId };
           },
           events: async () => [],
           ack: async () => {},
@@ -86,6 +88,16 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
         });
         expect(calls.at(-2)?.workspaceId).toBe("t3:utility:project:project-a");
         expect(calls.at(-1)?.workspaceId).toBe("t3:utility:project:project-b");
+        yield* routes.call({
+          cwd: first,
+          method: "files.browse",
+          input: { partialPath: `${first}/src/` },
+        });
+        expect(calls.at(-1)).toMatchObject({
+          workspaceId: "t3:utility:project:project-a",
+          method: "files.browse",
+          input: { cwd: first.slice("/workspace/".length), partialPath: "src/" },
+        });
         const before = calls.length;
         yield* routes
           .call({

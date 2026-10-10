@@ -1,3 +1,7 @@
+import { seedWorkspace } from "../SeedWorkspace.ts";
+import { makeForkExecutor } from "./ForkExecutor.ts";
+import { makeAssetExecutor } from "./AssetExecutor.ts";
+import { captureRunPromise } from "../../execution/EffectHttpBoundary.ts";
 import * as T3ProjectFileLoader from "../../project/T3ProjectFileLoader.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -32,7 +36,7 @@ const services = Layer.mergeAll(
   Layer.provideMerge(T3ProjectFileLoader.layer),
   Layer.provide(registry),
   Layer.provide(VcsProcess.layer),
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "worker-workspace-test-" })),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "worker-workspace-test-" })),
   Layer.provideMerge(NodeServices.layer),
 );
 const fixture = Effect.gen(function* () {
@@ -89,6 +93,135 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
         ).toMatchObject({ code: "workspace_symlink_escape" });
         const listed = yield* worker.execute("files.list", { cwd: "repo", directoryPath: "src" });
         expect(listed).toMatchObject({ entries: [{ path: "src/hello.txt", kind: "file" }] });
+      }),
+  );
+  it.effect.each([false, true])(
+    "copies project files into independent roots and preserves edits on retry (committed remote: %s)",
+    (remote) =>
+      Effect.gen(function* () {
+        const { fs, path, root, worker } = yield* fixture;
+        yield* worker.execute("git.init", { cwd: "repo" });
+        const git = yield* GitVcsDriver.GitVcsDriver;
+        if (remote) {
+          yield* fs.writeFileString(path.join(root, "repo/README.md"), "committed base");
+          for (const args of [
+            ["config", "user.name", "Test"],
+            ["config", "user.email", "test@example.com"],
+            ["add", "README.md"],
+            ["commit", "-m", "base"],
+            ["remote", "add", "origin", "https://github.com/example/seed.git"],
+          ])
+            yield* git.execute({ operation: "seed-test", cwd: path.join(root, "repo"), args });
+        }
+        yield* worker.execute("files.write", {
+          cwd: "repo",
+          relativePath: "README.md",
+          contents: "named project",
+        });
+        yield* worker.execute("files.write", {
+          cwd: "repo",
+          relativePath: "assets/design.txt",
+          contents: "untracked design",
+        });
+        const config = yield* ServerConfig.ServerConfig;
+        const run = yield* captureRunPromise;
+        const makeClient = (workspaceRoot: string) =>
+          Effect.gen(function* () {
+            const workspace = yield* makeWorkspaceExecutor({
+              root: workspaceRoot,
+              incarnation: "seed-test",
+              canRestore: Effect.succeed(true),
+            });
+            const workerConfig = {
+              ...config,
+              cwd: workspaceRoot,
+              stateDir: path.join(workspaceRoot, ".state"),
+            };
+            const fork = yield* makeForkExecutor({ resolve: workspace.resolve }).pipe(
+              Effect.provideService(ServerConfig.ServerConfig, workerConfig),
+            );
+            const assets = yield* makeAssetExecutor.pipe(
+              Effect.provideService(ServerConfig.ServerConfig, workerConfig),
+            );
+            const receipts = new Map<string, unknown>();
+            const execute = (method: string, input: unknown) =>
+              Effect.gen(function* () {
+                if (method.startsWith("asset.")) return yield* assets.execute(method, input);
+                if (["git.bundleFork", "git.importFork", "git.cleanupFork"].includes(method))
+                  return yield* fork.execute(method, input);
+                return yield* workspace.execute(method, input);
+              });
+            return {
+              call: async (method: string, input: unknown, id?: string) => {
+                if (id && receipts.has(id)) return receipts.get(id);
+                const result = await run(execute(method, input));
+                if (id) receipts.set(id, result);
+                return result;
+              },
+              transient: (method: string, input: unknown) => run(execute(method, input)),
+            };
+          });
+        const source = yield* makeClient(root);
+        const firstRoot = yield* fs.makeTempDirectoryScoped({ prefix: "seed-first-" });
+        const secondRoot = yield* fs.makeTempDirectoryScoped({ prefix: "seed-second-" });
+        const first = yield* makeClient(firstRoot);
+        const second = yield* makeClient(secondRoot);
+        for (const [key, destination] of [
+          ["first", first],
+          ["second", second],
+        ] as const) {
+          expect(
+            yield* Effect.tryPromise(() => destination.call("git.isRepository", { cwd: "repo" })),
+          ).toBe(false);
+          yield* seedWorkspace({
+            source,
+            destination,
+            sourceCwd: "repo",
+            destinationCwd: "repo",
+            key,
+          });
+          expect(
+            yield* Effect.tryPromise(() => destination.call("git.isRepository", { cwd: "repo" })),
+          ).toBe(true);
+          yield* Effect.tryPromise(() =>
+            destination.call("workspace.prepare", {
+              cwd: "repo",
+              branch: `thread-${key}`,
+              ...(remote ? { sourceUrl: "https://github.com/example/seed.git" } : {}),
+            }),
+          );
+          expect(
+            yield* Effect.tryPromise(() =>
+              destination.call("files.read", { cwd: "repo", relativePath: "README.md" }),
+            ),
+          ).toMatchObject({ contents: "named project" });
+          expect(
+            yield* Effect.tryPromise(() =>
+              destination.call("files.read", { cwd: "repo", relativePath: "assets/design.txt" }),
+            ),
+          ).toMatchObject({ contents: "untracked design" });
+        }
+        yield* Effect.tryPromise(() =>
+          first.call("files.write", {
+            cwd: "repo",
+            relativePath: "README.md",
+            contents: "first root edit",
+          }),
+        );
+        yield* seedWorkspace({
+          source,
+          destination: first,
+          sourceCwd: "repo",
+          destinationCwd: "repo",
+          key: "first",
+        });
+        expect(yield* fs.readFileString(path.join(firstRoot, "repo/README.md"))).toBe(
+          "first root edit",
+        );
+        expect(yield* fs.readFileString(path.join(secondRoot, "repo/README.md"))).toBe(
+          "named project",
+        );
+        expect(yield* fs.readFileString(path.join(root, "repo/README.md"))).toBe("named project");
       }),
   );
   it.effect("keeps the original checkpoint on retry and restores its actual files", () =>

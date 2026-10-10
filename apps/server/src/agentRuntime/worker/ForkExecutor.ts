@@ -137,6 +137,12 @@ export const makeForkExecutor = <E>(options: {
                   ? ["checkout", "-B", input.branch, input.baseCommit]
                   : ["checkout", "--detach", input.baseCommit],
               });
+            else if (input.branch)
+              yield* git.execute({
+                operation: "fork.unborn-branch",
+                cwd: staging,
+                args: ["symbolic-ref", "HEAD", `refs/heads/${input.branch}`],
+              });
             // Checkpoints contain a file tree, not historical HEAD/index metadata. Keep the source Git base.
             yield* checkpoints.restoreCheckpoint({
               cwd: staging,

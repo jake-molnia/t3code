@@ -80,7 +80,11 @@ export const entriesLayer = Layer.effect(
           ),
       browse: (input) =>
         routes
-          .call({ cwd: input.cwd ?? "", method: "files.browse", input: { ...input } })
+          .call({
+            cwd: input.cwd ?? input.partialPath,
+            method: "files.browse",
+            input: { ...input },
+          })
           .pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(C.FilesystemBrowseResult)),
             Effect.mapError(failure(input.cwd ?? "")),

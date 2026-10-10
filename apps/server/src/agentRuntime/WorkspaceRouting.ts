@@ -1,3 +1,4 @@
+import { seedWorkspace } from "./SeedWorkspace.ts";
 import * as GitProtocol from "./worker/GitDriverProtocol.ts";
 import { validateCloneSourceUrl } from "./RepositoryUrl.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
@@ -147,6 +148,17 @@ export const layer = Layer.effect(
             ...payload,
             relativePath: input.input.relativePath.slice(route.virtualCwd.length + 1),
           };
+        if (
+          input.method === "files.browse" &&
+          typeof input.input.partialPath === "string" &&
+          (input.input.partialPath === route.virtualCwd ||
+            input.input.partialPath.startsWith(`${route.virtualCwd}/`))
+        )
+          payload = {
+            ...payload,
+            cwd: route.relativeCwd,
+            partialPath: input.input.partialPath.slice(route.virtualCwd.length + 1) || "./",
+          };
         if (input.method === "git.createWorktree" || input.method === "git.driver.createWorktree") {
           const command = yield* Schema.decodeUnknownEffect(C.VcsCreateWorktreeInput)(input.input);
           const suffix = yield* rootFor(
@@ -260,17 +272,6 @@ export const layer = Layer.effect(
     const prepareThread: WorkspaceRouting["Service"]["prepareThread"] = (input) =>
       Effect.gen(function* () {
         const source = yield* lookup(input.projectCwd);
-        if (!source.sourceUrl) {
-          const seed = yield* runtime.forWorkspace(source.workspaceId);
-          const empty = yield* Effect.tryPromise({
-            try: () => seed.call("workspace.isEmpty", { cwd: source.relativeCwd }),
-            catch: failure("inspect-seed"),
-          }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)));
-          if (!empty)
-            return yield* failure("prepare-thread")(
-              "Copying a local or dirty seed workspace requires an explicit snapshot import; this project has no remote repository source.",
-            );
-        }
         const binding = yield* Bindings.read(input.threadId).pipe(
           Effect.provideService(SqlClient.SqlClient, sql),
         );
@@ -283,6 +284,17 @@ export const layer = Layer.effect(
           sourceUrl: source.sourceUrl,
         });
         const client = yield* runtime.forThread(input.threadId);
+        const prepared = yield* Effect.tryPromise(() =>
+          client.call("git.isRepository", { cwd: root.relativeCwd }),
+        ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)));
+        if (!prepared)
+          yield* seedWorkspace({
+            source: yield* runtime.forWorkspace(source.workspaceId),
+            destination: client,
+            sourceCwd: source.relativeCwd,
+            destinationCwd: root.relativeCwd,
+            key: root.relativeCwd.slice(0, root.relativeCwd.indexOf("/")),
+          });
         yield* Effect.tryPromise({
           try: () =>
             client.call("workspace.prepare", {

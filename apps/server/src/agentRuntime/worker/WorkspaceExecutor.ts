@@ -228,9 +228,12 @@ export const makeWorkspaceExecutor = (options: {
                   if (!branches.includes(input.branch)) {
                     if (input.refName)
                       yield* git.switchRef({ cwd: target, refName: input.refName });
-                    yield* git.createRef({ cwd: target, refName: input.branch });
-                  }
-                  yield* git.switchRef({ cwd: target, refName: input.branch });
+                    yield* git.execute({
+                      operation: "worker.create-branch",
+                      cwd: target,
+                      args: ["checkout", "-b", input.branch],
+                    });
+                  } else yield* git.switchRef({ cwd: target, refName: input.branch });
                 } else if (input.refName)
                   yield* git.switchRef({ cwd: target, refName: input.refName });
                 if (yield* fs.exists(path.join(target, ".gitmodules"))) {
@@ -282,7 +285,9 @@ export const makeWorkspaceExecutor = (options: {
             const input = yield* Schema.decodeUnknownEffect(
               Schema.Struct({ cwd: Schema.NonEmptyString }),
             )(raw);
-            return yield* checkpoints.isGitRepository(yield* resolve(input.cwd));
+            const cwd = yield* resolve(input.cwd, true);
+            if (!(yield* fs.exists(cwd))) return false;
+            return yield* checkpoints.isGitRepository(cwd);
           }
           case "git.hasCheckpoint": {
             const input = yield* Schema.decodeUnknownEffect(P.Checkpoint)(raw);
