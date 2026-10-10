@@ -1,3 +1,4 @@
+import * as AgentRuntime from "../agentRuntime/RuntimeClient.ts";
 import * as NetAddress from "effect/net/NetAddress";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -4417,9 +4418,9 @@ it.effect(
     }),
 );
 
-it.effect(
-  "ProviderSessionManagerV2 rejects a second thread when the provider runtime is exclusive",
-  () =>
+it.effect.each([false, true])(
+  "ProviderSessionManagerV2 rejects cross-thread reuse for exclusive or remote sessions (remote: %s)",
+  (remote) =>
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
       const effect = Effect.gen(function* () {
@@ -4455,6 +4456,12 @@ it.effect(
           modelSelection,
           runtimePolicy,
         });
+        yield* manager.open({
+          threadId: firstThreadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
         const error = yield* manager
           .open({
             threadId: secondThreadId,
@@ -4470,7 +4477,15 @@ it.effect(
 
       yield* effect.pipe(
         Effect.provide(
-          layerTest({ state, idleTimeoutMs: 1000, capabilities: ExclusiveCapabilities }),
+          layerTest({
+            state,
+            idleTimeoutMs: 1000,
+            capabilities: remote ? CodexProviderCapabilitiesV2 : ExclusiveCapabilities,
+          }).pipe(
+            Layer.provide(
+              remote ? Layer.mock(AgentRuntime.RuntimeClient)({ enabled: true }) : Layer.empty,
+            ),
+          ),
         ),
       );
     }),

@@ -1,3 +1,4 @@
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { CommandId, type ThreadId, type ProviderSessionId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -36,6 +37,7 @@ export const layer = Layer.effect(
   RemoteSessionRecovery,
   Effect.gen(function* () {
     const runtime = yield* Runtime.RuntimeClient;
+    const ids = yield* IdAllocator.IdAllocatorV2;
     const projections = yield* Projections.ProjectionStoreV2;
     const sessions = yield* Sessions.ProviderSessionManagerV2;
     const runs = yield* Runs.RunExecutionServiceV2;
@@ -59,6 +61,16 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         if (!(yield* isRemote(projection))) return false;
         if (trigger === "shutdown") return true;
+        // Legacy shared sessions may belong to several app threads in one sandbox.
+        // Let ordinary recovery interrupt them; never attach them under a new owner.
+        if (
+          candidates(projection).some(
+            (session) =>
+              session.id ===
+              ids.derive.providerSession({ providerInstanceId: session.providerInstanceId }),
+          )
+        )
+          return false;
         const observation = yield* runtime.observeThread(projection.thread.id);
         if (observation.kind === "stopped") return false;
         const client = observation.client;

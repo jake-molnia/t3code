@@ -1,3 +1,4 @@
+import { SessionPlacement } from "../execution/SessionPlacement.ts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -23,6 +24,7 @@ import {
   PullRequestOperationError,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
   RunId,
@@ -5414,3 +5416,136 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
     }),
   );
 });
+
+it.layer(layerTest.pipe(Layer.provide(Layer.succeed(SessionPlacement, "per-thread"))))(
+  "captured remote session placement",
+  (it) => {
+    it.effect(
+      "keeps independent roots isolated when commands run outside the construction context",
+      () =>
+        Effect.gen(function* () {
+          assert.strictEqual(yield* SessionPlacement, "shared-when-supported");
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const sessionIds = [];
+          for (const name of ["captured-gompers", "captured-portal"]) {
+            const threadId = ThreadId.make(name);
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`${name}:create`),
+              threadId,
+              projectId: ProjectId.make("captured-placement-project"),
+              title: name,
+              modelSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: process.cwd(),
+            });
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`${name}:message`),
+              threadId,
+              messageId: MessageId.make(`${name}:message`),
+              text: "Run in this conversation's workspace",
+              attachments: [],
+              dispatchMode: { type: "start_immediately" },
+            });
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            const sessionId = projection.providerThreads[0]?.providerSessionId;
+            assert.isDefined(sessionId);
+            assert.isNotNull(sessionId);
+            sessionIds.push(sessionId);
+          }
+          assert.notStrictEqual(sessionIds[0], sessionIds[1]);
+        }),
+    );
+    it.effect("does not reattach a persisted ready shared session on the next turn", () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const threadId = ThreadId.make("captured-legacy-shared");
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("captured-legacy:create"),
+          threadId,
+          projectId: ProjectId.make("captured-placement-project"),
+          title: "Legacy shared session",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        const send = (suffix: string) =>
+          orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`captured-legacy:${suffix}`),
+            threadId,
+            messageId: MessageId.make(`captured-legacy:${suffix}`),
+            text: "Continue in the correct workspace",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+          });
+        yield* send("first");
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        const providerThread = projection.providerThreads[0]!;
+        const run = projection.runs[0]!;
+        const now = yield* DateTime.now;
+        const sharedId = ProviderSessionId.make("provider-session:provider-instance:codex:shared");
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make("captured-legacy:thread"),
+              type: "provider-thread.updated",
+              threadId,
+              occurredAt: now,
+              payload: { ...providerThread, providerSessionId: sharedId },
+            },
+            {
+              id: EventId.make("captured-legacy:session"),
+              type: "provider-session.attached",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: sharedId,
+                driver,
+                providerInstanceId: modelSelection.instanceId,
+                status: "ready",
+                cwd: process.cwd(),
+                model: modelSelection.model,
+                capabilities: CodexProviderCapabilitiesV2,
+                createdAt: now,
+                updatedAt: now,
+                lastError: null,
+              },
+            },
+            {
+              id: EventId.make("captured-legacy:failed"),
+              type: "run.updated",
+              threadId,
+              runId: run.id,
+              occurredAt: now,
+              payload: { ...run, status: "failed", completedAt: now },
+            },
+          ],
+        });
+        yield* send("retry");
+        const resumed = yield* orchestrator.getThreadProjection(threadId);
+        const replacement = resumed.providerThreads.find(
+          (value) => value.id === providerThread.id,
+        )?.providerSessionId;
+        assert.isDefined(replacement);
+        assert.isNotNull(replacement);
+        assert.notStrictEqual(replacement, sharedId);
+      }),
+    );
+  },
+);

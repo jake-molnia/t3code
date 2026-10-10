@@ -869,7 +869,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly adapter: ProviderAdapterV2Shape;
     readonly providerInstanceId: ProviderInstanceId;
     readonly threadId: ThreadId;
-  }) => allocateProviderSession(input).pipe(Effect.provideService(IdAllocatorV2, idAllocator));
+  }) =>
+    allocateProviderSession(input).pipe(
+      Effect.provideService(IdAllocatorV2, idAllocator),
+      Effect.provideService(SessionPlacement, sessionPlacement),
+    );
 
   const reusableProviderSessionId = (
     projection: Pick<OrchestrationV2ThreadProjection, "providerSessions">,
@@ -878,7 +882,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     sessionPlacement !== "per-thread" ||
     projection.providerSessions.some(
       (session) =>
-        session.id === sessionId && session.status !== "stopped" && session.status !== "error",
+        session.id === sessionId &&
+        session.id !==
+          idAllocator.derive.providerSession({ providerInstanceId: session.providerInstanceId }) &&
+        session.status !== "stopped" &&
+        session.status !== "error",
     )
       ? sessionId
       : null;
@@ -3584,7 +3592,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       .pipe(mapDispatchError(command));
 
     let targetThread = plannedTargetThread;
-    if ((yield* SessionPlacement) === "per-thread") {
+    if (sessionPlacement === "per-thread") {
       if (Option.isNone(forkRouting))
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -5685,7 +5693,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const forkExecution =
         pendingForkTransfer === undefined || sourceRun === null
           ? null
-          : (yield* SessionPlacement) === "per-thread"
+          : sessionPlacement === "per-thread"
             ? "portable_context"
             : yield* enforceCommandPolicy(command)(
                 commandPolicy.decideForkExecution({

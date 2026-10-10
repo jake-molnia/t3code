@@ -212,6 +212,7 @@ export class ProviderSessionManagerV2 extends Context.Service<
 >()("t3/orchestration-v2/ProviderSessionManager/ProviderSessionManagerV2") {}
 
 interface LiveSessionEntry {
+  readonly ownerThreadId: ThreadId;
   readonly eventPumpReady: Deferred.Deferred<void>;
   readonly attachedThreadIds: ReadonlySet<ThreadId>;
   readonly loadedProviderThreadKeyByThread: ReadonlyMap<ThreadId, string>;
@@ -2138,13 +2139,16 @@ export const layerWithOptions = (
               const existing = (yield* Ref.get(sessions)).get(key);
               if (existing !== undefined) {
                 if (
-                  !existing.attachedThreadIds.has(input.threadId) &&
-                  !existing.supportsMultipleProviderThreads
+                  (remoteExecution && existing.ownerThreadId !== input.threadId) ||
+                  (!existing.attachedThreadIds.has(input.threadId) &&
+                    !existing.supportsMultipleProviderThreads)
                 ) {
                   return yield* new ProviderSessionOpenError({
                     instanceId: input.modelSelection.instanceId,
                     providerSessionId: input.providerSessionId,
-                    cause: `Provider ${existing.runtime.driver} does not support attaching multiple app threads to one session.`,
+                    cause: remoteExecution
+                      ? "Remote provider sessions cannot be shared between app threads."
+                      : `Provider ${existing.runtime.driver} does not support attaching multiple app threads to one session.`,
                   });
                 }
                 yield* ensureThreadAttached({
@@ -2256,6 +2260,7 @@ export const layerWithOptions = (
               const exposedRuntime = decorateRuntime(runtime, eventSubscribers, eventPumpReady);
               const now = yield* Clock.currentTimeMillis;
               const entry: LiveSessionEntry = {
+                ownerThreadId: input.threadId,
                 eventPumpReady,
                 attachedThreadIds: new Set([input.threadId]),
                 loadedProviderThreadKeyByThread: new Map(),
