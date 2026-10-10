@@ -649,7 +649,6 @@ export const BranchToolbar = memo(function BranchToolbar({
           />
         </div>
       ) : null}
-      {executionPoolControl}
       {showGitControls ? (
         <div
           className={cn(
@@ -658,7 +657,6 @@ export const BranchToolbar = memo(function BranchToolbar({
             composerControlsHostRef ? "shrink" : "flex-1",
           )}
         >
-          {executionPoolControl}
           {showGitControls ? (
             <BranchToolbarEnvModeSelector
               forceNewWorktree={forceNewWorktree}
@@ -686,7 +684,6 @@ export const BranchToolbar = memo(function BranchToolbar({
         />
       ) : null}
 
-      {executionPoolControl}
       {showGitControls ? (
         <BranchToolbarBranchSelector
           forceNewWorktree={forceNewWorktree}
