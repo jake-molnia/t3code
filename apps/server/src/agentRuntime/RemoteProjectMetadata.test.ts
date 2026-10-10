@@ -12,6 +12,8 @@ import * as ProjectFile from "../project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentity from "../project/RepositoryIdentityResolver.ts";
 import * as Favicon from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import * as Assets from "./RemoteAssets.ts";
+import { captureRunPromise } from "../execution/EffectHttpBoundary.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
 import * as Routing from "./WorkspaceRouting.ts";
@@ -75,6 +77,7 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
           podUid: "pod",
           protocolVersion: 1,
         } satisfies ExecutionClient["identity"];
+        const runPromise = yield* captureRunPromise;
         let stopped = false;
         let calls = 0;
         let wakes = 0;
@@ -85,7 +88,7 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
           identity,
           call: (method, input) => {
             calls++;
-            return Effect.runPromise(worker.execute(method, input));
+            return runPromise(worker.execute(method, input));
           },
           transient: async () => null,
           events: async () => [],
@@ -112,6 +115,11 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
           getEventCursor: () => Effect.succeed(0),
           stop: () => Effect.void,
         });
+        const cachedFavicons: Array<{
+          cwd: string;
+          preferred: string | undefined;
+          found: string | null;
+        }> = [];
         const built = yield* Layer.build(
           Layer.mergeAll(
             RemoteMetadata.projectFileLayer,
@@ -120,6 +128,15 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
           ).pipe(Layer.provide(Routing.layer)),
         ).pipe(
           Effect.provideService(RuntimeClient.RuntimeClient, runtime),
+          Effect.provideService(Assets.RemoteAssets, {
+            enabled: true,
+            prepare: () => Effect.die("Asset preparation is not part of metadata lookup"),
+            populate: () => Effect.void,
+            rememberFavicon: (cwd, preferred, found) =>
+              Effect.sync(() => {
+                cachedFavicons.push({ cwd, preferred, found });
+              }),
+          }),
           Effect.provideService(FileSystem.FileSystem, {
             ...fs,
             readFileString: () => Effect.die("Central must not read t3.json or Git config"),
@@ -145,6 +162,13 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
         expect(
           yield* Context.get(built, Favicon.ProjectFaviconResolver).resolvePath("/workspace/repo"),
         ).toBe("/workspace/repo/assets/logo.svg");
+        expect(cachedFavicons).toEqual([
+          {
+            cwd: "/workspace/repo",
+            preferred: undefined,
+            found: "/workspace/repo/assets/logo.svg",
+          },
+        ]);
         const before = calls;
         const wakeCount = wakes;
         stopped = true;

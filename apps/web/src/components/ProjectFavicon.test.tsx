@@ -119,6 +119,7 @@ function renderImage(
 describe("ProjectFavicon", () => {
   beforeEach(() => {
     hooks.reset();
+    testState.lastTarget = undefined;
     testState.faviconUrl = "https://environment.test/api/assets/token-a/v1-20-favicon.svg";
   });
 
@@ -163,6 +164,7 @@ describe("ProjectFavicon", () => {
 
     expect(element.props.children.props.children.props.name).toBe("alarm-clock");
     expect(element.props.className).toContain("text-violet-600");
+    expect(testState.lastTarget).toBeUndefined();
     expect(element.props.children.props.children.props.className).toContain("text-violet-600");
   });
 
@@ -177,6 +179,7 @@ describe("ProjectFavicon", () => {
     }) as ReactElement<{ readonly emoji: string }>;
 
     expect(element.props.emoji).toBe("🦄");
+    expect(testState.lastTarget).toBeUndefined();
   });
 
   it("falls back when the displayed favicon fails without discarding a valid older image early", () => {

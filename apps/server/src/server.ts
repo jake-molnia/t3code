@@ -413,6 +413,7 @@ const layerWorkspace = Layer.mergeAll(
 );
 
 const layerProjectFaviconResolver = RemoteProjectMetadata.faviconLayer.pipe(
+  Layer.provide(layerRemoteAssets),
   Layer.provide(WorkspacePaths.layer),
   Layer.provide(RemoteProjectMetadata.projectFileLayer),
 );

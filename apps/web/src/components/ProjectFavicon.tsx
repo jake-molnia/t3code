@@ -8,6 +8,7 @@ import type { IconName } from "lucide-react/dynamic";
 import type { ComponentType } from "react";
 import { lazy, Suspense, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
 import { projectFaviconUrlAtom } from "../state/assets";
 import { deriveProjectIdentity } from "../projectIdentity";
 import { projectIconColorClassName } from "../projectIconColors";
@@ -17,6 +18,7 @@ import { cn } from "~/lib/utils";
 const DynamicIcon = lazy(() =>
   import("lucide-react/dynamic").then((module) => ({ default: module.DynamicIcon })),
 );
+const noFaviconLookup = Atom.make<string | undefined>(undefined);
 
 function DynamicProjectIconFallback() {
   return <FolderCodeIcon className="size-full text-inherit" />;
@@ -37,11 +39,13 @@ export function ProjectFavicon(input: {
 }) {
   const { project } = input;
   const src = useAtomValue(
-    projectFaviconUrlAtom({
-      environmentId: project.environmentId,
-      cwd: project.workspaceRoot,
-      faviconPath: project.faviconPath,
-    }),
+    project.projectIcon
+      ? noFaviconLookup
+      : projectFaviconUrlAtom({
+          environmentId: project.environmentId,
+          cwd: project.workspaceRoot,
+          faviconPath: project.faviconPath,
+        }),
   );
   if (project.projectIcon?.kind === "monogram") {
     return (

@@ -10,6 +10,7 @@ import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolv
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import { redactRepositoryUrl } from "./RepositoryUrl.ts";
 import * as P from "./worker/MetadataExecutor.ts";
+import * as Assets from "./RemoteAssets.ts";
 
 export const projectFileLayer = Layer.effect(
   T3ProjectFileLoader.T3ProjectFileLoader,
@@ -65,6 +66,7 @@ export const faviconLayer = Layer.effect(
   ProjectFaviconResolver.ProjectFaviconResolver,
   Effect.gen(function* () {
     const routes = yield* Routing.WorkspaceRouting;
+    const assets = yield* Effect.serviceOption(Assets.RemoteAssets);
     const cache = new Map<string, string | null>();
     return ProjectFaviconResolver.ProjectFaviconResolver.of({
       resolvePath: (cwd, preferred) =>
@@ -77,6 +79,10 @@ export const faviconLayer = Layer.effect(
           });
           if (raw === null) return cache.get(key) ?? null;
           const result = yield* Schema.decodeUnknownEffect(P.FaviconResult)(raw);
+          if (Option.isSome(assets))
+            yield* assets.value
+              .rememberFavicon(cwd, preferred, result.path)
+              .pipe(Effect.timeoutOption("2 seconds"), Effect.ignoreCause({ log: true }));
           cache.set(key, result.path);
           return result.path;
         }).pipe(

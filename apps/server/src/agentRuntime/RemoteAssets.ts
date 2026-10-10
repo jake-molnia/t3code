@@ -24,6 +24,7 @@ export interface AssetInput {
   readonly workspaceRoot?: string;
   readonly projectFaviconPath?: string;
   readonly projectCheckoutPending?: boolean;
+  readonly projectFaviconResolved?: boolean;
 }
 export class RemoteAssetError extends Schema.TaggedError<RemoteAssetError>()("RemoteAssetError", {
   cause: Schema.Defect(),
@@ -37,9 +38,17 @@ export class RemoteAssets extends Context.Service<
       workspaceRoot: string,
       relativePath: string,
     ) => Effect.Effect<void, RemoteAssetError>;
+    readonly rememberFavicon: (
+      cwd: string,
+      preferred: string | undefined,
+      found: string | null,
+    ) => Effect.Effect<void, RemoteAssetError>;
   }
 >()("t3/agentRuntime/RemoteAssets") {}
 const Origin = Schema.Struct({ workspaceId: Schema.String, virtualCwd: Schema.String });
+const decodeBlobJson = Schema.decodeUnknownEffect(Schema.fromJsonString(P.Blob));
+const encodeBlobJson = Schema.encodeEffect(Schema.fromJsonString(P.Blob));
+const decodeFaviconPath = Schema.decodeUnknownEffect(Schema.NullOr(Schema.String));
 export const layer = Layer.effect(
   RemoteAssets,
   Effect.gen(function* () {
@@ -158,6 +167,58 @@ export const layer = Layer.effect(
         }
         return root;
       });
+    const faviconIndex = (workspaceId: string, cwd: string, preferred?: string) =>
+      digest(new TextEncoder().encode(`${workspaceId}\0${cwd}\0${preferred ?? ""}`)).pipe(
+        Effect.map((key) => path.join(cache, "favicons", `${key}.json`)),
+      );
+    const storeFavicon = (client: ExecutionClient, index: string, found: string | null) =>
+      lock.withLock(
+        index,
+        Effect.gen(function* () {
+          if (found === null) {
+            yield* fs.remove(index, { force: true });
+            return undefined;
+          }
+          const blob = yield* snapshot(client, found);
+          const name = path.basename(found);
+          const destination = path.join(cache, "media", blob.blobId, name);
+          if (!(yield* fs.exists(destination))) yield* download(client, blob, destination);
+          else yield* releaseSnapshot(client, blob);
+          yield* fs.makeDirectory(path.dirname(index), { recursive: true });
+          const temporary = `${index}.${yield* crypto.randomUUIDv4}.part`;
+          yield* fs.writeFileString(
+            temporary,
+            yield* encodeBlobJson({
+              blobId: blob.blobId,
+              size: blob.size,
+              name,
+            }),
+          );
+          yield* fs
+            .rename(temporary, index)
+            .pipe(Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore)));
+          return destination;
+        }),
+      );
+    const cachedFavicon = (index: string) =>
+      Effect.gen(function* () {
+        if (!(yield* fs.exists(index))) return undefined;
+        const blob = yield* decodeBlobJson(yield* fs.readFileString(index));
+        if (path.basename(blob.name) !== blob.name) return undefined;
+        const destination = path.join(cache, "media", blob.blobId, blob.name);
+        return (yield* fs.exists(destination)) ? destination : undefined;
+      });
+    const rememberFavicon: RemoteAssets["Service"]["rememberFavicon"] = (cwd, preferred, found) =>
+      Effect.gen(function* () {
+        const route = yield* routes.describeCwd(cwd);
+        const current = yield* runtime.observeWorkspace(route.workspaceId);
+        if (current.kind !== "running") return;
+        yield* storeFavicon(
+          current.client,
+          yield* faviconIndex(route.workspaceId, cwd, preferred),
+          found,
+        );
+      }).pipe(Effect.mapError((cause) => new RemoteAssetError({ cause })));
     const populate = (workspaceRoot: string, relativePath: string) =>
       Effect.gen(function* () {
         if (path.dirname(workspaceRoot) !== mirrors)
@@ -195,6 +256,37 @@ export const layer = Layer.effect(
                 Effect.provideService(SqlClient.SqlClient, sql),
               )).workspaceId
             : (yield* routes.describeCwd(virtualCwd)).workspaceId;
+        if (resource._tag === "project-favicon") {
+          const mirror = yield* mirrorFor(workspaceId, virtualCwd);
+          const preferred = input.projectFaviconPath;
+          const index = yield* faviconIndex(workspaceId, virtualCwd, preferred);
+          let destination = yield* cachedFavicon(index).pipe(Effect.orElseSucceed(() => undefined));
+          if (destination === undefined && !input.projectCheckoutPending) {
+            const loaded = yield* Effect.gen(function* () {
+              const current = yield* runtime.observeWorkspace(workspaceId);
+              if (current.kind !== "running") return undefined;
+              const found = yield* Effect.tryPromise(() =>
+                current.client.call("asset.favicon", {
+                  cwd: virtualCwd,
+                  ...(preferred ? { preferred } : {}),
+                }),
+              ).pipe(Effect.flatMap(decodeFaviconPath));
+              return yield* storeFavicon(current.client, index, found);
+            }).pipe(
+              Effect.timeoutOption("2 seconds"),
+              Effect.orElseSucceed(() => undefined),
+            );
+            destination = loaded?._tag === "Some" ? loaded.value : undefined;
+          }
+          return {
+            resource: { ...resource, cwd: mirror },
+            workspaceRoot: mirror,
+            projectFaviconResolved: true,
+            ...(destination
+              ? { projectFaviconPath: destination }
+              : { projectCheckoutPending: true }),
+          };
+        }
         const requestedPath = "path" in resource ? resource.path : undefined;
         const isMedia =
           resource._tag === "media-file" ||
@@ -215,9 +307,7 @@ export const layer = Layer.effect(
           sourceKey === undefined ? undefined : path.join(cache, "sources", `${sourceKey}.json`);
         let cached: typeof P.Blob.Type | undefined;
         if (isMedia && indexPath && (yield* fs.exists(indexPath))) {
-          const saved = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(P.Blob))(
-            yield* fs.readFileString(indexPath),
-          );
+          const saved = yield* decodeBlobJson(yield* fs.readFileString(indexPath));
           if (
             path.basename(saved.name) === saved.name &&
             (yield* fs.exists(path.join(cache, "media", saved.blobId, saved.name)))
@@ -241,29 +331,6 @@ export const layer = Layer.effect(
         if (isMedia && cached && observed === null)
           return mediaResult(path.join(cache, "media", cached.blobId, cached.name));
         const client = observed ?? (yield* runtime.forWorkspace(workspaceId));
-        if (resource._tag === "project-favicon") {
-          const found = yield* Effect.tryPromise(() =>
-            client.call("asset.favicon", {
-              cwd: virtualCwd,
-              ...(input.projectFaviconPath ? { preferred: input.projectFaviconPath } : {}),
-            }),
-          ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.NullOr(Schema.String))));
-          if (found === null)
-            return {
-              resource: { ...resource, cwd: mirror },
-              workspaceRoot: mirror,
-              projectCheckoutPending: true,
-            };
-          const blob = yield* snapshot(client, found);
-          const destination = path.join(cache, "media", blob.blobId, path.basename(found));
-          if (!(yield* fs.exists(destination))) yield* download(client, blob, destination);
-          else yield* releaseSnapshot(client, blob);
-          return {
-            resource: { ...resource, cwd: mirror },
-            workspaceRoot: mirror,
-            projectFaviconPath: destination,
-          };
-        }
         const requested = resource.path;
         if (isMedia && source !== undefined) {
           const blob = yield* snapshot(client, source).pipe(
@@ -277,7 +344,7 @@ export const layer = Layer.effect(
             const temporary = `${indexPath}.${yield* crypto.randomUUIDv4}.part`;
             yield* fs.writeFileString(
               temporary,
-              yield* Schema.encodeEffect(Schema.fromJsonString(P.Blob))({
+              yield* encodeBlobJson({
                 blobId: blob.blobId,
                 size: blob.size,
                 name: path.basename(source),
@@ -294,6 +361,6 @@ export const layer = Layer.effect(
         yield* download(client, blob, path.join(mirror, relative));
         return { resource: { ...resource, path: relative }, workspaceRoot: mirror };
       }).pipe(Effect.mapError((cause) => new RemoteAssetError({ cause })));
-    return RemoteAssets.of({ enabled: true, prepare, populate });
+    return RemoteAssets.of({ enabled: true, prepare, populate, rememberFavicon });
   }),
 );

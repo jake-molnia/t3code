@@ -32,6 +32,7 @@ it.layer(layer, { excludeTestServices: true })("remote asset publication", (it) 
         yield* RuntimeSchema.migrate;
         yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id,owner_thread_id) VALUES ('a','thread')`;
         yield* sql`INSERT INTO agent_runtime_thread_bindings(thread_id,workspace_id) VALUES ('thread','a')`;
+        yield* sql`INSERT INTO agent_runtime_workspace_paths(virtual_cwd,workspace_id,relative_cwd,thread_id) VALUES ('/workspace/a/repo','a','a/repo','thread')`;
         const path = yield* Path.Path;
         const crypto = yield* Crypto.Crypto;
         const temporary = yield* fs.makeTempDirectoryScoped({ prefix: "central-trap-" });
@@ -41,6 +42,10 @@ it.layer(layer, { excludeTestServices: true })("remote asset publication", (it) 
           [samePath, "WORKER IMAGE"],
           ["/workspace/a/repo/index.html", '<link rel="stylesheet" href="style.css">'],
           ["/workspace/a/repo/style.css", "body { color: red; }"],
+          [
+            "/workspace/a/repo/icon.svg",
+            '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h4v4z"/></svg>',
+          ],
         ]);
         const blobs = new Map<string, Uint8Array>();
         const manifests = new Map<string, typeof P.Blob.Type>();
@@ -53,6 +58,7 @@ it.layer(layer, { excludeTestServices: true })("remote asset publication", (it) 
           manifests.set(filename, { blobId, size: bytes.length, name: path.basename(filename) });
         }
         let released = false;
+        let wakeCalls = 0;
         const requested: string[] = [];
         const identity = {
           workspaceId: "a",
@@ -69,6 +75,7 @@ it.layer(layer, { excludeTestServices: true })("remote asset publication", (it) 
           identity,
           call: async (method, input) => {
             if (released) throw new Error("worker released");
+            if (method === "asset.favicon") return "/workspace/a/repo/icon.svg";
             if (method !== "asset.snapshot") throw new Error("unexpected command");
             const value = Schema.decodeUnknownSync(P.Snapshot)(input);
             requested.push(value.path);
@@ -98,14 +105,17 @@ it.layer(layer, { excludeTestServices: true })("remote asset publication", (it) 
           enabled: true,
           forThread: () => Effect.succeed(client),
           forWorkspace: () =>
-            released
-              ? Effect.fail(
-                  new RuntimeClient.RuntimeClientError({
-                    operation: "ensure",
-                    cause: "worker released",
-                  }),
-                )
-              : Effect.succeed(client),
+            Effect.suspend(() => {
+              wakeCalls++;
+              return released
+                ? Effect.fail(
+                    new RuntimeClient.RuntimeClientError({
+                      operation: "ensure",
+                      cause: "worker released",
+                    }),
+                  )
+                : Effect.succeed(client);
+            }),
           forUtility: () => Effect.succeed(client),
           observeThread: () => Effect.succeed({ kind: "running", client }),
           observeWorkspace: () =>
@@ -119,6 +129,38 @@ it.layer(layer, { excludeTestServices: true })("remote asset publication", (it) 
           Effect.provideService(RuntimeClient.RuntimeClient, runtime),
         );
         const assets = Context.get(built, Assets.RemoteAssets);
+        released = true;
+        const faviconInput = {
+          resource: { _tag: "project-favicon" as const, cwd: "/workspace/a/repo" },
+        };
+        expect((yield* assets.prepare(faviconInput)).projectCheckoutPending).toBe(true);
+        expect(wakeCalls).toBe(0);
+        released = false;
+        yield* assets.rememberFavicon("/workspace/a/repo", undefined, "/workspace/a/repo/icon.svg");
+        released = true;
+        const restarted = yield* Layer.build(Assets.layer.pipe(Layer.provide(Routing.layer))).pipe(
+          Effect.provideService(RuntimeClient.RuntimeClient, runtime),
+        );
+        const favicon = yield* Context.get(restarted, Assets.RemoteAssets).prepare(faviconInput);
+        expect(favicon.projectFaviconResolved).toBe(true);
+        if (!favicon.projectFaviconPath) return yield* Effect.die("expected cached favicon");
+        expect(yield* fs.readFileString(favicon.projectFaviconPath)).toBe(
+          files.get("/workspace/a/repo/icon.svg"),
+        );
+        expect(wakeCalls).toBe(0);
+        released = false;
+        yield* assets.rememberFavicon("/workspace/a/repo", undefined, null);
+        released = true;
+        expect((yield* assets.prepare(faviconInput)).projectCheckoutPending).toBe(true);
+        released = false;
+        yield* assets.rememberFavicon("/workspace/a/repo", undefined, "/workspace/a/repo/icon.svg");
+        released = true;
+        expect((yield* assets.prepare(faviconInput)).projectFaviconPath).toBe(
+          favicon.projectFaviconPath,
+        );
+        expect(wakeCalls).toBe(0);
+        released = false;
+        requested.length = 0;
         const media = yield* assets.prepare({
           resource: { _tag: "media-file", threadId: ThreadId.make("thread"), path: samePath },
           workspaceRoot: "/workspace/a/repo",
