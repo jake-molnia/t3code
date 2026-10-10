@@ -1,3 +1,4 @@
+import * as C from "@t3tools/contracts";
 import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
 import { createExecutionWorker } from "../../execution/ExecutionWorker.ts";
@@ -226,6 +227,12 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
               destination.call("files.read", { cwd: "repo", relativePath: "README.md" }),
             ),
           ).toMatchObject({ contents: "named project" });
+          const gitStatus = yield* Effect.tryPromise(() =>
+            destination.call("git.status", { cwd: "repo" }),
+          ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.toCodecJson(C.VcsStatusResult))));
+          expect(gitStatus.isRepo).toBe(true);
+          expect(gitStatus.hasPrimaryRemote).toBe(remote);
+
           expect(
             yield* Effect.tryPromise(() =>
               destination.call("files.read", { cwd: "repo", relativePath: "assets/design.txt" }),

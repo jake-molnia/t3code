@@ -1,3 +1,4 @@
+import { WorkspaceActivity, withWorkspaceActivity } from "./WorkspaceActivity.ts";
 import * as Pools from "./ExecutionPools.ts";
 import { sameIdentity } from "../execution/ExecutionWorker.ts";
 import { ThreadId, type ProviderDriverKind } from "@t3tools/contracts";
@@ -232,7 +233,10 @@ export const layer = Layer.effect(
             cause: "Runtime returned another workspace",
           });
         return createExecutionClient(access);
-      }).pipe(Effect.mapError(failure("ensure-running")));
+      }).pipe(
+        (effect) => withWorkspaceActivity(workspaceId, effect),
+        Effect.mapError(failure("ensure-running")),
+      );
     const forWorkspace = (workspaceId: string) =>
       Effect.gen(function* () {
         const rows = yield* sql<{
@@ -288,6 +292,12 @@ export const layer = Layer.effect(
     ) =>
       Effect.gen(function* () {
         const workspaceId = options.expectedIdentity.workspaceId;
+        const activity = yield* WorkspaceActivity;
+        if (activity.has(workspaceId))
+          return yield* new RuntimeClientError({
+            operation: "stop",
+            cause: "Workspace request is in progress",
+          });
         const pool = yield* placement(workspaceId);
         const profile = pool.profile;
         const current = yield* request(
@@ -378,6 +388,11 @@ export const layer = Layer.effect(
           return yield* new RuntimeClientError({
             operation: "stop",
             cause: "Admission changed before submission",
+          });
+        if (activity.has(workspaceId))
+          return yield* new RuntimeClientError({
+            operation: "stop",
+            cause: "Workspace request is in progress",
           });
         yield* request(pool, "/v1/operations", payload);
       }).pipe(Effect.mapError(failure("stop")));

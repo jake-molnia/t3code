@@ -1,3 +1,4 @@
+import { WorkspaceActivity } from "./WorkspaceActivity.ts";
 import {
   ThreadId,
   TerminalSummary,
@@ -168,6 +169,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
   ports: LifecyclePolicyPorts,
 ) {
   const scope = yield* Scope.Scope;
+  const activity = yield* WorkspaceActivity;
   const inProgress = new Set<string>();
   const utilities = new Map<string, { incarnation: string; since: number }>();
   const invoke = (client: ExecutionClient, method: string, input: unknown, operationId?: string) =>
@@ -180,7 +182,8 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
   ) {
     if (!ports.enabled) return "stopped" as const;
     let snapshot = yield* ports.read(threadId);
-    if (!snapshot || snapshot.ownerThreadId !== threadId) return "busy" as const;
+    if (!snapshot || snapshot.ownerThreadId !== threadId || activity.has(snapshot.workspaceId))
+      return "busy" as const;
     let observed = yield* ports.observe(snapshot.workspaceId);
     if (observed.kind === "stopped") {
       utilities.delete(snapshot.workspaceId);
@@ -314,6 +317,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
       settledAt === null
         ? `idle:${snapshot.workspaceId}:${client.identity.incarnation}:${activityAt}`
         : `release:${snapshot.workspaceId}:${settledAt}:${client.identity.allocationId}:${client.identity.generation}:${client.identity.incarnation}`;
+    if (activity.has(snapshot.workspaceId)) return "busy" as const;
     yield* ports.stop(snapshot, action, operationId, client.identity);
     return action === "suspend" ? ("suspend-submitted" as const) : ("release-submitted" as const);
   });

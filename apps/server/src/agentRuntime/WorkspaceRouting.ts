@@ -1,3 +1,4 @@
+import { withWorkspaceActivity } from "./WorkspaceActivity.ts";
 import { seedWorkspace } from "./SeedWorkspace.ts";
 import * as GitProtocol from "./worker/GitDriverProtocol.ts";
 import { validateCloneSourceUrl } from "./RepositoryUrl.ts";
@@ -136,114 +137,134 @@ export const layer = Layer.effect(
     const call: WorkspaceRouting["Service"]["call"] = (input) =>
       Effect.gen(function* () {
         const route = yield* lookup(input.cwd);
-        const client = yield* runtime.forWorkspace(route.workspaceId);
-        const cwd = route.relativeCwd + input.cwd.slice(route.virtualCwd.length);
-        let payload: Readonly<Record<string, unknown>> = { ...input.input, cwd };
-        if (
-          input.method === "files.read" &&
-          typeof input.input.relativePath === "string" &&
-          input.input.relativePath.startsWith(`${route.virtualCwd}/`)
-        )
-          payload = {
-            ...payload,
-            relativePath: input.input.relativePath.slice(route.virtualCwd.length + 1),
-          };
-        if (
-          input.method === "files.browse" &&
-          typeof input.input.partialPath === "string" &&
-          (input.input.partialPath === route.virtualCwd ||
-            input.input.partialPath.startsWith(`${route.virtualCwd}/`))
-        )
-          payload = {
-            ...payload,
-            cwd: route.relativeCwd,
-            partialPath: input.input.partialPath.slice(route.virtualCwd.length + 1) || "./",
-          };
-        if (input.method === "git.createWorktree" || input.method === "git.driver.createWorktree") {
-          const command = yield* Schema.decodeUnknownEffect(C.VcsCreateWorktreeInput)(input.input);
-          const suffix = yield* rootFor(
-            `${route.workspaceId}:${command.newRefName ?? command.refName}`,
-          );
-          const target =
-            command.path ?? `${route.virtualCwd}-worktrees/${suffix.relativeCwd.split("/")[0]}`;
-          const allocationRoot = route.virtualCwd.slice(
-            0,
-            route.virtualCwd.indexOf("/", "/workspace/".length),
-          );
-          if (!target.startsWith(`${allocationRoot}/`) || target.split("/").includes(".."))
-            return yield* failure("createWorktree")("Worktree must remain in the same sandbox.");
-          const options =
-            input.method === "git.driver.createWorktree"
-              ? (yield* Schema.decodeUnknownEffect(GitProtocol.Git.createWorktree.input)(
-                  input.input,
-                )).options
-              : undefined;
-          payload = {
-            ...payload,
-            ...command,
-            cwd,
-            path: target.slice("/workspace/".length),
-            ...(options
-              ? {
-                  options: {
-                    ...options,
-                    worktreesDirectory: `${allocationRoot.slice("/workspace/".length)}/worktrees`,
-                  },
-                }
-              : {}),
-          };
-        }
-        if (input.method === "git.removeWorktree" || input.method === "git.driver.removeWorktree") {
-          const target = yield* lookup(String(input.input.path));
-          if (target.workspaceId !== route.workspaceId)
-            return yield* failure("removeWorktree")("Cannot remove another sandbox's checkout.");
-          payload = { ...payload, path: target.relativeCwd };
-        }
-        if (input.method === "git.restore") {
-          if (
-            !route.threadId ||
-            !restoreSafety.check ||
-            !(yield* restoreSafety.check(
-              { id: ThreadId.make(route.threadId), worktreePath: route.virtualCwd },
-              { cwd: input.cwd },
-            ))
-          )
-            return yield* failure("restore")(
-              "File restore requires a workspace owned by exactly one active conversation.",
-            );
-          payload = { ...payload, isolated: true };
-        }
-        const result = yield* Effect.tryPromise({
-          try: () => client.call(input.method, payload, input.operationId),
-          catch: failure(input.method),
-        });
-        if (input.method === "git.createWorktree" || input.method === "git.driver.createWorktree") {
-          const envelope =
-            input.method === "git.driver.createWorktree"
-              ? yield* Schema.decodeUnknownEffect(GitProtocol.response(C.VcsCreateWorktreeResult))(
-                  result,
-                )
-              : {
-                  ok: true as const,
-                  value: yield* Schema.decodeUnknownEffect(C.VcsCreateWorktreeResult)(result),
-                };
-          if (!envelope.ok) return result;
-          const created = envelope.value;
-          if (!created.worktree.path.startsWith("/workspace/"))
-            return yield* failure("createWorktree")("Unexpected worker checkout location.");
-          yield* register({
-            ...route,
-            virtualCwd: created.worktree.path,
-            relativeCwd: created.worktree.path.slice("/workspace/".length),
-          });
-        }
-        if (
-          input.method === "git.removeWorktree" ||
-          (input.method === "git.driver.removeWorktree" &&
-            (yield* Schema.decodeUnknownEffect(GitProtocol.response(Schema.Null))(result)).ok)
-        )
-          yield* sql`DELETE FROM agent_runtime_workspace_paths WHERE virtual_cwd=${String(input.input.path)} AND workspace_id=${route.workspaceId}`;
-        return result;
+        return yield* withWorkspaceActivity(
+          route.workspaceId,
+          Effect.gen(function* () {
+            const client = yield* runtime.forWorkspace(route.workspaceId);
+            const cwd = route.relativeCwd + input.cwd.slice(route.virtualCwd.length);
+            let payload: Readonly<Record<string, unknown>> = { ...input.input, cwd };
+            if (
+              input.method === "files.read" &&
+              typeof input.input.relativePath === "string" &&
+              input.input.relativePath.startsWith(`${route.virtualCwd}/`)
+            )
+              payload = {
+                ...payload,
+                relativePath: input.input.relativePath.slice(route.virtualCwd.length + 1),
+              };
+            if (
+              input.method === "files.browse" &&
+              typeof input.input.partialPath === "string" &&
+              (input.input.partialPath === route.virtualCwd ||
+                input.input.partialPath.startsWith(`${route.virtualCwd}/`))
+            )
+              payload = {
+                ...payload,
+                cwd: route.relativeCwd,
+                partialPath: input.input.partialPath.slice(route.virtualCwd.length + 1) || "./",
+              };
+            if (
+              input.method === "git.createWorktree" ||
+              input.method === "git.driver.createWorktree"
+            ) {
+              const command = yield* Schema.decodeUnknownEffect(C.VcsCreateWorktreeInput)(
+                input.input,
+              );
+              const suffix = yield* rootFor(
+                `${route.workspaceId}:${command.newRefName ?? command.refName}`,
+              );
+              const target =
+                command.path ?? `${route.virtualCwd}-worktrees/${suffix.relativeCwd.split("/")[0]}`;
+              const allocationRoot = route.virtualCwd.slice(
+                0,
+                route.virtualCwd.indexOf("/", "/workspace/".length),
+              );
+              if (!target.startsWith(`${allocationRoot}/`) || target.split("/").includes(".."))
+                return yield* failure("createWorktree")(
+                  "Worktree must remain in the same sandbox.",
+                );
+              const options =
+                input.method === "git.driver.createWorktree"
+                  ? (yield* Schema.decodeUnknownEffect(GitProtocol.Git.createWorktree.input)(
+                      input.input,
+                    )).options
+                  : undefined;
+              payload = {
+                ...payload,
+                ...command,
+                cwd,
+                path: target.slice("/workspace/".length),
+                ...(options
+                  ? {
+                      options: {
+                        ...options,
+                        worktreesDirectory: `${allocationRoot.slice("/workspace/".length)}/worktrees`,
+                      },
+                    }
+                  : {}),
+              };
+            }
+            if (
+              input.method === "git.removeWorktree" ||
+              input.method === "git.driver.removeWorktree"
+            ) {
+              const target = yield* lookup(String(input.input.path));
+              if (target.workspaceId !== route.workspaceId)
+                return yield* failure("removeWorktree")(
+                  "Cannot remove another sandbox's checkout.",
+                );
+              payload = { ...payload, path: target.relativeCwd };
+            }
+            if (input.method === "git.restore") {
+              if (
+                !route.threadId ||
+                !restoreSafety.check ||
+                !(yield* restoreSafety.check(
+                  { id: ThreadId.make(route.threadId), worktreePath: route.virtualCwd },
+                  { cwd: input.cwd },
+                ))
+              )
+                return yield* failure("restore")(
+                  "File restore requires a workspace owned by exactly one active conversation.",
+                );
+              payload = { ...payload, isolated: true };
+            }
+            const result = yield* Effect.tryPromise({
+              try: () => client.call(input.method, payload, input.operationId),
+              catch: failure(input.method),
+            });
+            if (
+              input.method === "git.createWorktree" ||
+              input.method === "git.driver.createWorktree"
+            ) {
+              const envelope =
+                input.method === "git.driver.createWorktree"
+                  ? yield* Schema.decodeUnknownEffect(
+                      GitProtocol.response(C.VcsCreateWorktreeResult),
+                    )(result)
+                  : {
+                      ok: true as const,
+                      value: yield* Schema.decodeUnknownEffect(C.VcsCreateWorktreeResult)(result),
+                    };
+              if (!envelope.ok) return result;
+              const created = envelope.value;
+              if (!created.worktree.path.startsWith("/workspace/"))
+                return yield* failure("createWorktree")("Unexpected worker checkout location.");
+              yield* register({
+                ...route,
+                virtualCwd: created.worktree.path,
+                relativeCwd: created.worktree.path.slice("/workspace/".length),
+              });
+            }
+            if (
+              input.method === "git.removeWorktree" ||
+              (input.method === "git.driver.removeWorktree" &&
+                (yield* Schema.decodeUnknownEffect(GitProtocol.response(Schema.Null))(result)).ok)
+            )
+              yield* sql`DELETE FROM agent_runtime_workspace_paths WHERE virtual_cwd=${String(input.input.path)} AND workspace_id=${route.workspaceId}`;
+            return result;
+          }),
+        );
       }).pipe(Effect.mapError(failure(input.method)));
     const project: WorkspaceRouting["Service"]["project"] = (projectId, sourceUrl) =>
       Effect.gen(function* () {
@@ -357,11 +378,16 @@ export const layer = Layer.effect(
                 [field]: route.relativeCwd + value.slice(route.virtualCwd.length),
               };
             }
-          const client = yield* runtime.forThread(threadId);
-          return yield* Effect.tryPromise({
-            try: () => client.call(method, payload),
-            catch: failure(method),
-          });
+          return yield* withWorkspaceActivity(
+            binding.workspaceId,
+            Effect.gen(function* () {
+              const client = yield* runtime.forThread(threadId);
+              return yield* Effect.tryPromise({
+                try: () => client.call(method, payload),
+                catch: failure(method),
+              });
+            }),
+          );
         }).pipe(Effect.mapError(failure(method))),
       observeCall: (input) =>
         Effect.gen(function* () {

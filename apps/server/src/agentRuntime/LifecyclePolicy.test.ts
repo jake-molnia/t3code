@@ -1,3 +1,5 @@
+import * as Deferred from "effect/Deferred";
+import { WorkspaceActivity, withWorkspaceActivity } from "./WorkspaceActivity.ts";
 import { expect, it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -153,6 +155,67 @@ function harness(initial = snapshot()) {
     },
   };
 }
+
+it.effect(
+  "holds compute throughout a pending workspace request and releases its intent on interruption",
+  () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const policy = yield* Policy.makePolicy(h.ports);
+      const entered = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<void>();
+      const request = yield* withWorkspaceActivity(
+        "workspace",
+        Effect.gen(function* () {
+          yield* Deferred.succeed(entered, undefined);
+          yield* Deferred.await(finish);
+        }),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      expect(yield* policy.reconcileThread(root)).toBe("busy");
+      expect(h.stops).toEqual([]);
+      expect(h.methods).toEqual([]);
+      yield* Fiber.interrupt(request);
+      expect(yield* policy.reconcileThread(root)).toBe("release-submitted");
+      expect(h.stops).toHaveLength(1);
+    }).pipe(Effect.provideService(WorkspaceActivity, new Map()), Effect.scoped),
+);
+
+it.effect(
+  "does not submit an idle decision when a workspace request starts after its snapshot",
+  () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const begin = yield* Deferred.make<void>();
+      const entered = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<void>();
+      const request = yield* Effect.gen(function* () {
+        yield* Deferred.await(begin);
+        yield* withWorkspaceActivity(
+          "workspace",
+          Effect.gen(function* () {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(finish);
+          }),
+        );
+      }).pipe(Effect.forkChild);
+      let observations = 0;
+      const policy = yield* Policy.makePolicy({
+        ...h.ports,
+        observe: (workspaceId) =>
+          Effect.gen(function* () {
+            if (++observations === 2) {
+              yield* Deferred.succeed(begin, undefined);
+              yield* Deferred.await(entered);
+            }
+            return yield* h.ports.observe(workspaceId);
+          }),
+      });
+      expect(yield* policy.reconcileThread(root)).toBe("busy");
+      expect(h.stops).toEqual([]);
+      yield* Fiber.interrupt(request);
+    }).pipe(Effect.provideService(WorkspaceActivity, new Map()), Effect.scoped),
+);
 
 it.effect("never stops a root waiting while a bound child runs", () =>
   Effect.gen(function* () {

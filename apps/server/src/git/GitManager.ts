@@ -1,3 +1,5 @@
+import { withWorkspaceActivity } from "../agentRuntime/WorkspaceActivity.ts";
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as RepositoryFiles from "./RepositoryFiles.ts";
 import { GitActionScope } from "../agentRuntime/RemoteGitDriver.ts";
 import * as Arr from "effect/Array";
@@ -2897,7 +2899,24 @@ export const make = Effect.gen(function* () {
         return result;
       });
 
-      return yield* runAction().pipe(
+      const routes = yield* Effect.serviceOption(WorkspaceRouting.WorkspaceRouting);
+      const action =
+        Option.isSome(routes) && routes.value.enabled
+          ? routes.value.describeCwd(input.cwd).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitCommandError({
+                    operation: "workspace-action",
+                    command: "git",
+                    cwd: input.cwd,
+                    detail: "Cannot resolve Git action workspace",
+                    cause,
+                  }),
+              ),
+              Effect.flatMap((route) => withWorkspaceActivity(route.workspaceId, runAction())),
+            )
+          : runAction();
+      return yield* action.pipe(
         Effect.provideService(GitActionScope, { id: progress.actionId, counters: new Map() }),
         Effect.ensuring(invalidateStatus(input.cwd)),
         Effect.tapError((error) =>

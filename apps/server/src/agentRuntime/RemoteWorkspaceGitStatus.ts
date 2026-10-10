@@ -30,20 +30,15 @@ export const layer = Layer.effect(
         cache.set(cwd, status);
         return status;
       }).pipe(Effect.mapError(failure(cwd)));
-    const refresh = (cwd: string) =>
-      Effect.gen(function* () {
-        const current = (yield* observed(cwd)) ?? cache.get(cwd);
-        if (!current)
-          return yield* failure(cwd)("Workspace has no running execution and no cached status.");
-        return current;
-      });
+    const getStatus = (input: C.VcsStatusInput) =>
+      routes.call({ cwd: input.cwd, method: "git.status", input }).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(Schema.toCodecJson(C.VcsStatusResult))),
+        Effect.tap((status) => Effect.sync(() => cache.set(input.cwd, status))),
+        Effect.mapError(failure(input.cwd)),
+      );
+    const refresh = (cwd: string) => getStatus({ cwd });
     return VcsStatusBroadcaster.VcsStatusBroadcaster.of({
-      getStatus: (input) =>
-        routes.call({ cwd: input.cwd, method: "git.status", input }).pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(Schema.toCodecJson(C.VcsStatusResult))),
-          Effect.tap((status) => Effect.sync(() => cache.set(input.cwd, status))),
-          Effect.mapError(failure(input.cwd)),
-        ),
+      getStatus,
       refreshStatus: refresh,
       refreshLocalStatus: refresh,
       refreshPullRequestStatus: refresh,

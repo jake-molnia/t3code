@@ -1,3 +1,4 @@
+import { withWorkspaceActivity } from "./WorkspaceActivity.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { ThreadId } from "@t3tools/contracts";
@@ -77,6 +78,15 @@ it.layer(layer, { excludeTestServices: true })("durable lifecycle submission", (
         expectedRevision: 10,
         expectedIdentity: identity,
       };
+      yield* withWorkspaceActivity(
+        identity.workspaceId,
+        runtime.stop(owner, "suspend", options),
+      ).pipe(Effect.flip);
+      expect(posts).toHaveLength(0);
+      const held = yield* sql<{
+        revision: number;
+      }>`SELECT admission_revision AS revision FROM agent_runtime_workspaces WHERE workspace_id='utility-workspace'`;
+      expect(held[0]?.revision).toBe(10);
       yield* runtime.stop(owner, "suspend", options).pipe(Effect.flip);
       const rows = yield* sql<{
         revision: number;
