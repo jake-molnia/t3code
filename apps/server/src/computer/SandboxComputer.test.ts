@@ -34,6 +34,7 @@ it.effect(
       let incarnation = "first";
       let unavailable = false;
       const runtime = RuntimeClient.RuntimeClient.of({
+        ideOrigin: () => Effect.die("IDE origin is not used by this test"),
         enabled: true,
         forThread: (threadId) =>
           Effect.gen(function* () {

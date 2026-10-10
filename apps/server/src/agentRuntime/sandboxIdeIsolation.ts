@@ -5,15 +5,18 @@ import * as Option from "effect/Option";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
-import { routePrefix } from "./SandboxIde.ts";
+import { routePrefix, isPrivateIdeHost } from "./SandboxIde.ts";
 
 /** IDE content can execute arbitrary workspace code, so it never receives central app routes. */
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const configured = yield* Config.option(Config.String("T3CODE_SANDBOX_IDE_ORIGIN"));
+    const domain = yield* Config.option(Config.String("T3CODE_SANDBOX_IDE_DOMAIN"));
     const base = Option.isSome(configured) ? new URL(configured.value) : undefined;
     const belongsToIde = (hostname: string) =>
-      base !== undefined && (hostname === base.hostname || hostname.endsWith(`.${base.hostname}`));
+      (base !== undefined &&
+        (hostname === base.hostname || hostname.endsWith(`.${base.hostname}`))) ||
+      (Option.isSome(domain) && isPrivateIdeHost(hostname, domain.value));
     return HttpRouter.middleware(
       (httpEffect) =>
         Effect.gen(function* () {

@@ -1,9 +1,14 @@
-import { WorkspaceActivity, withWorkspaceActivity } from "./WorkspaceActivity.ts";
+import {
+  WorkspaceActivity,
+  acquireWorkspaceActivity,
+  withWorkspaceActivity,
+} from "./WorkspaceActivity.ts";
 import * as Pools from "./ExecutionPools.ts";
 import { sameIdentity } from "../execution/ExecutionWorker.ts";
 import { ThreadId, type ProviderDriverKind } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -25,7 +30,10 @@ const RuntimeState = Schema.Struct({
   identity: Schema.optionalKey(ExecutionIdentity),
   endpoint: Schema.optionalKey(Schema.String),
 });
-const Access = Schema.Struct({ state: RuntimeState, token: Schema.optionalKey(Schema.String) });
+const Access = Schema.Struct({
+  state: RuntimeState,
+  token: Schema.optionalKey(Schema.String),
+});
 
 export class RuntimeClientError extends Schema.TaggedError<RuntimeClientError>()(
   "AgentRuntimeClientError",
@@ -82,9 +90,11 @@ export class RuntimeClient extends Context.Service<
       threadId: ThreadId,
       identity: ExecutionIdentity,
     ) => Effect.Effect<void, RuntimeClientError>;
+    readonly ideOrigin: (identity: ExecutionIdentity) => Effect.Effect<string, RuntimeClientError>;
     readonly forThread: (
       threadId: ThreadId,
       driver?: ProviderDriverKind,
+      activityScope?: Scope.Scope,
     ) => Effect.Effect<ExecutionClient, RuntimeClientError>;
     readonly forWorkspace: (
       workspaceId: string,
@@ -173,7 +183,9 @@ export const layer = Layer.effect(
             }),
           );
           if (!admitted) {
-            const rows = yield* sql<{ revision: number }>`UPDATE agent_runtime_workspaces
+            const rows = yield* sql<{
+              revision: number;
+            }>`UPDATE agent_runtime_workspaces
               SET admission_revision = admission_revision + 1 WHERE workspace_id = ${workspaceId}
               RETURNING admission_revision AS revision`;
             const next = rows[0];
@@ -255,12 +267,20 @@ export const layer = Layer.effect(
         Effect.provideService(SqlClient.SqlClient, sql),
         Effect.mapError(failure("cursor")),
       );
-    const forThread = (threadId: ThreadId, driver?: ProviderDriverKind) =>
+    const forThread = (
+      threadId: ThreadId,
+      driver?: ProviderDriverKind,
+      activityScope?: Scope.Scope,
+    ) =>
       Bindings.read(threadId).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
         Effect.mapError(failure("resolve-binding")),
         Effect.flatMap((binding) =>
           Effect.gen(function* () {
+            if (activityScope)
+              yield* acquireWorkspaceActivity(binding.workspaceId).pipe(
+                Effect.provideService(Scope.Scope, activityScope),
+              );
             if (driver !== undefined) {
               const pool = yield* placement(binding.workspaceId);
               if (pool.providerDrivers.length > 0 && !pool.providerDrivers.includes(driver))
@@ -467,6 +487,26 @@ export const layer = Layer.effect(
       observeThread,
       sessionResidency,
       rememberSession,
+      ideOrigin: (identity) =>
+        Effect.gen(function* () {
+          const pool = yield* placement(identity.workspaceId);
+          const response = Schema.Struct({
+            origin: Schema.String,
+            ready: Schema.Boolean,
+          });
+          for (let attempt = 0; attempt < 90; attempt++) {
+            const result = yield* request(pool, "/v1/ide-origins", {
+              profile: pool.profile,
+              identity,
+            }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(response)));
+            if (result.ready) return result.origin;
+            yield* Effect.sleep("2 seconds");
+          }
+          return yield* new RuntimeClientError({
+            operation: "ide-origin",
+            cause: "IDE HTTPS provisioning timed out",
+          });
+        }).pipe(Effect.timeout("3 minutes"), Effect.mapError(failure("ide-origin"))),
       forThread,
       forWorkspace,
       forUtility,

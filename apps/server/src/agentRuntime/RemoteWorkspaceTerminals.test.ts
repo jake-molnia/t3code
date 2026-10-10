@@ -90,6 +90,7 @@ it.layer(layer, { excludeTestServices: true })("remote native terminal", (it) =>
         });
         let wakes = 0;
         const runtime = RuntimeClient.RuntimeClient.of({
+          ideOrigin: () => Effect.die("IDE origin is not used by this test"),
           enabled: true,
           forThread: () =>
             Effect.sync(() => {

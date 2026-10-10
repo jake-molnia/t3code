@@ -81,6 +81,7 @@ it.each(["", "/v1/execution/t3/workspace"])(
                   : input.cookie === "scoped"
                     ? Effect.succeed({
                         kind: "proxy",
+                        connected: Effect.void,
                         access: {
                           endpoint: `http://127.0.0.1:${controller.port}${prefix}`,
                           identity,

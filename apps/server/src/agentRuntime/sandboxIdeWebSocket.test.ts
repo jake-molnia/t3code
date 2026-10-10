@@ -132,6 +132,7 @@ it.effect(
               ? Effect.fail(new SandboxIdeError({ reason: "identity_changed" }))
               : Effect.succeed({
                   kind: "proxy",
+                  connected: Effect.void,
                   access: {
                     endpoint: `http://127.0.0.1:${controllerAddress.port}${prefix}`,
                     identity,

@@ -26,6 +26,7 @@ it.live(
       const runtime = Layer.succeed(
         Runtime.RuntimeClient,
         Runtime.RuntimeClient.of({
+          ideOrigin: () => Effect.die("IDE origin is not used by this test"),
           enabled: false,
           forUtility: () =>
             Effect.suspend(() => {
@@ -75,6 +76,7 @@ it.live(
 const unavailableRuntime = Layer.succeed(
   Runtime.RuntimeClient,
   Runtime.RuntimeClient.of({
+    ideOrigin: () => Effect.die("IDE origin is not used by this test"),
     enabled: false,
     forUtility: () =>
       Effect.fail(new Runtime.RuntimeClientError({ operation: "disabled", cause: null })),

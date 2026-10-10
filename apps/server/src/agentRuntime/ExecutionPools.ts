@@ -51,6 +51,7 @@ export const layer = Layer.effect(
     const http = yield* HttpClient.HttpClient;
     const file = yield* Config.option(Config.String("T3_EXECUTION_POOLS_FILE"));
     const ideOrigin = yield* Config.option(Config.String("T3CODE_SANDBOX_IDE_ORIGIN"));
+    const ideDomain = yield* Config.option(Config.String("T3CODE_SANDBOX_IDE_DOMAIN"));
     const connections = new Map<string, PoolConnection>();
     let defaultPoolId = ExecutionPoolId.make("local");
     if (Option.isSome(file)) {
@@ -158,7 +159,9 @@ export const layer = Layer.effect(
       Effect.map((pools) => ({
         defaultPoolId,
         pools,
-        ...(Option.isSome(ideOrigin) ? { sandboxIdeAvailable: true } : {}),
+        ...(Option.isSome(ideOrigin) || Option.isSome(ideDomain)
+          ? { sandboxIdeAvailable: true }
+          : {}),
       })),
     );
     return ExecutionPools.of({ enabled: connections.size > 0, defaultPoolId, get, snapshot });

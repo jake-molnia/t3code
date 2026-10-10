@@ -90,6 +90,7 @@ export const layer = HttpRouter.use((router) =>
           );
           // Connect upstream before accepting the browser upgrade, including identity/auth rejection.
           const reader = yield* upstream.reader;
+          yield* authorization.connected;
           const downstream = yield* request.upgrade;
           const downstreamReader = yield* downstream.reader;
           const upstreamWriter = yield* upstream.writer;

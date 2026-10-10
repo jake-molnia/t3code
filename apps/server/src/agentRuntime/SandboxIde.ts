@@ -10,11 +10,17 @@ import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import type { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import { sameIdentity } from "../execution/ExecutionWorker.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
+
+export const isPrivateIdeHost = (hostname: string, domain: string) =>
+  hostname.endsWith(`.${domain}`) &&
+  /^t3-ide-[a-f0-9]{32}$/.test(hostname.slice(0, -(domain.length + 1)));
 
 const sessionLifetime = 12 * 60 * 60 * 1000;
 const ticketLifetime = 60 * 1000;
@@ -29,10 +35,15 @@ type Session = {
   ticket: string | null;
   cookie: string;
   url: URL;
+  activity: Scope.Closeable;
 };
 type Authorization =
   | { kind: "bootstrap"; cookie: string; url: string; secure: boolean }
-  | { kind: "proxy"; access: ReturnType<ExecutionClient["credentialSource"]> };
+  | {
+      kind: "proxy";
+      access: ReturnType<ExecutionClient["credentialSource"]>;
+      connected: Effect.Effect<void>;
+    };
 
 export class SandboxIde extends Context.Service<
   SandboxIde,
@@ -68,43 +79,73 @@ export const layer = Layer.effect(
     ) {
       return yield* Effect.die(new Error("T3CODE_SANDBOX_IDE_ORIGIN must be an HTTPS origin"));
     }
+    const ideDomain = yield* Config.option(Config.String("T3CODE_SANDBOX_IDE_DOMAIN"));
+    const serviceScope = yield* Effect.scope;
     const sessions = new Map<string, Session>();
     return SandboxIde.of({
       open: (input) =>
         Effect.gen(function* () {
-          if (!origin) return yield* new SandboxIdeError({ reason: "unavailable" });
-          const client = yield* runtime
-            .forThread(input.threadId)
-            .pipe(
+          const activity = yield* Scope.fork(serviceScope);
+          return yield* Effect.gen(function* () {
+            if (!origin && Option.isNone(ideDomain))
+              return yield* new SandboxIdeError({ reason: "unavailable" });
+            const client = yield* runtime
+              .forThread(input.threadId, undefined, activity)
+              .pipe(
+                Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
+              );
+            const id = yield* crypto.randomUUIDv4.pipe(
               Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
             );
-          const now = yield* Clock.currentTimeMillis;
-          for (const [id, session] of sessions) if (session.expiresAt <= now) sessions.delete(id);
-          const id = yield* crypto.randomUUIDv4.pipe(
-            Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
-          );
-          const ticket = yield* crypto.randomUUIDv4.pipe(
-            Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
-          );
-          const url = new URL(origin);
-          url.hostname = `${id}.${origin.hostname}`;
-          url.pathname = `${routePrefix}${id}/`;
-          url.searchParams.set("folder", input.cwd);
-          const cookie = yield* crypto.randomUUIDv4.pipe(
-            Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
-          );
-          sessions.set(id, {
-            threadId: input.threadId,
-            identity: client.identity,
-            expiresAt: now + sessionLifetime,
-            ticketExpiresAt: now + ticketLifetime,
-            ticket,
-            cookie,
-            url,
-          });
-          const bootstrapUrl = new URL(url);
-          bootstrapUrl.searchParams.set("ticket", ticket);
-          return { url: bootstrapUrl.toString() };
+            const ticket = yield* crypto.randomUUIDv4.pipe(
+              Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
+            );
+            const url = origin
+              ? new URL(origin)
+              : yield* runtime.ideOrigin(client.identity).pipe(
+                  Effect.flatMap((value) => Effect.try(() => new URL(value))),
+                  Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
+                );
+            if (origin) url.hostname = `${id}.${origin.hostname}`;
+            else if (
+              url.protocol !== "https:" ||
+              url.port ||
+              url.pathname !== "/" ||
+              url.search ||
+              url.hash ||
+              url.username ||
+              url.password ||
+              Option.isNone(ideDomain) ||
+              !isPrivateIdeHost(url.hostname, ideDomain.value)
+            ) {
+              return yield* new SandboxIdeError({ reason: "unavailable" });
+            }
+            url.pathname = `${routePrefix}${id}/`;
+            url.searchParams.set("folder", input.cwd);
+            const cookie = yield* crypto.randomUUIDv4.pipe(
+              Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
+            );
+            const now = yield* Clock.currentTimeMillis;
+            for (const [key, session] of sessions)
+              if (session.expiresAt <= now) sessions.delete(key);
+            yield* Effect.sleep("60 seconds").pipe(
+              Effect.andThen(Scope.close(activity, Exit.void)),
+              Effect.forkIn(serviceScope),
+            );
+            sessions.set(id, {
+              activity,
+              threadId: input.threadId,
+              identity: client.identity,
+              expiresAt: now + sessionLifetime,
+              ticketExpiresAt: now + ticketLifetime,
+              ticket,
+              cookie,
+              url,
+            });
+            const bootstrapUrl = new URL(url);
+            bootstrapUrl.searchParams.set("ticket", ticket);
+            return { url: bootstrapUrl.toString() };
+          }).pipe(Effect.onError(() => Scope.close(activity, Exit.void)));
         }),
       authorize: (input) =>
         Effect.gen(function* () {
@@ -147,7 +188,11 @@ export const layer = Layer.effect(
               url: session.url.toString(),
               secure: true,
             };
-          return { kind: "proxy", access: current.client.credentialSource() };
+          return {
+            kind: "proxy",
+            access: current.client.credentialSource(),
+            connected: Scope.close(session.activity, Exit.void),
+          };
         }),
     });
   }),
