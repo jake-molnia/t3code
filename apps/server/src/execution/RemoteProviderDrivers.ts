@@ -115,7 +115,10 @@ export const makeRemoteDrivers = Effect.gen(function* () {
             }
             return client;
           }).pipe(Effect.mapError(failure));
-        const utility = runtime.forUtility(instanceId).pipe(
+        const utility = Effect.gen(function* () {
+          if (!input.enabled) return yield* failure("Provider is disabled in settings");
+          return yield* runtime.forUtility(instanceId);
+        }).pipe(
           Effect.flatMap((client) => configure(client, false)),
           Effect.tap((client) =>
             Effect.sync(() => {
@@ -209,9 +212,22 @@ export const makeRemoteDrivers = Effect.gen(function* () {
             Effect.mapError(failure),
           );
         }
+        const disabledSnapshot = buildUnavailableProviderSnapshot({
+          instanceId,
+          driverKind: driver.driverKind,
+          displayName: input.displayName,
+          accentColor: input.accentColor,
+          reason: "Provider is disabled in settings; execution has not been probed.",
+        }).pipe(
+          Effect.map((value): C.ServerProvider => {
+            const { unavailableReason: _unavailable, ...disabled } = value;
+            return { ...disabled, availability: "available" };
+          }),
+        );
         let lastSnapshot: C.ServerProvider | undefined;
         const snapshot = (method: string, wake: boolean) =>
           Effect.gen(function* () {
+            if (!input.enabled) return yield* disabledSnapshot;
             let client: ExecutionClient;
             if (wake || lastSnapshot === undefined) {
               client = yield* utility;
@@ -225,7 +241,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               }
             }
             const raw = yield* Effect.tryPromise(() =>
-              client.transient(method, { instanceId, input: null }),
+              client.call(method, { instanceId, input: null }),
             );
             return yield* decodeSnapshot(raw);
           }).pipe(
@@ -281,9 +297,11 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               ),
           },
           snapshotForCwd: (cwd) =>
-            invoke("provider.snapshotForCwd", cwd, C.ServerProvider, cwd).pipe(
-              Effect.map((value) => applyCredentialPolicy(value, authPolicy)),
-            ),
+            !input.enabled
+              ? getSnapshot
+              : invoke("provider.snapshotForCwd", cwd, C.ServerProvider, cwd).pipe(
+                  Effect.map((value) => applyCredentialPolicy(value, authPolicy)),
+                ),
           refreshModels: () => refresh.pipe(Effect.asVoid),
           ...(authPolicy.kind !== "workspace"
             ? {
