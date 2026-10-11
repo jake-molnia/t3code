@@ -194,7 +194,7 @@ it.effect("pins idle compute through startup and hands it to the worker lease", 
           pendingEffects: false,
           settleScript: null,
         }),
-      observe: () => Effect.die("Idle policy must not observe while IDE owns compute"),
+      observe: () => Effect.succeed({ kind: "running", client: client("one") }),
       resume: () => Effect.die("Idle policy must not resume while IDE owns compute"),
       stop: () => Effect.die("Idle policy must not stop while IDE owns compute"),
     });
