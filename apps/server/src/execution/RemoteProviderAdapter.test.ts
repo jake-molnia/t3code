@@ -13,13 +13,13 @@ import type * as A from "@t3tools/provider-core/server/ProviderAdapter";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { makeProviderExecutor } from "./ProviderExecutor.ts";
 import { createExecutionWorker, type ExecutionWorker } from "./ExecutionWorker.ts";
-import { createExecutionClient } from "./ExecutionClient.ts";
+import { createExecutionClient, ExecutionTransportError } from "./ExecutionClient.ts";
 import { createRemoteProviderAdapter, remoteEventEnvelope } from "./RemoteProviderAdapter.ts";
 import { openWorkerJournal } from "./WorkerJournal.ts";
 import { listenWorker } from "./WorkerHttpServer.ts";
 
 it.live(
-  "provider session and events cross JSON with dates intact; central scope disposal preserves native session",
+  "provider JSON transport recovers event timeouts without replaying mutations and preserves native sessions",
   () =>
     Effect.gen(function* () {
       const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
@@ -161,11 +161,45 @@ it.live(
             server = yield* Effect.promise(() =>
               listenWorker({ host: "127.0.0.1", port: 0, handle: worker!.handle }),
             );
-            const client = createExecutionClient({
+            const liveClient = createExecutionClient({
               endpoint: `http://127.0.0.1:${server.port}`,
               token,
               identity,
             });
+            const eventCursors: number[] = [];
+            const mutationCalls: string[] = [];
+            let terminalFailure:
+              | "identity_changed"
+              | "authorization"
+              | "sequence_conflict"
+              | undefined;
+            let firstBatch: Awaited<ReturnType<typeof liveClient.events>> | undefined;
+            const client: typeof liveClient = {
+              ...liveClient,
+              call: async (method, value, operationId) => {
+                mutationCalls.push(method);
+                return liveClient.call(method, value, operationId);
+              },
+              events: async (after, signal, sessionId, waitMs) => {
+                eventCursors.push(after);
+                if (terminalFailure === "sequence_conflict") {
+                  const envelope = firstBatch?.[0];
+                  if (!envelope) throw new Error("Missing captured event");
+                  return [{ ...envelope, sequence: after }];
+                }
+                if (terminalFailure) throw new ExecutionTransportError(terminalFailure);
+                if (eventCursors.length === 1) throw new ExecutionTransportError("timeout");
+                if (eventCursors.length === 3) {
+                  const envelope = firstBatch?.[0];
+                  if (!worker || !envelope) throw new Error("Missing live worker event");
+                  await worker.publish(envelope.sessionId, envelope.event);
+                  throw new ExecutionTransportError("timeout");
+                }
+                const batch = await liveClient.events(after, signal, sessionId, waitMs);
+                firstBatch ??= batch;
+                return batch;
+              },
+            };
             yield* mcpSessions.set({
               environmentId: C.EnvironmentId.make("central"),
               threadId: C.ThreadId.make("thread"),
@@ -175,11 +209,16 @@ it.live(
               authorizationHeader: "Bearer upstream",
               browserToolsAvailable: true,
             });
+            let cursorReads = 0;
             const remote = createRemoteProviderAdapter({
               mcpSessions: yield* McpProviderSessions.McpProviderSessions,
               instanceId,
               driver,
               client,
+              getEventCursor: async () => {
+                cursorReads++;
+                return 0;
+              },
               requireRemoteMcpEndpoint: true,
               mcpEndpoint: "http://t3-central:3773/mcp",
             });
@@ -200,8 +239,26 @@ it.live(
             expect(DateTime.formatIso(runtime.providerSession.createdAt)).toBe(
               "2026-01-01T00:00:00.000Z",
             );
-            const events = yield* Stream.runCollect(runtime.events.pipe(Stream.take(1)));
-            expect(events).toHaveLength(1);
+            const callsBeforeReconnect = [...mutationCalls];
+            const events = yield* Stream.runCollect(runtime.events.pipe(Stream.take(2)));
+            expect(events).toHaveLength(2);
+            expect(eventCursors).toEqual([0, 0, 1, 1]);
+            expect(cursorReads).toBe(1);
+            expect(events.map((event) => remoteEventEnvelope(event)?.sequence)).toEqual([1, 2]);
+            expect(mutationCalls).toEqual(callsBeforeReconnect);
+            for (const failure of [
+              "identity_changed",
+              "authorization",
+              "sequence_conflict",
+            ] as const) {
+              terminalFailure = failure;
+              const readsBefore = eventCursors.length;
+              const exit = yield* Stream.runCollect(runtime.events).pipe(Effect.exit);
+              expect(exit._tag).toBe("Failure");
+              expect(eventCursors.length).toBe(readsBefore + 1);
+              expect(mutationCalls).toEqual(callsBeforeReconnect);
+            }
+            terminalFailure = undefined;
             const event = events[0];
             expect(event?.type).toBe("provider_session.updated");
             if (event) expect(remoteEventEnvelope(event)?.sequence).toBe(1);

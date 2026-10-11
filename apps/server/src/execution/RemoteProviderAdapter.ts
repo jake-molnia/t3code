@@ -274,7 +274,7 @@ export function createRemoteProviderAdapter(options: {
                     : new ExecutionTransportError("unavailable"),
               }).pipe(
                 Effect.retry({
-                  while: (error) => error.code === "unavailable",
+                  while: (error) => error.code === "unavailable" || error.code === "timeout",
                   schedule: Schedule.spaced("1 second"),
                 }),
                 Effect.mapError(error),
