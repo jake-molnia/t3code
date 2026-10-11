@@ -70,6 +70,25 @@ describe("provider compatibility", () => {
     }
   });
 
+  it("classifies the running build with its OpenCode 2 protocol policy", () => {
+    const opencode = ProviderDriverKind.make("opencode");
+    for (const [version, expected] of [
+      ["2.0.26", "supported"],
+      ["2.0.17", "unsupported"],
+      ["1.14.19", "graceful"],
+      ["1.14.18", "broken"],
+    ] as const) {
+      const snapshot = applyProviderCompatibility(
+        { ...provider, driver: opencode, version, status: "ready", message: undefined },
+        undefined,
+        ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+      );
+      assert.strictEqual(snapshot.compatibilityAdvisory?.status, expected);
+      assert.strictEqual(snapshot.compatibilityAdvisory?.recommendedRange, ">=2.0.18");
+      assert.isNull(snapshot.compatibilityAdvisory?.recommendedVersion);
+    }
+  });
+
   it("keeps releases before V2 on the OpenCode 1 policy they shipped with", () => {
     // Every installed build fetches main's manifest, and 0.0.45 and older run the
     // V1 orchestrator, which cannot drive OpenCode 2.
