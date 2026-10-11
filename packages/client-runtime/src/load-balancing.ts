@@ -82,3 +82,20 @@ export function reconcileExecutionPoolProvider(input: {
       incompatible && input.automatic && !input.placementLocked ? input.balancedPoolId : null,
   };
 }
+
+/** Cached automatic draft choices are suggestions, never an override of current preferences. */
+export function resolveExecutionPoolSelection(input: {
+  catalog: { snapshot: ExecutionPoolsSnapshot | null; receivedAt: number; pending: boolean };
+  selectedPoolId: ExecutionPoolsSnapshot["defaultPoolId"] | null;
+  driver: ProviderDriverKind;
+  automatic: boolean;
+  placementLocked: boolean;
+  weights: Readonly<Record<string, number>>;
+  now: number;
+}) {
+  if (input.placementLocked) return input.selectedPoolId;
+  if (!input.automatic)
+    return input.selectedPoolId ?? input.catalog.snapshot?.defaultPoolId ?? null;
+  if (input.catalog.pending) return null;
+  return chooseExecutionPool(input.catalog, input.driver, input.weights, input.now);
+}
