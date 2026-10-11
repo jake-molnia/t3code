@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Export transport owns bounded positional file reads, fsync, and incremental SHA-256.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -8,6 +9,14 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerConfig from "../config.ts";
 import * as UsageService from "../usage/UsageService.ts";
 import type { History } from "../usage/UsageHistorySources.ts";
+
+export class WorkerUsageError extends Schema.TaggedError<WorkerUsageError>()("WorkerUsageError", {
+  code: Schema.Literals([
+    "usage_export_busy",
+    "usage_export_unavailable",
+    "unsupported_usage_method",
+  ]),
+}) {}
 
 export const CHUNK_BYTES = 1024 * 1024;
 export const MAX_EXPORT_BYTES = 128 * 1024 * 1024;
@@ -110,7 +119,7 @@ export const makeWorkerUsage = Effect.gen(function* () {
           yield* prune;
           if (method === "usage.history") {
             if (exports.size >= 2)
-              return yield* Effect.fail(new Error("Usage history export already in progress"));
+              return yield* new WorkerUsageError({ code: "usage_export_busy" });
             const history = yield* usage.readHistory;
             const exportId = NodeCrypto.randomUUID();
             const destination = NodePath.join(directory, exportId);
@@ -129,7 +138,7 @@ export const makeWorkerUsage = Effect.gen(function* () {
             const request = yield* decodeRead(input);
             const entry = exports.get(request.exportId);
             if (!entry || request.offset >= entry.size)
-              return yield* Effect.fail(new Error("Usage export unavailable"));
+              return yield* new WorkerUsageError({ code: "usage_export_unavailable" });
             return yield* Effect.tryPromise(async () => {
               const handle = await NodeFSP.open(NodePath.join(directory, request.exportId), "r");
               try {
@@ -154,7 +163,7 @@ export const makeWorkerUsage = Effect.gen(function* () {
             }
             return null;
           }
-          return yield* Effect.fail(new Error("Unsupported usage method"));
+          return yield* new WorkerUsageError({ code: "unsupported_usage_method" });
         } finally {
           activeOperations--;
         }

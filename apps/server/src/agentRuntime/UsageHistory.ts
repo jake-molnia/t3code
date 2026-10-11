@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Transport verifies bounded chunks with incremental SHA-256 before durable admission.
 import * as NodeCrypto from "node:crypto";
 import * as C from "@t3tools/contracts";
 import type { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
@@ -63,9 +64,9 @@ export class UsageHistory extends Context.Service<
   UsageHistory,
   {
     readonly read: Effect.Effect<H.History, C.UsageReadError>;
-    readonly collect: (
+    readonly collect: <E>(
       client: ExecutionClient,
-      current: Effect.Effect<ExecutionIdentity | null, unknown>,
+      current: Effect.Effect<ExecutionIdentity | null, E>,
       force?: boolean,
     ) => Effect.Effect<void, C.UsageReadError>;
   }
@@ -156,7 +157,7 @@ export const layer = Layer.effect(
                 ).pipe(Effect.timeout("5 seconds"), Effect.ignore),
               ),
             );
-            const identity = yield* current;
+            const identity = yield* current.pipe(Effect.mapError(failure));
             if (!identity || !sameIdentity(identity, client.identity))
               return yield* failure("Worker changed during history collection");
             yield* sql.withTransaction(
