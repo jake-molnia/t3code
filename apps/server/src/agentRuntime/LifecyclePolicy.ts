@@ -1,3 +1,4 @@
+import * as Enrollment from "./LifecycleEnrollment.ts";
 import * as UsageHistory from "./UsageHistory.ts";
 import { WorkspaceActivity, WorkspaceRecentActivity } from "./WorkspaceActivity.ts";
 import {
@@ -139,6 +140,12 @@ export interface LifecyclePolicyPorts {
   readonly enabled: boolean;
   readonly idleMs: number;
   readonly roots: Effect.Effect<ReadonlyArray<ThreadId>, LifecyclePolicyError>;
+  readonly recoverSettlements: Effect.Effect<void, LifecyclePolicyError>;
+  readonly enroll: (threadId: ThreadId) => Effect.Effect<void, LifecyclePolicyError>;
+  readonly retire: (
+    snapshot: LifecycleSnapshot,
+    completed: RuntimeClient.CompletedStop,
+  ) => Effect.Effect<void, LifecyclePolicyError>;
   readonly read: (
     threadId: ThreadId,
   ) => Effect.Effect<LifecycleSnapshot | null, LifecyclePolicyError>;
@@ -191,6 +198,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
       return null;
     });
   const inProgress = new Set<string>();
+  const usageAttempts = new Map<string, { revision: number; at: number }>();
   const utilities = new Map<string, { incarnation: string; since: number }>();
   const invoke = (client: ExecutionClient, method: string, input: unknown, operationId?: string) =>
     Effect.tryPromise({
@@ -203,6 +211,32 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
     if (!ports.enabled) return "stopped" as const;
     let snapshot = yield* ports.read(threadId);
     if (!snapshot || snapshot.ownerThreadId !== threadId) return "busy" as const;
+    const nowBeforeObservation = yield* Clock.currentTimeMillis;
+    const guard = yield* activityGuard(snapshot);
+    const activityAtBeforeObservation =
+      snapshot.kind === "utility"
+        ? utilities.get(snapshot.workspaceId)?.since
+        : lastActivity(snapshot);
+    const deferredDecision =
+      guard ??
+      (snapshot.pendingEffects || snapshot.members.some(memberIsBusy)
+        ? ("busy" as const)
+        : settlementAt(snapshot) === null &&
+            activityAtBeforeObservation !== undefined &&
+            nowBeforeObservation - activityAtBeforeObservation < ports.idleMs
+          ? ("grace" as const)
+          : null);
+    const attempted = usageAttempts.get(snapshot.workspaceId);
+    if (
+      deferredDecision &&
+      attempted?.revision === snapshot.revision &&
+      nowBeforeObservation - attempted.at < 30_000
+    )
+      return deferredDecision;
+    usageAttempts.set(snapshot.workspaceId, {
+      revision: snapshot.revision,
+      at: nowBeforeObservation,
+    });
     let observed = yield* ports.observe(snapshot.workspaceId);
     if (observed.kind === "running")
       yield* ports
@@ -217,8 +251,12 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
     if (observed.kind === "stopped") {
       utilities.delete(snapshot.workspaceId);
       const settledAt = settlementAt(snapshot);
-      if (settledAt === null) return "stopped" as const;
       if (snapshot.pendingEffects || snapshot.members.some(memberIsBusy)) return "busy" as const;
+      if (settledAt === null) {
+        usageAttempts.delete(snapshot.workspaceId);
+        if (observed.completedStop) yield* ports.retire(snapshot, observed.completedStop);
+        return "stopped" as const;
+      }
       if (snapshot.settleScript && !snapshot.settlementProven) {
         const resumed = yield* ports.resume(snapshot.workspaceId);
         const fresh = yield* ports.read(threadId);
@@ -232,7 +270,11 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
         snapshot = fresh;
         observed = { kind: "running", client: resumed };
       } else {
-        if (observed.phase === "released") return "stopped" as const;
+        if (observed.phase === "released") {
+          usageAttempts.delete(snapshot.workspaceId);
+          if (observed.completedStop) yield* ports.retire(snapshot, observed.completedStop);
+          return "stopped" as const;
+        }
         if (observed.phase !== "suspended" || !observed.identity)
           return yield* new LifecyclePolicyError({
             operation: "release-suspended",
@@ -356,10 +398,11 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
     yield* ports.stop(snapshot, action, operationId, client.identity);
     return action === "suspend" ? ("suspend-submitted" as const) : ("release-submitted" as const);
   });
-  const requestSettlement = Effect.fn("LifecyclePolicy.requestSettlement")(function* (
+  const scheduleReconciliation = Effect.fn("LifecyclePolicy.scheduleReconciliation")(function* (
     threadId: ThreadId,
   ) {
-    if (!ports.enabled || inProgress.has(threadId)) return;
+    if (!ports.enabled) return;
+    if (inProgress.has(threadId)) return;
     inProgress.add(threadId);
     yield* reconcileThread(threadId).pipe(
       Effect.catchCause((cause) =>
@@ -373,17 +416,39 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
       Effect.forkIn(scope),
     );
   });
+  const retryEnrollment = (effect: Effect.Effect<void, LifecyclePolicyError>) =>
+    effect.pipe(
+      Effect.as(true),
+      Effect.catch((cause) =>
+        Effect.logWarning("Retrying workspace lifecycle enrollment", { cause }).pipe(
+          Effect.as(false),
+        ),
+      ),
+      Effect.repeat({ until: (accepted) => accepted, schedule: Schedule.spaced("1 second") }),
+      Effect.asVoid,
+    );
+  const requestSettlement = Effect.fn("LifecyclePolicy.requestSettlement")(function* (
+    threadId: ThreadId,
+  ) {
+    if (!ports.enabled) return;
+    yield* retryEnrollment(ports.enroll(threadId));
+    yield* scheduleReconciliation(threadId);
+  });
   const start = ports.enabled
-    ? ports.roots.pipe(
-        Effect.flatMap((roots) =>
-          Effect.forEach(roots, requestSettlement, { concurrency: 8, discard: true }),
+    ? retryEnrollment(ports.recoverSettlements).pipe(
+        Effect.andThen(
+          ports.roots.pipe(
+            Effect.flatMap((roots) =>
+              Effect.forEach(roots, scheduleReconciliation, { concurrency: 8, discard: true }),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Workspace lifecycle reconciliation failed", { cause }),
+            ),
+            Effect.repeat(Schedule.spaced("5 seconds")),
+            Effect.forkScoped,
+            Effect.asVoid,
+          ),
         ),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Workspace lifecycle reconciliation failed", { cause }),
-        ),
-        Effect.repeat(Schedule.spaced("5 seconds")),
-        Effect.forkScoped,
-        Effect.asVoid,
       )
     : Effect.void;
   return LifecyclePolicy.of({ enabled: ports.enabled, reconcileThread, requestSettlement, start });
@@ -399,10 +464,8 @@ export const make = Effect.gen(function* () {
   const idleMs = yield* Config.Number("T3_SANDBOX_IDLE_MS").pipe(Config.withDefault(300_000));
   if (!Number.isFinite(idleMs) || idleMs < 0)
     return yield* Effect.die("T3_SANDBOX_IDLE_MS must be a nonnegative finite duration");
-  const roots = sql<{
-    owner_thread_id: string;
-  }>`SELECT owner_thread_id FROM agent_runtime_workspaces WHERE execution_requested = 1`.pipe(
-    Effect.map((rows) => rows.map((row) => ThreadId.make(row.owner_thread_id))),
+  const roots = Enrollment.roots.pipe(
+    Effect.provideService(SqlClient.SqlClient, sql),
     Effect.mapError(failure("list-roots")),
   );
   const read = (threadId: ThreadId) =>
@@ -531,6 +594,39 @@ export const make = Effect.gen(function* () {
     idleMs,
     roots,
     read,
+    recoverSettlements: Enrollment.recoverSettlements.pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.mapError(failure("recover-settlements")),
+    ),
+    enroll: (threadId) =>
+      Enrollment.enroll(threadId).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.mapError(failure("enroll")),
+      ),
+    retire: (snapshot, completed) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const fresh = yield* read(snapshot.ownerThreadId);
+            if (
+              !fresh ||
+              fresh.revision !== snapshot.revision ||
+              fresh.pendingEffects ||
+              fresh.members.some(memberIsBusy) ||
+              settlementAt(fresh) !== settlementAt(snapshot)
+            )
+              return;
+            const settledAt = settlementAt(fresh);
+            if (
+              settledAt !== null &&
+              (completed.action !== "release_compute" ||
+                (fresh.settleScript && !fresh.settlementProven))
+            )
+              return;
+            yield* Enrollment.retire(fresh.workspaceId, fresh.revision, completed);
+          }),
+        )
+        .pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.mapError(failure("retire"))),
     observe: (workspaceId) =>
       runtime.observeWorkspace(workspaceId).pipe(Effect.mapError(failure("observe"))),
     resume: (workspaceId) =>

@@ -49,12 +49,18 @@ export class RuntimeClientError extends Schema.TaggedError<RuntimeClientError>()
   }
 }
 
+export type CompletedStop = Pick<
+  typeof LifecycleStopRequest.Type,
+  "operationId" | "revision" | "action"
+>;
+
 export type RuntimeObservation =
   | { readonly kind: "running"; readonly client: ExecutionClient }
   | {
       readonly kind: "stopped";
       readonly phase?: "suspended" | "released";
       readonly identity?: ExecutionIdentity | null;
+      readonly completedStop?: CompletedStop;
     };
 
 export const LifecycleStopRequest = Schema.Struct({
@@ -186,7 +192,7 @@ export const layer = Layer.effect(
             const rows = yield* sql<{
               revision: number;
             }>`UPDATE agent_runtime_workspaces
-              SET admission_revision = admission_revision + 1 WHERE workspace_id = ${workspaceId}
+              SET admission_revision = admission_revision + 1, execution_requested = 1 WHERE workspace_id = ${workspaceId}
               RETURNING admission_revision AS revision`;
             const next = rows[0];
             if (!next)
@@ -251,6 +257,7 @@ export const layer = Layer.effect(
             operation: "identity",
             cause: "Runtime returned another workspace",
           });
+        yield* sql`UPDATE agent_runtime_workspaces SET execution_requested=1 WHERE workspace_id=${workspaceId} AND admission_revision=${admittedRevision}`;
         return createExecutionClient(access);
       }).pipe(
         (effect) => withWorkspaceActivity(workspaceId, effect),
@@ -399,7 +406,7 @@ export const layer = Layer.effect(
               next,
             );
             const updated =
-              yield* sql`UPDATE agent_runtime_workspaces SET admission_revision=${next.revision}, lifecycle_request_json=${encoded} WHERE workspace_id=${workspaceId} AND admission_revision=${row.revision} RETURNING workspace_id`;
+              yield* sql`UPDATE agent_runtime_workspaces SET admission_revision=${next.revision}, lifecycle_request_json=${encoded}, execution_requested=1 WHERE workspace_id=${workspaceId} AND admission_revision=${row.revision} RETURNING workspace_id`;
             if (updated.length !== 1)
               return yield* new RuntimeClientError({
                 operation: "stop",
@@ -452,12 +459,24 @@ export const layer = Layer.effect(
           pool,
           `/v1/workspaces/${encodeURIComponent(workspaceId)}?profile=${encodeURIComponent(profile)}`,
         ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Access)));
-        if (access.state.phase === "released" || access.state.phase === "suspended")
+        if (access.state.phase === "released" || access.state.phase === "suspended") {
+          const request = access.state.request;
+          const action = access.state.phase === "released" ? "release_compute" : "suspend";
           return {
             kind: "stopped",
             phase: access.state.phase,
             identity: access.state.identity ?? null,
+            ...(request.action === action && access.state.completedOperation === request.operationId
+              ? {
+                  completedStop: {
+                    operationId: request.operationId,
+                    revision: request.revision,
+                    action,
+                  } satisfies CompletedStop,
+                }
+              : {}),
           } as const;
+        }
         if (
           access.state.phase !== "running" ||
           !access.state.identity ||
