@@ -1,6 +1,5 @@
 import { expect, it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Scope from "effect/Scope";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -39,12 +38,6 @@ const setup = Effect.gen(function* () {
   const current = (id: string) => clients.get(id) ?? client("one");
   let provisioning: Effect.Effect<void> = Effect.void;
   const runtime = RuntimeClient.RuntimeClient.of({
-    ideOrigin: (identity) =>
-      provisioning.pipe(
-        Effect.as(
-          `https://t3-ide-${identity.workspaceId === "two" ? "b".repeat(32) : "a".repeat(32)}.example.ts.net`,
-        ),
-      ),
     enabled: true,
     forThread: (id, _driver, scope) =>
       Effect.gen(function* () {
@@ -53,6 +46,7 @@ const setup = Effect.gen(function* () {
           yield* acquireWorkspaceActivity(found.identity.workspaceId).pipe(
             Effect.provideService(Scope.Scope, scope),
           );
+        yield* provisioning;
         return found;
       }),
     observeThread: (id) => Effect.sync(() => ({ kind: "running", client: current(id) })),
@@ -64,23 +58,13 @@ const setup = Effect.gen(function* () {
     getEventCursor: () => Effect.succeed(0),
     stop: () => Effect.void,
   });
-  const make = (privateOrigin = false) =>
+  const make = () =>
     Layer.build(
       SandboxIde.layer.pipe(
         Layer.provide(Layer.succeed(RuntimeClient.RuntimeClient, runtime)),
         Layer.provide(NodeCrypto.layer),
       ),
-    ).pipe(
-      Effect.provideService(
-        ConfigProvider.ConfigProvider,
-        ConfigProvider.fromUnknown(
-          privateOrigin
-            ? { T3CODE_SANDBOX_IDE_DOMAIN: "example.ts.net" }
-            : { T3CODE_SANDBOX_IDE_ORIGIN: "https://ide.example" },
-        ),
-      ),
-      Effect.map((context) => Context.get(context, SandboxIde.SandboxIde)),
-    );
+    ).pipe(Effect.map((context) => Context.get(context, SandboxIde.SandboxIde)));
   const ide = yield* make();
   const open = (id: string) =>
     Effect.gen(function* () {
@@ -88,15 +72,15 @@ const setup = Effect.gen(function* () {
         threadId: ThreadId.make(id),
         cwd: "/workspace/same/repo",
       });
-      const url = new URL(result.url);
+      const url = new URL(result.url, "https://t3.example");
       const sessionId = url.pathname.split("/")[3]!;
       const bootstrap = yield* ide.authorize({
         sessionId,
-        host: url.host,
+        requestOrigin: url.origin,
         ticket: url.searchParams.get("ticket")!,
       });
       if (bootstrap.kind !== "bootstrap") throw new Error("Expected bootstrap");
-      return { url, sessionId, host: url.host, cookie: bootstrap.cookie };
+      return { url, sessionId, requestOrigin: url.origin, cookie: bootstrap.cookie };
     });
   return {
     ide,
@@ -114,7 +98,8 @@ it.effect("separates identical paths in roots and inherits the parent's worker f
     const one = yield* open("root-one");
     const two = yield* open("root-two");
     const child = yield* open("child");
-    expect(one.host).not.toBe(two.host);
+    expect(one.url.origin).toBe(two.url.origin);
+    expect(one.sessionId).not.toBe(two.sessionId);
     for (const [session, workspace] of [
       [one, "one"],
       [two, "two"],
@@ -127,7 +112,9 @@ it.effect("separates identical paths in roots and inherits the parent's worker f
     expect((yield* Effect.exit(ide.authorize({ ...two, cookie: one.cookie })))._tag).toBe(
       "Failure",
     );
-    expect((yield* Effect.exit(ide.authorize({ ...one, host: two.host })))._tag).toBe("Failure");
+    expect(
+      (yield* Effect.exit(ide.authorize({ ...one, requestOrigin: "https://other.example" })))._tag,
+    ).toBe("Failure");
   }),
 );
 it.effect("consumes tickets once, rejects cross-origin requests, and expires the ticket", () =>
@@ -150,13 +137,14 @@ it.effect("consumes tickets once, rejects cross-origin requests, and expires the
         threadId: ThreadId.make("root-one"),
         cwd: "/workspace/same/repo",
       })).url,
+      "https://t3.example",
     );
     yield* TestClock.adjust("61 seconds");
     expect(
       (yield* Effect.exit(
         ide.authorize({
           sessionId: pending.pathname.split("/")[3]!,
-          host: pending.host,
+          requestOrigin: pending.origin,
           ticket: pending.searchParams.get("ticket")!,
         }),
       ))._tag,
@@ -181,45 +169,7 @@ it.effect(
     }),
 );
 
-it.effect("uses runtime-provisioned private workspace origins and keeps sessions distinct", () =>
-  Effect.gen(function* () {
-    const { make } = yield* setup;
-    const ide = yield* make(true);
-    const urls = [];
-    for (const id of ["root-one", "child", "root-two"]) {
-      urls.push(
-        new URL(
-          (yield* ide.open({
-            threadId: ThreadId.make(id),
-            cwd: "/workspace/repo",
-          })).url,
-        ),
-      );
-    }
-    expect(urls[0]!.host).toBe(urls[1]!.host);
-    expect(urls[0]!.pathname).not.toBe(urls[1]!.pathname);
-    expect(urls[0]!.host).not.toBe(urls[2]!.host);
-    const one = urls[0]!;
-    const id = one.pathname.split("/")[3]!;
-    const bootstrap = yield* ide.authorize({
-      sessionId: id,
-      host: one.host,
-      ticket: one.searchParams.get("ticket")!,
-    });
-    if (bootstrap.kind !== "bootstrap") throw new Error("Expected bootstrap");
-    expect(
-      (yield* Effect.exit(
-        ide.authorize({
-          sessionId: id,
-          host: urls[2]!.host,
-          cookie: bootstrap.cookie,
-        }),
-      ))._tag,
-    ).toBe("Failure");
-  }),
-);
-
-it.effect("pins idle compute through HTTPS provisioning and hands it to the worker lease", () =>
+it.effect("pins idle compute through startup and hands it to the worker lease", () =>
   Effect.gen(function* () {
     const fixture = yield* setup;
     const started = yield* Deferred.make<void>();
@@ -227,7 +177,7 @@ it.effect("pins idle compute through HTTPS provisioning and hands it to the work
     fixture.setProvisioning(
       Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(ready))),
     );
-    const ide = yield* fixture.make(true);
+    const ide = yield* fixture.make();
     const root = ThreadId.make("root-one");
     const policy = yield* makePolicy({
       enabled: true,
@@ -253,9 +203,9 @@ it.effect("pins idle compute through HTTPS provisioning and hands it to the work
     yield* Deferred.await(started);
     expect(yield* policy.reconcileThread(root)).toBe("busy");
     yield* Deferred.succeed(ready, undefined);
-    const url = new URL((yield* Fiber.join(opening)).url);
+    const url = new URL((yield* Fiber.join(opening)).url, "http://t3.internal:3773");
     expect(yield* policy.reconcileThread(root)).toBe("busy");
-    const session = { sessionId: url.pathname.split("/")[3]!, host: url.host };
+    const session = { sessionId: url.pathname.split("/")[3]!, requestOrigin: url.origin };
     const bootstrap = yield* ide.authorize({ ...session, ticket: url.searchParams.get("ticket")! });
     if (bootstrap.kind !== "bootstrap") throw new Error("Expected bootstrap");
     expect(yield* policy.reconcileThread(root)).toBe("busy");
@@ -267,5 +217,36 @@ it.effect("pins idle compute through HTTPS provisioning and hands it to the work
     expect((yield* WorkspaceActivity).has("one")).toBe(true);
     yield* TestClock.adjust("61 seconds");
     expect((yield* WorkspaceActivity).has("one")).toBe(false);
+  }),
+);
+
+it.effect("returns a relative path and binds the one-use ticket to the opening head origin", () =>
+  Effect.gen(function* () {
+    const { ide } = yield* setup;
+    for (const origin of ["https://t3.example", "http://t3.internal:3773"]) {
+      const result = yield* ide.open({
+        threadId: ThreadId.make("root-one"),
+        cwd: "/workspace/a b",
+      });
+      expect(result.url.startsWith(SandboxIde.routePrefix)).toBe(true);
+      const url = new URL(result.url, origin);
+      const input = { sessionId: url.pathname.split("/")[3]!, requestOrigin: origin };
+      const boot = yield* ide.authorize({ ...input, ticket: url.searchParams.get("ticket")! });
+      if (boot.kind !== "bootstrap") throw new Error("Expected bootstrap");
+      expect(boot.secure).toBe(origin.startsWith("https:"));
+      expect(boot.url.startsWith(SandboxIde.routePrefix)).toBe(true);
+      expect(boot.url).not.toContain("ticket");
+      expect(new URL(boot.url, origin).searchParams.get("folder")).toBe("/workspace/a b");
+      expect((yield* ide.authorize({ ...input, cookie: boot.cookie, origin })).kind).toBe("proxy");
+      expect(
+        (yield* Effect.exit(
+          ide.authorize({
+            ...input,
+            cookie: boot.cookie,
+            requestOrigin: "https://another.example",
+          }),
+        ))._tag,
+      ).toBe("Failure");
+    }
   }),
 );

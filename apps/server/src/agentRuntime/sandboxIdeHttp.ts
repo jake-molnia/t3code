@@ -1,3 +1,4 @@
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import * as Effect from "effect/Effect";
@@ -43,9 +44,11 @@ export const layer = HttpRouter.use((router) =>
         const separator = relative.indexOf("/");
         if (separator < 0) return HttpServerResponse.empty({ status: 404 });
         const id = relative.slice(0, separator);
+        const requestUrl = HttpServerRequest.toURL(request);
+        if (Option.isNone(requestUrl)) return HttpServerResponse.empty({ status: 400 });
         const authorizationInput = {
           sessionId: id,
-          host: request.headers.host ?? "",
+          requestOrigin: requestUrl.value.origin,
           ...(request.headers.origin ? { origin: request.headers.origin } : {}),
           ...(url.searchParams.has("ticket")
             ? { ticket: url.searchParams.get("ticket") ?? "" }
@@ -60,7 +63,7 @@ export const layer = HttpRouter.use((router) =>
             status: 303,
             headers: {
               location: authorization.url,
-              "set-cookie": `${SandboxIde.cookieName}=${authorization.cookie}; Path=${SandboxIde.routePrefix}${id}/; HttpOnly; Secure; SameSite=Lax`,
+              "set-cookie": `${SandboxIde.cookieName}=${authorization.cookie}; Path=${SandboxIde.routePrefix}${id}/; HttpOnly; ${authorization.secure ? "Secure; " : ""}SameSite=Lax`,
               "cache-control": "no-store",
               "referrer-policy": "no-referrer",
             },

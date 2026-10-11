@@ -55,7 +55,6 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
           }),
         });
         const runtime = RuntimeClient.RuntimeClient.of({
-          ideOrigin: () => Effect.die("IDE origin is not used by this test"),
           enabled: true,
           forWorkspace: (workspaceId) => Effect.succeed(client(workspaceId)),
           forThread: (threadId) =>

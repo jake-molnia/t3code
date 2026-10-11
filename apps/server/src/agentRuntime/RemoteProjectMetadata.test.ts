@@ -97,7 +97,6 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
           inspectIdentity: async () => identity,
         };
         const runtime = RuntimeClient.RuntimeClient.of({
-          ideOrigin: () => Effect.die("IDE origin is not used by this test"),
           enabled: true,
           forThread: () => Effect.succeed(client),
           forWorkspace: () =>

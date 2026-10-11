@@ -38,7 +38,7 @@ afterEach(async () => {
   await act(async () => renderer?.unmount());
   vi.unstubAllGlobals();
 });
-it("reserves a tab before the sandbox starts and navigates to the isolated gateway", async () => {
+it("reserves a tab before the sandbox starts and resolves the IDE path against the connected T3 head", async () => {
   let finish:
     | ((value: ReturnType<typeof AsyncResult.success<{ url: string }>>) => void)
     | undefined;
@@ -64,12 +64,12 @@ it("reserves a tab before the sandbox starts and navigates to the isolated gatew
   await act(async () => {
     finish?.(
       AsyncResult.success({
-        url: "https://session.ide.example/api/sandbox-ide/session/?ticket=one-use",
+        url: "/api/sandbox-ide/session/?ticket=one-use",
       }),
     );
   });
   expect(tab.location.replace).toHaveBeenCalledWith(
-    "https://session.ide.example/api/sandbox-ide/session/?ticket=one-use",
+    "https://remote.example/api/sandbox-ide/session/?ticket=one-use",
   );
 });
 it("checks the current destination grant before opening a tab", async () => {

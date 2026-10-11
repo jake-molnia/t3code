@@ -7,7 +7,6 @@ import * as RemoteWorkspacePreview from "./agentRuntime/RemoteWorkspacePreview.t
 import * as SandboxComputer from "./computer/SandboxComputer.ts";
 import * as SandboxIde from "./agentRuntime/SandboxIde.ts";
 import * as SandboxIdeHttp from "./agentRuntime/sandboxIdeHttp.ts";
-import * as SandboxIdeIsolation from "./agentRuntime/sandboxIdeIsolation.ts";
 import * as RemoteWorkspaceTerminals from "./agentRuntime/RemoteWorkspaceTerminals.ts";
 import * as RemoteWorkspaceGitStatus from "./agentRuntime/RemoteWorkspaceGitStatus.ts";
 import * as RemoteRestoreSafety from "./agentRuntime/RestoreSafety.ts";
@@ -661,7 +660,6 @@ const layerMakeRoutes = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(layerPullRequestService),
-  Layer.provide(SandboxIdeIsolation.layer),
   // The stream route and the WebSocket RPCs share one browser.
   Layer.provide(RemoteWorkspacePreview.browserLayer),
   // Server browser tabs and HTML render previews install and run the same headless browser.

@@ -91,7 +91,6 @@ export class RuntimeClient extends Context.Service<
       threadId: ThreadId,
       identity: ExecutionIdentity,
     ) => Effect.Effect<void, RuntimeClientError>;
-    readonly ideOrigin: (identity: ExecutionIdentity) => Effect.Effect<string, RuntimeClientError>;
     readonly forThread: (
       threadId: ThreadId,
       driver?: ProviderDriverKind,
@@ -495,26 +494,6 @@ export const layer = Layer.effect(
       observeThread,
       sessionResidency,
       rememberSession,
-      ideOrigin: (identity) =>
-        Effect.gen(function* () {
-          const pool = yield* placement(identity.workspaceId);
-          const response = Schema.Struct({
-            origin: Schema.String,
-            ready: Schema.Boolean,
-          });
-          for (let attempt = 0; attempt < 90; attempt++) {
-            const result = yield* request(pool, "/v1/ide-origins", {
-              profile: pool.profile,
-              identity,
-            }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(response)));
-            if (result.ready) return result.origin;
-            yield* Effect.sleep("2 seconds");
-          }
-          return yield* new RuntimeClientError({
-            operation: "ide-origin",
-            cause: "IDE HTTPS provisioning timed out",
-          });
-        }).pipe(Effect.timeout("3 minutes"), Effect.mapError(failure("ide-origin"))),
       forThread,
       forWorkspace,
       forUtility,

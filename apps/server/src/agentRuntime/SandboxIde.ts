@@ -5,22 +5,16 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Config from "effect/Config";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
-import * as Option from "effect/Option";
 import type { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import { sameIdentity } from "../execution/ExecutionWorker.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
-
-export const isPrivateIdeHost = (hostname: string, domain: string) =>
-  hostname.endsWith(`.${domain}`) &&
-  /^t3-ide-[a-f0-9]{32}$/.test(hostname.slice(0, -(domain.length + 1)));
 
 const sessionLifetime = 12 * 60 * 60 * 1000;
 const ticketLifetime = 60 * 1000;
@@ -34,7 +28,9 @@ type Session = {
   ticketExpiresAt: number;
   ticket: string | null;
   cookie: string;
-  url: URL;
+  path: string;
+  // Paths scope sessions, not browser trust: IDE content shares the central app origin.
+  origin: string | null;
   activity: Scope.Closeable;
 };
 type Authorization =
@@ -53,7 +49,7 @@ export class SandboxIde extends Context.Service<
     ) => Effect.Effect<SandboxIdeOpenResult, SandboxIdeError>;
     readonly authorize: (input: {
       sessionId: string;
-      host: string;
+      requestOrigin: string;
       origin?: string;
       ticket?: string;
       cookie?: string;
@@ -66,20 +62,6 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const runtime = yield* RuntimeClient.RuntimeClient;
     const crypto = yield* Crypto.Crypto;
-    const configuredOrigin = yield* Config.option(Config.String("T3CODE_SANDBOX_IDE_ORIGIN"));
-    const origin = Option.isSome(configuredOrigin) ? new URL(configuredOrigin.value) : null;
-    if (
-      origin &&
-      (origin.protocol !== "https:" ||
-        origin.pathname !== "/" ||
-        origin.search ||
-        origin.hash ||
-        origin.username ||
-        origin.password)
-    ) {
-      return yield* Effect.die(new Error("T3CODE_SANDBOX_IDE_ORIGIN must be an HTTPS origin"));
-    }
-    const ideDomain = yield* Config.option(Config.String("T3CODE_SANDBOX_IDE_DOMAIN"));
     const serviceScope = yield* Effect.scope;
     const sessions = new Map<string, Session>();
     return SandboxIde.of({
@@ -87,8 +69,6 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const activity = yield* Scope.fork(serviceScope);
           return yield* Effect.gen(function* () {
-            if (!origin && Option.isNone(ideDomain))
-              return yield* new SandboxIdeError({ reason: "unavailable" });
             const client = yield* runtime
               .forThread(input.threadId, undefined, activity)
               .pipe(
@@ -100,28 +80,8 @@ export const layer = Layer.effect(
             const ticket = yield* crypto.randomUUIDv4.pipe(
               Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
             );
-            const url = origin
-              ? new URL(origin)
-              : yield* runtime.ideOrigin(client.identity).pipe(
-                  Effect.flatMap((value) => Effect.try(() => new URL(value))),
-                  Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
-                );
-            if (origin) url.hostname = `${id}.${origin.hostname}`;
-            else if (
-              url.protocol !== "https:" ||
-              url.port ||
-              url.pathname !== "/" ||
-              url.search ||
-              url.hash ||
-              url.username ||
-              url.password ||
-              Option.isNone(ideDomain) ||
-              !isPrivateIdeHost(url.hostname, ideDomain.value)
-            ) {
-              return yield* new SandboxIdeError({ reason: "unavailable" });
-            }
-            url.pathname = `${routePrefix}${id}/`;
-            url.searchParams.set("folder", input.cwd);
+            const query = new URLSearchParams({ folder: input.cwd });
+            const path = `${routePrefix}${id}/?${query}`;
             const cookie = yield* crypto.randomUUIDv4.pipe(
               Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
             );
@@ -140,11 +100,10 @@ export const layer = Layer.effect(
               ticketExpiresAt: now + ticketLifetime,
               ticket,
               cookie,
-              url,
+              path,
+              origin: null,
             });
-            const bootstrapUrl = new URL(url);
-            bootstrapUrl.searchParams.set("ticket", ticket);
-            return { url: bootstrapUrl.toString() };
+            return { url: `${path}&ticket=${encodeURIComponent(ticket)}` };
           }).pipe(Effect.onError(() => Scope.close(activity, Exit.void)));
         }),
       authorize: (input) =>
@@ -156,8 +115,8 @@ export const layer = Layer.effect(
             return yield* new SandboxIdeError({ reason: "expired" });
           }
           if (
-            input.host !== session.url.host ||
-            (input.origin !== undefined && input.origin !== session.url.origin)
+            (session.origin !== null && input.requestOrigin !== session.origin) ||
+            (input.origin !== undefined && input.origin !== input.requestOrigin)
           ) {
             return yield* new SandboxIdeError({ reason: "forbidden" });
           }
@@ -166,6 +125,7 @@ export const layer = Layer.effect(
               return yield* new SandboxIdeError({ reason: "forbidden" });
             }
             session.ticket = null;
+            session.origin = input.requestOrigin;
           } else if (input.cookie !== session.cookie) {
             return yield* new SandboxIdeError({ reason: "forbidden" });
           }
@@ -185,8 +145,8 @@ export const layer = Layer.effect(
             return {
               kind: "bootstrap",
               cookie: session.cookie,
-              url: session.url.toString(),
-              secure: true,
+              url: session.path,
+              secure: input.requestOrigin.startsWith("https://"),
             };
           return {
             kind: "proxy",
