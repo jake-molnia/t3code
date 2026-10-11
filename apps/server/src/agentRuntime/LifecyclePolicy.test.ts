@@ -426,3 +426,61 @@ it.effect("bounds recent workspace activity without retaining completed active l
     Effect.provideService(WorkspaceRecentActivity, new Map()),
   ),
 );
+
+it.effect.each(["running", "suspended"] as const)(
+  "settlement releases %s compute without grace for completed pre-settlement requests",
+  (phase) =>
+    Effect.gen(function* () {
+      yield* TestClock.adjust("1 second");
+      yield* withWorkspaceActivity("workspace", Effect.void);
+      const h = harness({ ...snapshot(), settleScript: null });
+      const policy = yield* Policy.makePolicy({
+        ...h.ports,
+        idleMs: 60_000,
+        observe:
+          phase === "running"
+            ? h.ports.observe
+            : () =>
+                Effect.succeed({
+                  kind: "stopped",
+                  phase: "suspended",
+                  identity,
+                }),
+      });
+      // Equal timestamps are also pre-settlement: the explicit settle wins.
+      expect(yield* policy.reconcileThread(root)).toBe("release-submitted");
+      expect(h.stops).toHaveLength(1);
+      yield* TestClock.adjust("1 second");
+      h.setSnapshot({
+        ...snapshot([
+          { ...member(), thread: { ...member().thread, settledAt: DateTime.makeUnsafe(2_000) } },
+        ]),
+        settleScript: null,
+      });
+      expect(yield* policy.reconcileThread(root)).toBe("release-submitted");
+      expect(h.stops).toHaveLength(2);
+    }).pipe(
+      Effect.provideService(WorkspaceActivity, new Map()),
+      Effect.provideService(WorkspaceRecentActivity, new Map()),
+      Effect.scoped,
+    ),
+);
+
+it.effect("completed use after settlement during observation retains compute", () =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust("2 seconds");
+    const h = harness();
+    const policy = yield* Policy.makePolicy({
+      ...h.ports,
+      idleMs: 60_000,
+      observe: (workspaceId) => withWorkspaceActivity(workspaceId, h.ports.observe(workspaceId)),
+    });
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    expect(h.stops).toEqual([]);
+    expect(h.methods).toEqual(["terminals.list"]);
+  }).pipe(
+    Effect.provideService(WorkspaceActivity, new Map()),
+    Effect.provideService(WorkspaceRecentActivity, new Map()),
+    Effect.scoped,
+  ),
+);

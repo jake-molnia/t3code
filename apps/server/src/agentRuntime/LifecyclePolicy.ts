@@ -171,11 +171,14 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
   const scope = yield* Scope.Scope;
   const activity = yield* WorkspaceActivity;
   const recentActivity = yield* WorkspaceRecentActivity;
-  const activityGuard = (workspaceId: string) =>
+  const activityGuard = (snapshot: LifecycleSnapshot) =>
     Effect.gen(function* () {
+      const { workspaceId } = snapshot;
       if (activity.has(workspaceId)) return "busy" as const;
       const recent = recentActivity.get(workspaceId);
       if (recent !== undefined) {
+        const settledAt = settlementAt(snapshot);
+        if (settledAt !== null && recent <= settledAt) return null;
         const now = yield* Clock.currentTimeMillis;
         if (now - recent < ports.idleMs) return "grace" as const;
         recentActivity.delete(workspaceId);
@@ -195,7 +198,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
     if (!ports.enabled) return "stopped" as const;
     let snapshot = yield* ports.read(threadId);
     if (!snapshot || snapshot.ownerThreadId !== threadId) return "busy" as const;
-    const initialActivity = yield* activityGuard(snapshot.workspaceId);
+    const initialActivity = yield* activityGuard(snapshot);
     if (initialActivity !== null) return initialActivity;
     let observed = yield* ports.observe(snapshot.workspaceId);
     if (observed.kind === "stopped") {
@@ -231,7 +234,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
           fresh.members.some(memberIsBusy)
         )
           return "stale" as const;
-        const beforeRelease = yield* activityGuard(snapshot.workspaceId);
+        const beforeRelease = yield* activityGuard(fresh);
         if (beforeRelease !== null) return beforeRelease;
         yield* ports.stop(
           fresh,
@@ -269,7 +272,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
       ...snapshot.members.map((member) => String(member.thread.id)),
       ...terminals.map((terminal) => terminal.threadId),
     ]);
-    const beforeClose = yield* activityGuard(snapshot.workspaceId);
+    const beforeClose = yield* activityGuard(snapshot);
     if (beforeClose !== null) return beforeClose;
     for (const memberId of threadIds)
       yield* invoke(client, "terminals.closeIdle", { threadId: memberId });
@@ -334,7 +337,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
       settledAt === null
         ? `idle:${snapshot.workspaceId}:${client.identity.incarnation}:${activityAt}`
         : `release:${snapshot.workspaceId}:${settledAt}:${client.identity.allocationId}:${client.identity.generation}:${client.identity.incarnation}`;
-    const beforeStop = yield* activityGuard(snapshot.workspaceId);
+    const beforeStop = yield* activityGuard(final);
     if (beforeStop !== null) return beforeStop;
     yield* ports.stop(snapshot, action, operationId, client.identity);
     return action === "suspend" ? ("suspend-submitted" as const) : ("release-submitted" as const);
