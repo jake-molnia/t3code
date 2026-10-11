@@ -1,4 +1,4 @@
-import { withWorkspaceActivity } from "./WorkspaceActivity.ts";
+import { withWorkspaceActivity, withWorkspaceObservationActivity } from "./WorkspaceActivity.ts";
 import { seedWorkspace } from "./SeedWorkspace.ts";
 import * as GitProtocol from "./worker/GitDriverProtocol.ts";
 import { validateCloneSourceUrl } from "./RepositoryUrl.ts";
@@ -31,6 +31,11 @@ export class WorkspaceRoutingError extends Schema.TaggedError<WorkspaceRoutingEr
     return `Remote workspace ${this.operation} failed: ${String(this.cause)}`;
   }
 }
+export class WorkspaceObservation extends Context.Reference<{
+  readonly workspaceId: string;
+  readonly client: ExecutionClient;
+} | null>("t3/agentRuntime/WorkspaceObservation", { defaultValue: () => null }) {}
+
 export class WorkspaceRouting extends Context.Service<
   WorkspaceRouting,
   {
@@ -83,6 +88,10 @@ export class WorkspaceRouting extends Context.Service<
       method: string,
       input: Readonly<Record<string, unknown>>,
     ) => Effect.Effect<unknown, WorkspaceRoutingError>;
+    readonly observe: <A, E, R>(
+      cwd: string,
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A | null, E | WorkspaceRoutingError, R>;
     readonly observeCall: (input: {
       cwd: string;
       method: string;
@@ -146,13 +155,26 @@ export const layer = Layer.effect(
         )
           return yield* failure("register")("Workspace source or ownership changed.");
       });
+    const clientForRoute = (route: typeof Route.Type) =>
+      Effect.gen(function* () {
+        const observation = yield* WorkspaceObservation;
+        if (!observation) return yield* runtime.forWorkspace(route.workspaceId);
+        if (observation.workspaceId !== route.workspaceId)
+          return yield* failure("observe")("Passive reads cannot access another workspace.");
+        return observation.client;
+      });
+    const withRouteActivity = <A, E, R>(workspaceId: string, effect: Effect.Effect<A, E, R>) =>
+      Effect.gen(function* () {
+        const observation = yield* WorkspaceObservation;
+        return yield* observation ? effect : withWorkspaceActivity(workspaceId, effect);
+      });
     const call: WorkspaceRouting["Service"]["call"] = (input) =>
       Effect.gen(function* () {
         const route = yield* lookup(input.cwd);
-        return yield* withWorkspaceActivity(
+        return yield* withRouteActivity(
           route.workspaceId,
           Effect.gen(function* () {
-            const client = yield* runtime.forWorkspace(route.workspaceId);
+            const client = yield* clientForRoute(route);
             const cwd = route.relativeCwd + input.cwd.slice(route.virtualCwd.length);
             let payload: Readonly<Record<string, unknown>> = { ...input.input, cwd };
             if (
@@ -394,7 +416,7 @@ export const layer = Layer.effect(
       describeCwd: (cwd) => lookup(cwd).pipe(Effect.mapError(failure("describe-cwd"))),
       clientForCwd: (cwd) =>
         lookup(cwd).pipe(
-          Effect.flatMap((route) => runtime.forWorkspace(route.workspaceId)),
+          Effect.flatMap(clientForRoute),
           Effect.mapError(failure("resolve-worker")),
         ),
       project,
@@ -428,6 +450,31 @@ export const layer = Layer.effect(
             }),
           );
         }).pipe(Effect.mapError(failure(method))),
+      observe: (cwd, effect) =>
+        Effect.gen(function* () {
+          const route = yield* lookup(cwd).pipe(Effect.mapError(failure("observe")));
+          const existing = yield* WorkspaceObservation;
+          if (existing) {
+            if (existing.workspaceId !== route.workspaceId)
+              return yield* failure("observe")("Passive reads cannot access another workspace.");
+            return yield* effect;
+          }
+          return yield* withWorkspaceObservationActivity(
+            route.workspaceId,
+            Effect.gen(function* () {
+              const observed = yield* runtime
+                .observeWorkspace(route.workspaceId)
+                .pipe(Effect.mapError(failure("observe")));
+              if (observed.kind === "stopped") return null;
+              return yield* effect.pipe(
+                Effect.provideService(WorkspaceObservation, {
+                  workspaceId: route.workspaceId,
+                  client: observed.client,
+                }),
+              );
+            }),
+          );
+        }),
       observeCall: (input) =>
         Effect.gen(function* () {
           const route = yield* lookup(input.cwd);

@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as Cache from "effect/Cache";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -18,6 +19,7 @@ import * as ProjectFile from "../project/T3ProjectFileLoader.ts";
 import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
 import * as Routing from "./WorkspaceRouting.ts";
+import { WorkspaceActivity, WorkspaceRecentActivity } from "./WorkspaceActivity.ts";
 import * as RuntimeSchema from "./Schema.ts";
 import * as RemoteProcess from "./RemoteVcsProcess.ts";
 import * as Remote from "./RemoteGitDriver.ts";
@@ -116,13 +118,24 @@ it.layer(services, { excludeTestServices: true })("remote Git HTTP", (it) => {
           token,
           endpoint: `http://127.0.0.1:${server.port}`,
         });
+        let ensureCalls = 0;
+        let observedRunning = true;
         const runtime = RuntimeClient.RuntimeClient.of({
           enabled: true,
           forThread: () => Effect.succeed(client),
-          forWorkspace: () => Effect.succeed(client),
-          forUtility: () => Effect.succeed(client),
+          forWorkspace: () =>
+            Effect.sync(() => {
+              ensureCalls++;
+              return client;
+            }),
+          forUtility: () =>
+            Effect.sync(() => {
+              ensureCalls++;
+              return client;
+            }),
           observeThread: () => Effect.succeed({ kind: "running", client }),
-          observeWorkspace: () => Effect.succeed({ kind: "running", client }),
+          observeWorkspace: () =>
+            Effect.succeed(observedRunning ? { kind: "running", client } : { kind: "stopped" }),
           sessionResidency: () => Effect.succeed(identity),
           rememberSession: () => Effect.void,
           getEventCursor: () => Effect.succeed(0),
@@ -202,6 +215,70 @@ it.layer(services, { excludeTestServices: true })("remote Git HTTP", (it) => {
         ).pipe(Effect.exit);
         expect(denied._tag).toBe("Failure");
         const routes = Context.get(central, Routing.WorkspaceRouting);
+        const active = yield* WorkspaceActivity;
+        const recent = yield* WorkspaceRecentActivity;
+        yield* fs.writeFileString(path.join(repo, "untracked.txt"), "one\ntwo\n");
+        const beforeEnsure = ensureCalls;
+        const beforeRecent = recent.get(identity.workspaceId);
+        // GitManager builds caches outside observation scopes. Cache lookups must
+        // retain the reading fiber's routing context, including their loader fibers.
+        const statusCache = yield* Cache.make({
+          capacity: 1,
+          lookup: (cwd: string) => git.statusDetailsLocal(cwd, { includeBranchChanges: true }),
+        });
+        const observedStatus = yield* routes.observe(
+          cwd,
+          Effect.gen(function* () {
+            expect(active.get(identity.workspaceId)).toBeGreaterThan(0);
+            const details = yield* Cache.get(statusCache, cwd);
+            expect(
+              (yield* process.run({
+                command: "gh",
+                args: ["auth", "token"],
+                env: { PATH: `${path.join(root, "bin")}:${globalThis.process.env.PATH}` },
+                cwd: "/",
+                operation: "passive-credential-probe",
+              })).stdout.trim(),
+            ).toBe("credential-probe-sentinel");
+            expect(
+              (yield* process.run({
+                command: "git",
+                args: ["rev-parse", "--git-dir"],
+                cwd,
+                operation: "passive-read",
+              })).exitCode,
+            ).toBe(0);
+            return details;
+          }),
+        );
+        expect(observedStatus?.branchChanges).toMatchObject({ insertions: 2, deletions: 0 });
+        expect(ensureCalls).toBe(beforeEnsure);
+        expect(recent.get(identity.workspaceId)).toBe(beforeRecent);
+        expect(active.has(identity.workspaceId)).toBe(false);
+        yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id,owner_thread_id) VALUES ('other-workspace','other-owner')`;
+        yield* sql`INSERT INTO agent_runtime_workspace_paths(virtual_cwd,workspace_id,relative_cwd,utility_key) VALUES ('/workspace/other/repo','other-workspace','allocation/repo','other')`;
+        expect(
+          (yield* routes
+            .observe(cwd, routes.clientForCwd("/workspace/other/repo"))
+            .pipe(Effect.exit))._tag,
+        ).toBe("Failure");
+        expect(
+          (yield* routes
+            .observe(cwd, git.statusDetailsLocal("/workspace/other/repo"))
+            .pipe(Effect.exit))._tag,
+        ).toBe("Failure");
+        expect(active.has(identity.workspaceId)).toBe(false);
+        expect(ensureCalls).toBe(beforeEnsure);
+        expect(recent.get(identity.workspaceId)).toBe(beforeRecent);
+        observedRunning = false;
+        expect(
+          yield* routes.observe(cwd, Effect.die("stopped worker must not be read")),
+        ).toBeNull();
+        expect(ensureCalls).toBe(beforeEnsure);
+        yield* git.statusDetailsLocal(cwd, { includeBranchChanges: true });
+        expect(ensureCalls).toBeGreaterThan(beforeEnsure);
+        observedRunning = true;
+        yield* fs.remove(path.join(repo, "untracked.txt"));
         const temporary = yield* routes
           .call({ cwd, method: "vcs.temp.create", input: {} })
           .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.String)));

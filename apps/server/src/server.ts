@@ -392,7 +392,7 @@ const layerVcs = Layer.empty.pipe(
   Layer.provideMerge(layerReview),
   Layer.provideMerge(layerSourceControlRepositoryService),
   Layer.provideMerge(layerProjectCloneTracker),
-  Layer.provideMerge(RemoteWorkspaceGitStatus.layer),
+  Layer.provideMerge(RemoteWorkspaceGitStatus.layer.pipe(Layer.provide(layerGitWorkflow))),
 );
 
 const layerCheckpointStore = RemoteWorkspace.checkpointLayer;

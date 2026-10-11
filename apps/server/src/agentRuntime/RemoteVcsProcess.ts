@@ -26,6 +26,7 @@ export const layer = Layer.effect(
     return VcsProcess.VcsProcess.of({
       run: (input) =>
         Effect.gen(function* () {
+          const observation = yield* Routing.WorkspaceObservation;
           const scope = yield* GitActionScope;
           const key = `vcs:${input.operation}:${input.cwd}`;
           const ordinal = scope?.counters.get(key) ?? 0;
@@ -52,7 +53,7 @@ export const layer = Layer.effect(
             ? yield* Effect.gen(function* () {
                 const client = input.cwd.startsWith("/workspace/")
                   ? yield* routes.clientForCwd(input.cwd)
-                  : yield* runtime.forUtility("source-control");
+                  : (observation?.client ?? (yield* runtime.forUtility("source-control")));
                 const route = input.cwd.startsWith("/workspace/")
                   ? yield* routes.describeCwd(input.cwd)
                   : null;
@@ -73,7 +74,8 @@ export const layer = Layer.effect(
                   })
                   .pipe(Effect.retry(Schedule.recurs(1)))
               : yield* Effect.gen(function* () {
-                  const client = yield* runtime.forUtility("source-control");
+                  const client =
+                    observation?.client ?? (yield* runtime.forUtility("source-control"));
                   return yield* Effect.tryPromise(() =>
                     client.call("vcs.process", { ...payload, cwd: "." }, operationId),
                   ).pipe(Effect.retry(Schedule.recurs(1)));
