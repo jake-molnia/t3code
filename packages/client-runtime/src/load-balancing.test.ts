@@ -1,6 +1,10 @@
 import { ExecutionPoolId, ProviderDriverKind, type ExecutionPool } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { chooseExecutionPool, reconcileExecutionPoolProvider } from "./load-balancing.ts";
+import {
+  chooseExecutionPool,
+  reconcileExecutionPoolProvider,
+  resolveExecutionPoolSelection,
+} from "./load-balancing.ts";
 
 const codex = ProviderDriverKind.make("codex");
 const other = ProviderDriverKind.make("other");
@@ -108,4 +112,81 @@ describe("provider changes on pinned drafts", () => {
       replacementPoolId: null,
     });
   });
+});
+
+describe("draft execution pool placement", () => {
+  const draft = {
+    catalog: { ...catalog([pool(gompers), pool(portal)]), pending: false },
+    selectedPoolId: gompers,
+    driver: codex,
+    automatic: true,
+    placementLocked: false,
+    weights: { [gompers]: 0 },
+    now,
+  };
+  it("rebalances a restored default pin when its pool becomes manual-only", () => {
+    expect(resolveExecutionPoolSelection(draft)).toBe(portal);
+  });
+  it("does not dispatch a cached automatic choice while catalog loading or refresh is pending", () => {
+    expect(
+      resolveExecutionPoolSelection({ ...draft, catalog: { ...draft.catalog, pending: true } }),
+    ).toBeNull();
+    expect(
+      resolveExecutionPoolSelection({
+        ...draft,
+        catalog: { snapshot: null, receivedAt: 0, pending: true },
+      }),
+    ).toBeNull();
+  });
+  it("does not fall back to the default for stale or exhausted automatic candidates", () => {
+    expect(resolveExecutionPoolSelection({ ...draft, now: now + 15001 })).toBeNull();
+    expect(
+      resolveExecutionPoolSelection({ ...draft, weights: { [gompers]: 0, [portal]: 0 } }),
+    ).toBeNull();
+  });
+  it("preserves explicit manual choices and workspace-bound placements", () => {
+    expect(resolveExecutionPoolSelection({ ...draft, automatic: false })).toBe(gompers);
+    expect(resolveExecutionPoolSelection({ ...draft, placementLocked: true })).toBe(gompers);
+  });
+  it("waits for the catalog before selecting a default for an unassigned manual draft", () => {
+    expect(
+      resolveExecutionPoolSelection({
+        ...draft,
+        automatic: false,
+        selectedPoolId: null,
+        catalog: { snapshot: null, receivedAt: 0, pending: true },
+      }),
+    ).toBeNull();
+  });
+  it("rebalances against the selected provider rather than keeping an incompatible cached pin", () => {
+    expect(
+      resolveExecutionPoolSelection({
+        ...draft,
+        driver: other,
+        catalog: {
+          ...catalog([pool(gompers), pool(portal, { providerDrivers: [other] })]),
+          pending: false,
+        },
+      }),
+    ).toBe(portal);
+  });
+});
+
+it("resolves mixed-provider automatic submissions independently before dispatch", () => {
+  const candidates = {
+    ...catalog([pool(gompers), pool(portal, { providerDrivers: [other] })]),
+    pending: false,
+  };
+  const placements = [codex, other].map((driver) =>
+    resolveExecutionPoolSelection({
+      catalog: candidates,
+      selectedPoolId: gompers,
+      driver,
+      automatic: true,
+      placementLocked: false,
+      weights: {},
+      now,
+    }),
+  );
+  expect(placements).toEqual([gompers, portal]);
 });

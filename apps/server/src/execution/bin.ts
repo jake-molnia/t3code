@@ -1,4 +1,5 @@
 import { makeWorkerUsage } from "./WorkerUsage.ts";
+import { makeIdeActivity } from "./IdeActivity.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { makeGitDriverExecutor } from "../agentRuntime/worker/GitDriverExecutor.ts";
 import { makeMetadataExecutor } from "../agentRuntime/worker/MetadataExecutor.ts";
@@ -111,6 +112,18 @@ const program = Effect.gen(function* () {
     const computer = yield* makeComputerExecutor;
     const usage = yield* makeWorkerUsage;
     const runPromise = yield* captureRunPromise;
+    const ideActivity = Option.isSome(ideUrl)
+      ? yield* Effect.gen(function* () {
+          const pid = yield* Config.Int("T3_IDE_PID");
+          return yield* Effect.tryPromise(() =>
+            makeIdeActivity(pid, () =>
+              runPromise(
+                Effect.logWarning("IDE terminal activity is uncertain; retaining sandbox compute"),
+              ),
+            ),
+          );
+        })
+      : async () => ({ activeOperations: 0, pendingCallbacks: 0 });
     worker = createExecutionWorker({
       identity,
       token,
@@ -118,6 +131,7 @@ const program = Effect.gen(function* () {
       activity: () =>
         runPromise(
           Effect.gen(function* () {
+            const ide = yield* Effect.promise(ideActivity);
             const provider = yield* executor.activity;
             const utility = yield* providers.activity;
             const files = yield* workspace.activity;
@@ -128,6 +142,7 @@ const program = Effect.gen(function* () {
             const transferring = yield* assets.activity;
             return {
               activeOperations:
+                ide.activeOperations +
                 provider.activeOperations +
                 utility.activeOperations +
                 files.activeOperations +

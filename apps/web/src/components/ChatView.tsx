@@ -1,6 +1,6 @@
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
 import {
-  chooseExecutionPool,
+  resolveExecutionPoolSelection,
   reconcileExecutionPoolProvider,
 } from "@t3tools/client-runtime/load-balancing";
 import { useExecutionPools } from "../hooks/useExecutionPools";
@@ -2922,18 +2922,22 @@ export default function ChatView(props: ChatViewProps) {
   const envLocked = Boolean(activeThread && (activeMessageCount > 0 || activeRuntime !== null));
 
   const loadBalancingSettings = useClientSettings();
+  const poolPlacementLocked =
+    envLocked ||
+    composerHasAttachments ||
+    Boolean(draftThread?.branch || draftThread?.worktreePath);
   const automaticPool = Boolean(
     clientSettingsHydrated &&
     draftId &&
-    !envLocked &&
+    !poolPlacementLocked &&
     loadBalancingSettings.loadBalancingEnabled &&
     draftThread?.executionPoolSelection !== "manual",
   );
   const poolCatalog = useExecutionPools(
     environmentId,
-    Boolean(draftId && !draftThread?.executionPoolId),
+    Boolean(draftId && (automaticPool || !draftThread?.executionPoolId)),
   );
-  const selectedExecutionPoolId =
+  const cachedExecutionPoolId =
     draftThread?.executionPoolId ?? activeThreadShell?.executionPoolId ?? null;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
@@ -4221,23 +4225,26 @@ export default function ChatView(props: ChatViewProps) {
     }
   }, [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen]);
 
-  const needsLoadBalancing = automaticPool && !selectedExecutionPoolId;
-  const balancedPoolId = chooseExecutionPool(
-    poolCatalog,
-    selectedProvider,
-    loadBalancingSettings.loadBalancingWeights,
-    Date.now(),
-  );
+  const poolSelectionInput = {
+    catalog: poolCatalog,
+    selectedPoolId: cachedExecutionPoolId,
+    driver: selectedProvider,
+    automatic: automaticPool,
+    placementLocked: poolPlacementLocked,
+    weights: loadBalancingSettings.loadBalancingWeights,
+  };
+  const selectedExecutionPoolId = resolveExecutionPoolSelection({
+    ...poolSelectionInput,
+    now: Date.now(),
+  });
+  const needsLoadBalancing = Boolean(draftId && !selectedExecutionPoolId);
   const poolCompatibility = reconcileExecutionPoolProvider({
     snapshot: poolCatalog.snapshot,
     selectedPoolId: selectedExecutionPoolId,
     driver: selectedProvider,
     automatic: automaticPool,
-    placementLocked:
-      envLocked ||
-      composerHasAttachments ||
-      Boolean(draftThread?.branch || draftThread?.worktreePath),
-    balancedPoolId,
+    placementLocked: poolPlacementLocked,
+    balancedPoolId: selectedExecutionPoolId,
   });
   const poolCompatibilitySendBlock = poolCompatibility.incompatible
     ? envLocked
@@ -4246,36 +4253,22 @@ export default function ChatView(props: ChatViewProps) {
     : null;
   const loadBalancing = { pending: poolCatalog.pending, failed: poolCatalog.failed };
   useEffect(() => {
-    if (!poolCompatibility.reselect) return;
-    poolCatalog.refresh();
-    const timer = setInterval(poolCatalog.refresh, 10_000);
-    return () => clearInterval(timer);
-  }, [poolCompatibility.reselect, poolCatalog.refresh]);
-  useEffect(() => {
     if (
       !clientSettingsHydrated ||
       !draftId ||
-      envLocked ||
-      (selectedExecutionPoolId && !poolCompatibility.reselect) ||
+      poolPlacementLocked ||
+      !selectedExecutionPoolId ||
+      selectedExecutionPoolId === cachedExecutionPoolId ||
       sendInFlightRef.current
     )
       return;
-    const poolId = selectedExecutionPoolId
-      ? poolCompatibility.replacementPoolId
-      : automaticPool
-        ? balancedPoolId
-        : poolCatalog.snapshot?.defaultPoolId;
-    if (poolId) setDraftThreadContext(draftId, { executionPoolId: poolId });
+    setDraftThreadContext(draftId, { executionPoolId: selectedExecutionPoolId });
   }, [
     draftId,
-    envLocked,
+    poolPlacementLocked,
     selectedExecutionPoolId,
-    poolCompatibility.reselect,
-    poolCompatibility.replacementPoolId,
+    cachedExecutionPoolId,
     clientSettingsHydrated,
-    automaticPool,
-    balancedPoolId,
-    poolCatalog.snapshot,
     setDraftThreadContext,
   ]);
   const onAutoEnvironment = useCallback(() => {
@@ -8468,6 +8461,11 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
+    const selectedExecutionPoolId = resolveExecutionPoolSelection({
+      ...poolSelectionInput,
+      now: Date.now(),
+    });
+
     const notifyDirectAnnotationAttached = () => {
       if (!directAnnotation) return;
       toastManager.add(
@@ -8500,7 +8498,7 @@ export default function ChatView(props: ChatViewProps) {
       });
       return;
     }
-    if (needsLoadBalancing) {
+    if (draftId && !selectedExecutionPoolId) {
       toastManager.add({
         type: "warning",
         title: loadBalancing.pending ? "Checking pool resources" : "Choose a pool to continue",
@@ -9028,6 +9026,19 @@ export default function ChatView(props: ChatViewProps) {
         setThreadError(threadIdForSend, `Provider for ${selection.model} is unavailable.`);
         return;
       }
+      const executionPoolId = resolveExecutionPoolSelection({
+        ...poolSelectionInput,
+        driver: provider.driverKind,
+        now: Date.now(),
+      });
+      const pool = poolCatalog.snapshot?.pools.find((entry) => entry.id === executionPoolId);
+      if (!pool || !pool.providerDrivers.includes(provider.driverKind)) {
+        setThreadError(
+          threadIdForSend,
+          `Choose a compatible pool for ${selection.model} before sending.`,
+        );
+        return;
+      }
       const providerState = getComposerProviderState({
         provider: provider.driverKind,
         model: selection.model,
@@ -9045,6 +9056,7 @@ export default function ChatView(props: ChatViewProps) {
       });
       if (composerRef.current?.validateProviderInput(text) === false) return;
       multipleTargets.push({
+        executionPoolId: pool.id,
         selection: createModelSelection(
           selection.instanceId,
           selection.model,
@@ -9261,9 +9273,7 @@ export default function ChatView(props: ChatViewProps) {
                   interactionMode: target.interactionMode,
                   bootstrap: {
                     createThread: {
-                      ...(selectedExecutionPoolId
-                        ? { executionPoolId: selectedExecutionPoolId }
-                        : {}),
+                      executionPoolId: target.executionPoolId,
                       projectId: activeProject.id,
                       title,
                       modelSelection: target.selection,
@@ -11329,17 +11339,21 @@ export default function ChatView(props: ChatViewProps) {
                               sendDisabledReason={
                                 !canOperateThread
                                   ? "This connection cannot change threads."
-                                  : poolCompatibilitySendBlock
-                                    ? poolCompatibilitySendBlock
-                                    : isRevertingCheckpoint
-                                      ? "Rewinding conversation"
-                                      : feedbackUploading
-                                        ? "Sending feedback"
-                                        : threadDetailLoading
-                                          ? "Messages loading"
-                                          : worktreeSetupBlocksSend
-                                            ? "Preparing worktree"
-                                            : projectCloneSendBlockReason
+                                  : needsLoadBalancing
+                                    ? poolCatalog.pending
+                                      ? "Checking pool resources"
+                                      : "Choose a pool to continue"
+                                    : poolCompatibilitySendBlock
+                                      ? poolCompatibilitySendBlock
+                                      : isRevertingCheckpoint
+                                        ? "Rewinding conversation"
+                                        : feedbackUploading
+                                          ? "Sending feedback"
+                                          : threadDetailLoading
+                                            ? "Messages loading"
+                                            : worktreeSetupBlocksSend
+                                              ? "Preparing worktree"
+                                              : projectCloneSendBlockReason
                               }
                               isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                               queuedRunsControl={
