@@ -676,7 +676,7 @@ export function subprocessSnapshotPollDelayMs(
   return Math.min(pollIntervalMs * 2 ** failureCount, MAX_SUBPROCESS_POLL_INTERVAL_MS);
 }
 
-function parsePosixProcessTable(stdout: string): TerminalProcessTableSnapshot {
+export function parsePosixProcessTable(stdout: string): TerminalProcessTableSnapshot {
   const childrenByParent = new Map<number, number[]>();
   const commandById = new Map<number, string>();
   for (const line of stdout.split(/\r?\n/g)) {
@@ -711,7 +711,7 @@ function processTableSnapshotFromProcesses(
   return { childrenByParent, commandById };
 }
 
-function deriveSubprocessInspectResult(
+export function deriveSubprocessInspectResult(
   snapshot: TerminalProcessTableSnapshot,
   terminalPid: number,
   platform: NodeJS.Platform,
