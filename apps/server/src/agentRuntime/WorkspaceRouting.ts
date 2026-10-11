@@ -204,9 +204,16 @@ export const layer = Layer.effect(
               const command = yield* Schema.decodeUnknownEffect(C.VcsCreateWorktreeInput)(
                 input.input,
               );
-              const suffix = yield* rootFor(
-                `${route.workspaceId}:${command.newRefName ?? command.refName}`,
-              );
+              const options =
+                input.method === "git.driver.createWorktree"
+                  ? (yield* Schema.decodeUnknownEffect(GitProtocol.Git.createWorktree.input)(
+                      input.input,
+                    )).options
+                  : undefined;
+              const allocationKey = options?.detached
+                ? `detached:${input.operationId ?? (yield* crypto.randomUUIDv4)}`
+                : (command.newRefName ?? command.refName);
+              const suffix = yield* rootFor(`${route.workspaceId}:${allocationKey}`);
               const target =
                 command.path ?? `${route.virtualCwd}-worktrees/${suffix.relativeCwd.split("/")[0]}`;
               const allocationRoot = route.virtualCwd.slice(
@@ -217,12 +224,6 @@ export const layer = Layer.effect(
                 return yield* failure("createWorktree")(
                   "Worktree must remain in the same sandbox.",
                 );
-              const options =
-                input.method === "git.driver.createWorktree"
-                  ? (yield* Schema.decodeUnknownEffect(GitProtocol.Git.createWorktree.input)(
-                      input.input,
-                    )).options
-                  : undefined;
               payload = {
                 ...payload,
                 ...command,

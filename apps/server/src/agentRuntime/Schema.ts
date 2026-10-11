@@ -39,6 +39,11 @@ export const migrate = Effect.gen(function* () {
     thread_id TEXT NOT NULL,
     identity_json TEXT NOT NULL
   )`;
+  yield* sql`CREATE TABLE IF NOT EXISTS agent_runtime_usage_history (
+    workspace_id TEXT PRIMARY KEY,
+    sources_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`;
   yield* sql`CREATE TABLE IF NOT EXISTS agent_runtime_event_cursors (
     workspace_id TEXT NOT NULL,
     incarnation TEXT NOT NULL,

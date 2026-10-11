@@ -38,7 +38,8 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const root = yield* fs.realPath(cwd);
           const target = yield* fs.realPath(path.join(root, fileName));
-          if (!target.startsWith(`${root}${path.sep}`)) return "";
+          const relative = path.relative(root, target);
+          if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return "";
           const stat = yield* fs.stat(target);
           if (stat.type !== "File" || stat.size > ByteSize.bytes(20_000)) return "";
           return (yield* fs.readFileString(target)).trim();

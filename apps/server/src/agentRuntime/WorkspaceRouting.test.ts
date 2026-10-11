@@ -1,3 +1,5 @@
+import * as WorkspaceFileSystem from "../workspace/WorkspaceFileSystem.ts";
+import { fileSystemLayer } from "./RemoteWorkspaceServices.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { ThreadId } from "@t3tools/contracts";
@@ -22,6 +24,8 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
         const sql = yield* SqlClient.SqlClient;
         yield* RuntimeSchema.migrate;
         const activity = yield* WorkspaceActivity;
+        let metadataRunning = false;
+        let explicitWakes = 0;
         const calls: Array<{ workspaceId: string; method: string; input: unknown }> = [];
         const client = (workspaceId: string): ExecutionClient => ({
           credentialSource: () => {
@@ -37,6 +41,10 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
           },
           call: async (method, input) => {
             calls.push({ workspaceId, method, input });
+            if (method === "files.metadata")
+              return {
+                entries: [{ kind: "file", byteLength: workspaceId.endsWith("project-a") ? 1 : 2 }],
+              };
             return method === "workspace.isEmpty" || method === "git.isRepository"
               ? true
               : { contents: workspaceId };
@@ -56,7 +64,11 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
         });
         const runtime = RuntimeClient.RuntimeClient.of({
           enabled: true,
-          forWorkspace: (workspaceId) => Effect.succeed(client(workspaceId)),
+          forWorkspace: (workspaceId) =>
+            Effect.sync(() => {
+              explicitWakes++;
+              return client(workspaceId);
+            }),
           forThread: (threadId) =>
             Effect.sync(() => {
               expect(activity.get("t3:root-a")).toBeGreaterThan(0);
@@ -70,7 +82,12 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
               return client(id);
             }).pipe(Effect.orDie),
           observeThread: () => Effect.succeed({ kind: "stopped" }),
-          observeWorkspace: () => Effect.succeed({ kind: "stopped" }),
+          observeWorkspace: (workspaceId) =>
+            Effect.succeed(
+              metadataRunning
+                ? { kind: "running", client: client(workspaceId) }
+                : { kind: "stopped" },
+            ),
           sessionResidency: () => Effect.succeed(null),
           rememberSession: () => Effect.void,
           getEventCursor: () => Effect.succeed(0),
@@ -83,6 +100,40 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
         const first = yield* routes.project("project-a", "https://github.com/example/a.git");
         const second = yield* routes.project("project-b", "https://github.com/example/b.git");
         expect(first).not.toBe(second);
+        const files = yield* WorkspaceFileSystem.WorkspaceFileSystem.pipe(
+          Effect.provide(fileSystemLayer),
+          Effect.provideService(Routing.WorkspaceRouting, routes),
+        );
+        const paths = [
+          `${first}/README.md`,
+          `${second}/README.md`,
+          `${first}/README.md`,
+          "/etc/passwd",
+          "~/file",
+        ];
+        expect(yield* files.getMetadata({ paths })).toEqual({
+          entries: [null, null, null, null, null],
+        });
+        expect(explicitWakes).toBe(0);
+        metadataRunning = true;
+        expect(yield* files.getMetadata({ paths })).toEqual({
+          entries: [
+            { kind: "file", byteLength: 1 },
+            { kind: "file", byteLength: 2 },
+            { kind: "file", byteLength: 1 },
+            null,
+            null,
+          ],
+        });
+        expect(explicitWakes).toBe(0);
+        expect(
+          calls.filter((call) => call.method === "files.metadata").map((call) => call.input),
+        ).toEqual([
+          { cwd: first.slice("/workspace/".length), paths: ["README.md"] },
+          { cwd: second.slice("/workspace/".length), paths: ["README.md"] },
+        ]);
+        metadataRunning = false;
+
         yield* routes.call({
           cwd: first,
           method: "files.read",

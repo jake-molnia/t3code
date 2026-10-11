@@ -214,6 +214,7 @@ export const make = Effect.gen(function* () {
           ...(options
             ? {
                 options: {
+                  ...(options.detached === undefined ? {} : { detached: options.detached }),
                   ...(options.submodules === undefined ? {} : { submodules: options.submodules }),
                   ...(options.worktreesDirectory === undefined
                     ? {}

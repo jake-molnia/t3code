@@ -19,6 +19,8 @@ import { buildUnavailableProviderSnapshot } from "../provider/unavailableProvide
 import { createRemoteProviderAdapter } from "./RemoteProviderAdapter.ts";
 import {
   CommitInput,
+  ReviewGuideInput,
+  ReviewGuideResult,
   PrInput,
   BranchInput,
   TitleInput,
@@ -30,6 +32,7 @@ import type { ExecutionClient } from "./ExecutionClient.ts";
 const decodeSnapshot = Schema.decodeUnknownEffect(Schema.toCodecJson(C.ServerProvider));
 const isCodexSettings = Schema.is(C.CodexSettings);
 const encodeRpcValue = Schema.encodeEffect(Schema.toCodecJson(ConfigureProvider));
+const encodeReviewGuideInput = Schema.encodeUnknownSync(Schema.toCodecJson(ReviewGuideInput));
 const encodeRpcValueSync = Schema.encodeUnknownSync(Schema.toCodecJson(CommitInput));
 const encodeRpcValueSync2 = Schema.encodeUnknownSync(Schema.toCodecJson(PrInput));
 const encodeRpcValueSync3 = Schema.encodeUnknownSync(Schema.toCodecJson(BranchInput));
@@ -477,6 +480,17 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               }
             : {}),
           textGeneration: {
+            generateReviewGuide: (value) =>
+              invoke(
+                "text.reviewGuide",
+                encodeReviewGuideInput(
+                  Object.fromEntries(
+                    Object.entries(value).filter(([, value]) => value !== undefined),
+                  ),
+                ),
+                ReviewGuideResult,
+                value.cwd,
+              ).pipe(Effect.mapError(textError("review-guide"))),
             generateCommitMessage: (value) =>
               invoke(
                 "text.commit",

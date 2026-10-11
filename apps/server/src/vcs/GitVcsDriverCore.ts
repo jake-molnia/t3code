@@ -3425,9 +3425,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       worktreePath = path.join(parentDir, repoName, sanitizedBranch);
     }
-    const args = input.newRefName
-      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
-      : ["worktree", "add", worktreePath, input.refName];
+    if (options?.detached && input.newRefName)
+      return yield* new GitCommandError({
+        operation: "GitVcsDriver.createWorktree",
+        command: "git worktree add",
+        cwd: input.cwd,
+        detail: "A detached worktree cannot create a branch.",
+      });
+    const args = options?.detached
+      ? ["worktree", "add", "--detach", worktreePath, input.refName]
+      : input.newRefName
+        ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
+        : ["worktree", "add", worktreePath, input.refName];
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
 

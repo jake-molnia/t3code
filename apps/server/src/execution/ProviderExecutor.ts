@@ -34,6 +34,8 @@ const decodeResumeThread = Schema.decodeUnknownEffect(Schema.toCodecJson(P.Resum
 const decodeTurn = Schema.decodeUnknownEffect(Schema.toCodecJson(P.Turn));
 const decodeSteer = Schema.decodeUnknownEffect(Schema.toCodecJson(P.Steer));
 const decodeInterrupt = Schema.decodeUnknownEffect(Schema.toCodecJson(P.Interrupt));
+const decodeStopTask = Schema.decodeUnknownEffect(Schema.toCodecJson(P.StopTask));
+const decodeStopSubagent = Schema.decodeUnknownEffect(Schema.toCodecJson(P.StopSubagent));
 const decodeRespond = Schema.decodeUnknownEffect(Schema.toCodecJson(P.Respond));
 const encodeSnapshot = Schema.encodeEffect(Schema.toCodecJson(P.Snapshot));
 const decodeThread = Schema.decodeUnknownEffect(Schema.toCodecJson(P.Thread));
@@ -265,6 +267,18 @@ export const makeProviderExecutor = (options: {
           case "interruptTurn":
             yield* runtime.interruptTurn(yield* decodeInterrupt(command.input));
             return null;
+          case "stopTask":
+            if (runtime.stopTask) {
+              yield* runtime.stopTask(yield* decodeStopTask(command.input));
+              return null;
+            }
+            break;
+          case "stopSubagent":
+            if (runtime.stopSubagent) {
+              yield* runtime.stopSubagent(yield* decodeStopSubagent(command.input));
+              return null;
+            }
+            break;
           case "respondToRuntimeRequest":
             yield* runtime.respondToRuntimeRequest(yield* decodeRespond(command.input));
             return null;

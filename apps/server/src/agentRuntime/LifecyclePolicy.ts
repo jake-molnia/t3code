@@ -1,3 +1,4 @@
+import * as UsageHistory from "./UsageHistory.ts";
 import { WorkspaceActivity, WorkspaceRecentActivity } from "./WorkspaceActivity.ts";
 import {
   ThreadId,
@@ -145,6 +146,10 @@ export interface LifecyclePolicyPorts {
     workspaceId: string,
   ) => Effect.Effect<RuntimeClient.RuntimeObservation, LifecyclePolicyError>;
   readonly resume: (workspaceId: string) => Effect.Effect<ExecutionClient, LifecyclePolicyError>;
+  readonly collectUsage: (
+    client: ExecutionClient,
+    force: boolean,
+  ) => Effect.Effect<void, LifecyclePolicyError>;
   readonly stop: (
     snapshot: LifecycleSnapshot,
     action: "suspend" | "release_compute",
@@ -198,9 +203,17 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
     if (!ports.enabled) return "stopped" as const;
     let snapshot = yield* ports.read(threadId);
     if (!snapshot || snapshot.ownerThreadId !== threadId) return "busy" as const;
+    let observed = yield* ports.observe(snapshot.workspaceId);
+    if (observed.kind === "running")
+      yield* ports
+        .collectUsage(observed.client, false)
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Periodic sandbox usage collection failed", { cause }),
+          ),
+        );
     const initialActivity = yield* activityGuard(snapshot);
     if (initialActivity !== null) return initialActivity;
-    let observed = yield* ports.observe(snapshot.workspaceId);
     if (observed.kind === "stopped") {
       utilities.delete(snapshot.workspaceId);
       const settledAt = settlementAt(snapshot);
@@ -320,6 +333,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
       if (result.code !== 0 || result.timedOut)
         return yield* new LifecyclePolicyError({ operation: "settle-script", cause: result });
     }
+    yield* ports.collectUsage(client, true);
     const final = yield* ports.read(threadId);
     if (
       !final ||
@@ -378,6 +392,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const runtime = yield* RuntimeClient.RuntimeClient;
+  const history = yield* UsageHistory.UsageHistory;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const settings = yield* ServerSettings.ServerSettingsService;
@@ -520,6 +535,20 @@ export const make = Effect.gen(function* () {
       runtime.observeWorkspace(workspaceId).pipe(Effect.mapError(failure("observe"))),
     resume: (workspaceId) =>
       runtime.forWorkspace(workspaceId).pipe(Effect.mapError(failure("resume-cleanup"))),
+    collectUsage: (client, force) =>
+      history
+        .collect(
+          client,
+          runtime
+            .observeWorkspace(client.identity.workspaceId)
+            .pipe(
+              Effect.map((current) =>
+                current.kind === "running" ? current.client.identity : null,
+              ),
+            ),
+          force,
+        )
+        .pipe(Effect.mapError(failure("collect-usage"))),
     stop: (snapshot, action, operationId, identity) =>
       runtime
         .stop(snapshot.ownerThreadId, action, {

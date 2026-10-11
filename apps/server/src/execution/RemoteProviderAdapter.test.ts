@@ -85,6 +85,16 @@ it.live(
               startTurn: unsupported,
               steerTurn: unsupported,
               interruptTurn: unsupported,
+              stopTask: ({ providerThread, taskId }) =>
+                Effect.sync(() => {
+                  expect(providerThread.providerSessionId).toBe(providerSessionId);
+                  optionalCalls.push(`task:${taskId}`);
+                }),
+              stopSubagent: ({ providerThread, nativeTaskId }) =>
+                Effect.sync(() => {
+                  expect(providerThread.providerSessionId).toBe(providerSessionId);
+                  optionalCalls.push(`subagent:${nativeTaskId}`);
+                }),
               respondToRuntimeRequest: () =>
                 Effect.sync(() => {
                   responses++;
@@ -322,8 +332,22 @@ it.live(
                 },
               }) ?? Effect.die("Missing compaction")
             );
+            yield* (
+              runtime.stopTask?.({ providerThread, taskId: "background-command" }) ??
+                Effect.die("Missing stopTask")
+            );
+            yield* (
+              runtime.stopSubagent?.({ providerThread, nativeTaskId: "native-child" }) ??
+                Effect.die("Missing stopSubagent")
+            );
             yield* runtime.unloadThread?.({ providerThread }) ?? Effect.die("Missing unload");
-            expect(optionalCalls).toEqual(["history", "compact", "unload"]);
+            expect(optionalCalls).toEqual([
+              "history",
+              "compact",
+              "task:background-command",
+              "subagent:native-child",
+              "unload",
+            ]);
           }),
         );
         expect(closed).toBe(1);

@@ -1,3 +1,4 @@
+import { resolveModelPreferences } from "@t3tools/shared/serverSettings";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { filterApertureSnapshot } from "./ApertureCatalog.ts";
 import { deploymentHarnessDefaults } from "./HarnessDefaults.ts";
@@ -61,6 +62,28 @@ export const TitleInput = Schema.Struct({
   previousTitle: Schema.optionalKey(Schema.String),
   attachments: Schema.optionalKey(Schema.Array(C.ChatAttachment)),
 });
+export const ReviewGuideInput = Schema.Struct({
+  ...common,
+  number: Schema.Number,
+  title: Schema.String,
+  description: Schema.String,
+  baseBranch: Schema.String,
+  baseCommit: Schema.String,
+  settledReview: Schema.String,
+  instructions: Schema.optionalKey(Schema.String),
+  stack: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        number: Schema.Number,
+        title: Schema.NullOr(Schema.String),
+        headSha: Schema.NullOr(Schema.String),
+        state: Schema.Literals(["open", "closed", "merged"]),
+      }),
+    ),
+  ),
+});
+export const ReviewGuideResult = Schema.Struct({ stops: C.PullRequestReviewGuide.fields.stops });
+const decodeReviewGuideInput = Schema.decodeUnknownEffect(Schema.toCodecJson(ReviewGuideInput));
 const decodeRpcValue = Schema.decodeUnknownEffect(Schema.toCodecJson(ConfigureProvider));
 const decodeOwnerSessionIdInput = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -108,7 +131,10 @@ export const make = Effect.gen(function* () {
         const input = yield* decodeRpcValue(raw);
         yield* lock.withPermits(1)(
           Effect.gen(function* () {
-            yield* settings.updateSettings(input.settings);
+            yield* settings.updateSettings({
+              ...input.settings,
+              ...resolveModelPreferences(input.settings),
+            });
             configurations[input.instanceId] = yield* Effect.try(() =>
               normalizeHarness(input.config),
             );
@@ -242,6 +268,10 @@ export const make = Effect.gen(function* () {
         case "text.branch":
           return yield* instance.textGeneration.generateBranchName(
             yield* decodeRpcValue5(command.input),
+          );
+        case "text.reviewGuide":
+          return yield* instance.textGeneration.generateReviewGuide(
+            yield* decodeReviewGuideInput(command.input),
           );
         case "text.title":
           return yield* instance.textGeneration.generateThreadTitle(

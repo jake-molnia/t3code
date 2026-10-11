@@ -279,6 +279,51 @@ it.layer(services, { excludeTestServices: true })("remote Git HTTP", (it) => {
         expect(ensureCalls).toBeGreaterThan(beforeEnsure);
         observedRunning = true;
         yield* fs.remove(path.join(repo, "untracked.txt"));
+        // Review guides need concurrent detached copies of the same commit in
+        // their originating sandbox, with paths usable by later text generation.
+        const guides = yield* Effect.all(
+          [0, 1].map(() =>
+            git.createWorktree(
+              { cwd, refName: initial, path: null },
+              { detached: true, submodules: "none", worktreesDirectory: "/head-only/worktrees" },
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+        expect(guides[0]!.worktree.path).not.toBe(guides[1]!.worktree.path);
+        for (const { worktree } of guides) {
+          expect(worktree.path.startsWith("/workspace/allocation/")).toBe(true);
+          expect((yield* routes.clientForCwd(worktree.path)).identity.workspaceId).toBe(
+            identity.workspaceId,
+          );
+          expect((yield* git.statusDetailsLocal(worktree.path)).branch).toBeNull();
+          expect(
+            (yield* git.resolveCommit({ cwd: worktree.path, revision: "HEAD" })).commitSha,
+          ).toBe(initial);
+          expect(
+            yield* Context.get(central, RepositoryFiles.RepositoryFiles).readInstructions(
+              worktree.path,
+              "AGENTS.md",
+            ),
+          ).toBe("Keep this worker instruction.");
+          yield* git.removeWorktree({ cwd, path: worktree.path, force: true });
+          expect((yield* routes.clientForCwd(worktree.path).pipe(Effect.exit))._tag).toBe(
+            "Failure",
+          );
+          expect(yield* fs.exists(path.join(root, worktree.path.slice("/workspace/".length)))).toBe(
+            false,
+          );
+        }
+        expect((yield* git.statusDetailsLocal(cwd)).branch).toBe("main");
+        expect(
+          (yield* git
+            .createWorktree(
+              { cwd, refName: initial, newRefName: "must-not-exist", path: null },
+              { detached: true },
+            )
+            .pipe(Effect.exit))._tag,
+        ).toBe("Failure");
+        expect(yield* git.listLocalBranchNames(cwd)).not.toContain("must-not-exist");
         const temporary = yield* routes
           .call({ cwd, method: "vcs.temp.create", input: {} })
           .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.String)));

@@ -15,6 +15,49 @@ export const fileSystemLayer = Layer.effect(
   Effect.gen(function* () {
     const routes = yield* WorkspaceRouting.WorkspaceRouting;
     return WorkspaceFileSystem.WorkspaceFileSystem.of({
+      getMetadata: (input) =>
+        Effect.gen(function* () {
+          const groups = new Map<string, string[]>();
+          for (const requested of new Set(input.paths)) {
+            const route = yield* routes.describeCwd(requested).pipe(Effect.option);
+            if (route._tag === "None") continue;
+            const paths = groups.get(route.value.virtualCwd) ?? [];
+            paths.push(requested);
+            groups.set(route.value.virtualCwd, paths);
+          }
+          const metadata = new Map<string, C.FilesystemEntryMetadata | null>();
+          yield* Effect.forEach(
+            groups,
+            ([cwd, paths]) =>
+              routes
+                .observe(
+                  cwd,
+                  routes
+                    .call({
+                      cwd,
+                      method: "files.metadata",
+                      input: {
+                        paths: paths.map((requested) => requested.slice(cwd.length + 1) || ""),
+                      },
+                    })
+                    .pipe(
+                      Effect.flatMap(Schema.decodeUnknownEffect(C.FilesystemGetMetadataResult)),
+                    ),
+                )
+                .pipe(
+                  Effect.catch(() => Effect.succeed(null)),
+                  Effect.tap((result) =>
+                    Effect.sync(() => {
+                      paths.forEach((requested, index) =>
+                        metadata.set(requested, result?.entries[index] ?? null),
+                      );
+                    }),
+                  ),
+                ),
+            { concurrency: 8 },
+          );
+          return { entries: input.paths.map((requested) => metadata.get(requested) ?? null) };
+        }),
       readFile: (input) =>
         routes.call({ cwd: input.cwd, method: "files.read", input: { ...input } }).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(C.ProjectReadFileResult)),

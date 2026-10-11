@@ -101,6 +101,48 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
         expect(listed).toMatchObject({ entries: [{ path: "src/hello.txt", kind: "file" }] });
       }),
   );
+  it.effect("reads metadata from the worker without following paths outside its root", () =>
+    Effect.gen(function* () {
+      const { fs, path, root, worker } = yield* fixture;
+      const sibling = yield* fixture;
+      yield* sibling.fs.writeFileString(
+        sibling.path.join(sibling.root, "repo", "picture"),
+        "other root",
+      );
+      expect(
+        yield* sibling.worker.execute("files.metadata", { cwd: "repo", paths: ["picture"] }),
+      ).toEqual({ entries: [{ kind: "file", byteLength: 10 }] });
+      const image = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+      yield* fs.writeFile(path.join(root, "repo", "picture"), image);
+      const outside = yield* fs.makeTempDirectoryScoped({ prefix: "metadata-outside-" });
+      yield* fs.writeFileString(path.join(outside, "secret"), "outside");
+      yield* fs.symlink(outside, path.join(root, "repo", "escape"));
+      expect(
+        yield* worker.execute("files.metadata", {
+          cwd: "repo",
+          paths: [
+            "picture",
+            "",
+            "missing",
+            "escape/secret",
+            "/etc/passwd",
+            "../outside",
+            "picture",
+          ],
+        }),
+      ).toEqual({
+        entries: [
+          { kind: "file", byteLength: 8, mimeType: "image/png" },
+          { kind: "directory" },
+          null,
+          null,
+          null,
+          null,
+          { kind: "file", byteLength: 8, mimeType: "image/png" },
+        ],
+      });
+    }),
+  );
   it.effect.each([false, true])(
     "copies project files into independent roots and preserves edits on retry (committed remote: %s)",
     (remote) =>

@@ -54,6 +54,14 @@ export const Interrupt = Schema.Struct({
   providerTurnId: C.ProviderTurnId,
   requestRuntimeRestart: Schema.optionalKey(Schema.Boolean),
 });
+export const StopTask = Schema.Struct({
+  providerThread: C.OrchestrationV2ProviderThread,
+  taskId: Schema.String,
+});
+export const StopSubagent = Schema.Struct({
+  providerThread: C.OrchestrationV2ProviderThread,
+  nativeTaskId: Schema.String,
+});
 export const Respond = Schema.Struct({
   requestId: C.RuntimeRequestId,
   decision: Schema.optionalKey(C.ProviderApprovalDecision),
@@ -178,6 +186,8 @@ export const OptionalSessionMethods: Record<
   canReuseContextUsage: true,
   injectHistory: true,
   compactThread: true,
+  stopTask: true,
+  stopSubagent: true,
   unloadThread: true,
   uploadFeedback: true,
   mcpApps: true,

@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 import * as C from "@t3tools/contracts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import { createExecutionClient } from "./ExecutionClient.ts";
-import { ConfigureProvider, ProviderRequest } from "./WorkerProviders.ts";
+import { ConfigureProvider, ProviderRequest, ReviewGuideInput } from "./WorkerProviders.ts";
 import { buildUnavailableProviderSnapshot } from "../provider/unavailableProviderSnapshot.ts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -132,6 +132,8 @@ it.live(
         createdAtMs: 100,
       };
       const copies = new Map<string, unknown>();
+      const reviewRequests: Array<{ workspaceId: string; input: typeof ReviewGuideInput.Type }> =
+        [];
       const environments = new Map<string, C.ProviderInstanceConfig["environment"]>();
       const requestSchema = Schema.fromJsonString(
         Schema.Struct({ method: Schema.String, input: Schema.Unknown }),
@@ -162,7 +164,15 @@ it.live(
               else if (request.method === "auth.importExecutionCredentials")
                 copies.set(workspaceId, input.input);
               else if (request.method === "provider.snapshotForCwd") value = encodedSnapshot;
-              else if (request.method === "auth.logout") {
+              else if (request.method === "text.reviewGuide") {
+                reviewRequests.push({
+                  workspaceId,
+                  input: Schema.decodeUnknownSync(Schema.toCodecJson(ReviewGuideInput))(
+                    input.input,
+                  ),
+                });
+                value = { stops: [] };
+              } else if (request.method === "auth.logout") {
                 ownerKey = null;
                 value = {
                   instanceId,
@@ -203,6 +213,22 @@ it.live(
         expect(environments.get("root-one")).toEqual(configuredEnvironment);
         expect(environments.get("root-two")).toEqual(configuredEnvironment);
         expect(environments.get("utility")).toEqual(configuredEnvironment);
+        const reviewInput = {
+          cwd: "first",
+          number: 42,
+          title: "Review",
+          description: "Intent",
+          baseBranch: "main",
+          baseCommit: "abc",
+          settledReview: "Already addressed",
+          instructions: "Read only",
+          stack: [{ number: 41, title: null, headSha: null, state: "open" as const }],
+          modelSelection: { instanceId, model: "test-model" },
+        };
+        expect(yield* instance.textGeneration.generateReviewGuide(reviewInput)).toEqual({
+          stops: [],
+        });
+        expect(reviewRequests).toEqual([{ workspaceId: "root-one", input: reviewInput }]);
         yield* instance.auth.logout(Effect.void);
         expect(ownerKey).toBeNull();
         expect(copies.get("root-one")).toBeNull();

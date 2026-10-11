@@ -1,3 +1,4 @@
+import * as History from "./UsageHistorySources.ts";
 /**
  * UsageService - reads every driver's usage history and returns priced usage
  * buckets.
@@ -189,6 +190,7 @@ export class UsageService extends Context.Service<
   UsageService,
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
+    readonly readHistory: Effect.Effect<History.History, UsageReadError>;
     /** Refetches the rate table ahead of its TTL. See `ensureRates`. */
     readonly refreshRates: Effect.Effect<UsagePricing>;
   }
@@ -218,10 +220,12 @@ const layerTest = Layer.succeed(
         scanDurationMs: 0,
       }),
     refreshRates: Effect.succeed(EMPTY_PRICING),
+    readHistory: Effect.succeed([]),
   }),
 );
 
 export const make = Effect.gen(function* () {
+  const historySources = yield* Effect.serviceOption(History.UsageHistorySources);
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
@@ -576,22 +580,7 @@ export const make = Effect.gen(function* () {
       };
     });
 
-  /** One provider directory's walk and parse, before rates are involved. */
-  interface ScannedDir {
-    readonly provider: UsageProviderKind;
-    readonly dir: string;
-    readonly volumeId: string;
-    readonly hostId?: string;
-    readonly status?: UsageSource["status"];
-    readonly message?: string;
-    readonly action?: UsageSource["action"];
-    /** Parsed records per file, or `null` when the directory does not exist. */
-    readonly files:
-      | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
-      | null;
-    /** Answered from a cache while a refresh runs. */
-    readonly refreshing?: true;
-  }
+  type ScannedDir = History.HistorySource;
 
   const scanTranscriptDir = Effect.fn("UsageService.scanTranscriptDir")(function* (
     source: TranscriptSource,
@@ -697,6 +686,50 @@ export const make = Effect.gen(function* () {
     return scanned;
   });
 
+  const retainHistory = (scannedDirs: History.History, retainedSinceMs: number): History.History =>
+    scannedDirs.map((source) => {
+      const files = [...(source.files ?? [])];
+      const livePaths = new Set(files.map((file) => file.path));
+      for (const [filePath, entry] of fileCache) {
+        if (
+          entry.provider !== source.provider ||
+          entry.mtimeMs < retainedSinceMs ||
+          livePaths.has(filePath) ||
+          !isWithinDirectory(filePath, source.dir)
+        )
+          continue;
+        files.push({ path: filePath, records: [...entry.records, ...entry.tailRecords] });
+      }
+      return { ...source, files: files.length > 0 ? files : source.files };
+    });
+
+  const readHistory = Effect.gen(function* () {
+    if (Option.isSome(historySources)) return yield* historySources.value.read;
+    const cutoff = (yield* Clock.currentTimeMillis) - History.RETENTION_MS;
+    yield* ensureScanCacheLoaded;
+    const settings = yield* readSettings;
+    const sources = retainHistory(yield* collectDirs(cutoff, settings, cutoff, true), cutoff);
+    if (pruneScanCache(fileCache, cutoff) > 0) cacheDirty = true;
+    yield* persistCaches;
+    return sources.map((source) => ({
+      ...source,
+      files:
+        source.files?.map((file) => ({
+          ...file,
+          records: file.records.filter((record) => record.timestampMs >= cutoff),
+        })) ?? null,
+    }));
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new UsageReadError({
+          reason: "scanFailed",
+          detail: "Could not read native usage history.",
+          cause,
+        }),
+    ),
+  );
+
   const scanSummary = Effect.fn("UsageService.scanSummary")(function* (
     input: UsageSummaryInput,
     settings: ServerSettingsValue,
@@ -754,7 +787,9 @@ export const make = Effect.gen(function* () {
     const [, scannedDirs] = yield* Effect.all(
       [
         ensureRates(false),
-        collectDirs(windowStartMs, settings, retentionCutoffMs, input.awaitRefresh === true),
+        Option.isSome(historySources)
+          ? historySources.value.read
+          : collectDirs(windowStartMs, settings, retentionCutoffMs, input.awaitRefresh === true),
       ],
       { concurrency: 2 },
     );
@@ -777,21 +812,9 @@ export const make = Effect.gen(function* () {
     // path. Like the walk, skip files last written before the window: they
     // cannot hold records inside it.
     const retainedSinceMs = Math.max(windowStartMs, retentionCutoffMs);
-    const filesByDir = scannedDirs.map(({ provider, dir, files }) => {
-      const retainedFiles = [...(files ?? [])];
-      const livePaths = new Set(retainedFiles.map((file) => file.path));
-      for (const [filePath, entry] of fileCache) {
-        if (
-          entry.provider !== provider ||
-          entry.mtimeMs < retainedSinceMs ||
-          livePaths.has(filePath) ||
-          !isWithinDirectory(filePath, dir)
-        )
-          continue;
-        retainedFiles.push({ path: filePath, records: [...entry.records, ...entry.tailRecords] });
-      }
-      return retainedFiles;
-    });
+    const filesByDir = (
+      Option.isSome(historySources) ? scannedDirs : retainHistory(scannedDirs, retainedSinceMs)
+    ).map((source) => source.files ?? []);
     const crossFileSessions = sharedSessions(filesByDir.flat());
 
     for (const [
@@ -930,7 +953,7 @@ export const make = Effect.gen(function* () {
 
   // `awaitPersisted` is outside the service interface: tests use it to restart
   // against what a previous instance wrote.
-  return { readSummary, refreshRates, awaitPersisted } as const;
+  return { readSummary, readHistory, refreshRates, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);

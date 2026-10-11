@@ -123,6 +123,7 @@ function harness(initial = snapshot()) {
     },
   });
   const ports: Policy.LifecyclePolicyPorts = {
+    collectUsage: () => Effect.void,
     enabled: true,
     idleMs: 0,
     roots: Effect.succeed([root]),
@@ -477,10 +478,79 @@ it.effect("completed use after settlement during observation retains compute", (
     });
     expect(yield* policy.reconcileThread(root)).toBe("grace");
     expect(h.stops).toEqual([]);
-    expect(h.methods).toEqual(["terminals.list"]);
+    expect(h.methods).toEqual([]);
   }).pipe(
     Effect.provideService(WorkspaceActivity, new Map()),
     Effect.provideService(WorkspaceRecentActivity, new Map()),
     Effect.scoped,
   ),
+);
+
+it.effect(
+  "collects usage on busy workspaces before the activity guard without changing idle grace",
+  () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const collected: boolean[] = [];
+      const activity = new Map([["workspace", 1]]);
+      const recent = new Map<string, number>();
+      const policy = yield* Policy.makePolicy({
+        ...h.ports,
+        collectUsage: (_client, force) =>
+          Effect.sync(() => {
+            collected.push(force);
+          }),
+      }).pipe(
+        Effect.provideService(WorkspaceActivity, activity),
+        Effect.provideService(WorkspaceRecentActivity, recent),
+      );
+      expect(
+        yield* policy
+          .reconcileThread(root)
+          .pipe(
+            Effect.provideService(WorkspaceActivity, activity),
+            Effect.provideService(WorkspaceRecentActivity, recent),
+          ),
+      ).toBe("busy");
+      expect(collected).toEqual([false]);
+      expect(recent.size).toBe(0);
+      expect(h.stops).toEqual([]);
+    }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "forces history capture after the settle script and before stopping, retaining compute on failure",
+  () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const order: string[] = [];
+      h.setScript(async () => {
+        order.push("script");
+        return scriptResult;
+      });
+      let fail = true;
+      const policy = yield* Policy.makePolicy({
+        ...h.ports,
+        collectUsage: (_client, force) =>
+          Effect.gen(function* () {
+            order.push(force ? "final-history" : "periodic-history");
+            if (force && fail)
+              return yield* new Policy.LifecyclePolicyError({
+                operation: "collect-usage",
+                cause: "unread history",
+              });
+          }),
+        stop: (...args) =>
+          Effect.sync(() => {
+            order.push("stop");
+          }).pipe(Effect.andThen(h.ports.stop(...args))),
+      });
+      expect((yield* policy.reconcileThread(root).pipe(Effect.exit))._tag).toBe("Failure");
+      expect(order).toEqual(["periodic-history", "script", "final-history"]);
+      expect(h.stops).toEqual([]);
+      fail = false;
+      expect(yield* policy.reconcileThread(root)).toBe("release-submitted");
+      expect(order.slice(-2)).toEqual(["final-history", "stop"]);
+      expect(h.scriptRuns()).toBe(1);
+    }).pipe(Effect.scoped),
 );

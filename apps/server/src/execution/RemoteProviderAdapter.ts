@@ -28,6 +28,8 @@ const encodeResumeThreadSync = Schema.encodeSync(Schema.toCodecJson(P.ResumeThre
 const encodeTurnSync = Schema.encodeSync(Schema.toCodecJson(P.Turn));
 const encodeSteerSync = Schema.encodeSync(Schema.toCodecJson(P.Steer));
 const encodeInterruptSync = Schema.encodeSync(Schema.toCodecJson(P.Interrupt));
+const encodeStopTaskSync = Schema.encodeSync(Schema.toCodecJson(P.StopTask));
+const encodeStopSubagentSync = Schema.encodeSync(Schema.toCodecJson(P.StopSubagent));
 const encodeRespondSync = Schema.encodeSync(Schema.toCodecJson(P.Respond));
 const encodeThreadSync = Schema.encodeSync(Schema.toCodecJson(P.Thread));
 const encodeRollbackSync = Schema.encodeSync(Schema.toCodecJson(P.Rollback));
@@ -396,6 +398,18 @@ export function createRemoteProviderAdapter(options: {
               ),
             ),
           interruptTurn: (value) => unit("interruptTurn", encodeInterruptSync(value)),
+          ...(optional.has("stopTask")
+            ? {
+                stopTask: (value: typeof P.StopTask.Type) =>
+                  unit("stopTask", encodeStopTaskSync(value)),
+              }
+            : {}),
+          ...(optional.has("stopSubagent")
+            ? {
+                stopSubagent: (value: typeof P.StopSubagent.Type) =>
+                  unit("stopSubagent", encodeStopSubagentSync(value)),
+              }
+            : {}),
           respondToRuntimeRequest: (value) =>
             unit(
               "respondToRuntimeRequest",

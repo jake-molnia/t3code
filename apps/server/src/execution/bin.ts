@@ -1,3 +1,4 @@
+import { makeWorkerUsage } from "./WorkerUsage.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { makeGitDriverExecutor } from "../agentRuntime/worker/GitDriverExecutor.ts";
 import { makeMetadataExecutor } from "../agentRuntime/worker/MetadataExecutor.ts";
@@ -108,6 +109,7 @@ const program = Effect.gen(function* () {
       },
     });
     const computer = yield* makeComputerExecutor;
+    const usage = yield* makeWorkerUsage;
     const runPromise = yield* captureRunPromise;
     worker = createExecutionWorker({
       identity,
@@ -122,6 +124,7 @@ const program = Effect.gen(function* () {
             const terminal = yield* terminals.activity;
             const browsing = yield* preview.activity;
             const computing = yield* computer.activity;
+            const usageActivity = yield* usage.activity;
             const transferring = yield* assets.activity;
             return {
               activeOperations:
@@ -131,40 +134,43 @@ const program = Effect.gen(function* () {
                 terminal.activeOperations +
                 browsing.activeOperations +
                 computing.activeOperations +
+                usageActivity.activeOperations +
                 transferring.activeOperations,
               pendingCallbacks: provider.pendingCallbacks + utility.pendingCallbacks,
             };
           }),
         ),
       execute: (method, input) =>
-        method === "configureProvider" ||
-        method.startsWith("provider.") ||
-        method.startsWith("text.") ||
-        method.startsWith("auth.")
-          ? runPromise(providers.execute(method, input))
-          : method.startsWith("git.driver.") ||
-              method.startsWith("vcs.driver.") ||
-              method === "vcs.process" ||
-              method === "vcs.process.probe" ||
-              method.startsWith("vcs.temp.")
-            ? runPromise(git.execute(method, input))
-            : method.startsWith("project.")
-              ? runPromise(metadata.execute(method, input))
-              : method === "git.bundleFork" ||
-                  method === "git.importFork" ||
-                  method === "git.cleanupFork"
-                ? runPromise(forks.execute(method, input))
-                : method.startsWith("asset.") || method.startsWith("input.")
-                  ? runPromise(assets.execute(method, input))
-                  : method.startsWith("computer.")
-                    ? runPromise(computer.execute(method, input))
-                    : method.startsWith("preview.") || method.startsWith("html.")
-                      ? runPromise(preview.execute(method, input))
-                      : method.startsWith("terminals.")
-                        ? runPromise(terminals.execute(method, input))
-                        : /^(workspace|files|git|scripts)\./.test(method)
-                          ? runPromise(workspace.execute(method, input))
-                          : runPromise(executor.execute(method, input)),
+        method.startsWith("usage.")
+          ? runPromise(usage.execute(method, input))
+          : method === "configureProvider" ||
+              method.startsWith("provider.") ||
+              method.startsWith("text.") ||
+              method.startsWith("auth.")
+            ? runPromise(providers.execute(method, input))
+            : method.startsWith("git.driver.") ||
+                method.startsWith("vcs.driver.") ||
+                method === "vcs.process" ||
+                method === "vcs.process.probe" ||
+                method.startsWith("vcs.temp.")
+              ? runPromise(git.execute(method, input))
+              : method.startsWith("project.")
+                ? runPromise(metadata.execute(method, input))
+                : method === "git.bundleFork" ||
+                    method === "git.importFork" ||
+                    method === "git.cleanupFork"
+                  ? runPromise(forks.execute(method, input))
+                  : method.startsWith("asset.") || method.startsWith("input.")
+                    ? runPromise(assets.execute(method, input))
+                    : method.startsWith("computer.")
+                      ? runPromise(computer.execute(method, input))
+                      : method.startsWith("preview.") || method.startsWith("html.")
+                        ? runPromise(preview.execute(method, input))
+                        : method.startsWith("terminals.")
+                          ? runPromise(terminals.execute(method, input))
+                          : /^(workspace|files|git|scripts)\./.test(method)
+                            ? runPromise(workspace.execute(method, input))
+                            : runPromise(executor.execute(method, input)),
     });
     const handle = worker.handle;
     const acquireLease = worker.acquireLease;

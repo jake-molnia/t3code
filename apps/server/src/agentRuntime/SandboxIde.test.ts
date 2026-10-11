@@ -180,6 +180,7 @@ it.effect("pins idle compute through startup and hands it to the worker lease", 
     const ide = yield* fixture.make();
     const root = ThreadId.make("root-one");
     const policy = yield* makePolicy({
+      collectUsage: () => Effect.void,
       enabled: true,
       idleMs: 0,
       roots: Effect.succeed([root]),

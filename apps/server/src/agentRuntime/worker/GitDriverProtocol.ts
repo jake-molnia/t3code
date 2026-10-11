@@ -150,6 +150,7 @@ export const Git = {
         Schema.Struct({
           submodules: Schema.optionalKey(Schema.NullOr(C.WorktreeSubmodules)),
           worktreesDirectory: Schema.optionalKey(S),
+          detached: Schema.optionalKey(B),
         }),
       ),
       progress: Schema.optionalKey(B),

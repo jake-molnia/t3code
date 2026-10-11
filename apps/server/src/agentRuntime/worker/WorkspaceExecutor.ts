@@ -307,6 +307,30 @@ export const makeWorkspaceExecutor = (options: {
             yield* checkpoints.deleteCheckpointRefs({ ...input, cwd: yield* resolve(input.cwd) });
             return null;
           }
+          case "files.metadata": {
+            const input = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({
+                cwd: Schema.NonEmptyString,
+                paths: Schema.Array(Schema.String).check(
+                  Schema.isMaxLength(C.FILESYSTEM_METADATA_BATCH_LIMIT),
+                ),
+              }),
+            )(raw);
+            const cwd = yield* resolve(input.cwd);
+            const metadata = yield* Effect.forEach(
+              input.paths,
+              (requested) =>
+                Effect.gen(function* () {
+                  yield* relative(requested);
+                  const target = path.join(cwd, requested);
+                  const canonical = yield* fs.realPath(target);
+                  if (!withinRoot(canonical)) return null;
+                  return (yield* files.getMetadata({ paths: [canonical] })).entries[0] ?? null;
+                }).pipe(Effect.catch(() => Effect.succeed(null))),
+              { concurrency: 8 },
+            );
+            return { entries: metadata };
+          }
           case "files.read": {
             const input = yield* Schema.decodeUnknownEffect(C.ProjectReadFileInput)(raw);
             if (path.isAbsolute(input.relativePath)) {

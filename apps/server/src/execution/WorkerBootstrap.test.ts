@@ -1,3 +1,5 @@
+import * as WorkerUsage from "./WorkerUsage.ts";
+import * as UsageHistory from "../usage/UsageHistorySources.ts";
 import * as ForkProtocol from "./ForkWorkspaceProtocol.ts";
 import * as AssetProtocol from "../agentRuntime/worker/AssetProtocol.ts";
 import * as WorkerProtocol from "../agentRuntime/worker/Protocol.ts";
@@ -18,6 +20,10 @@ import {
 import { ConfigureProvider } from "./WorkerProviders.ts";
 import { createExecutionClient } from "./ExecutionClient.ts";
 import { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
+
+const decodeUsageExport = Schema.decodeUnknownSync(WorkerUsage.Export);
+const decodeUsageChunk = Schema.decodeUnknownSync(WorkerUsage.Chunk);
+const decodeUsageHistory = Schema.decodeUnknownSync(Schema.fromJsonString(UsageHistory.History));
 
 async function freePort() {
   const socket = NodeNet.createServer();
@@ -77,6 +83,16 @@ test("standalone worker boots native driver and workspace services without a con
     expect(identityResponse.status).toBe(200);
     const identity = Schema.decodeUnknownSync(ExecutionIdentity)(await identityResponse.json());
     const client = createExecutionClient({ endpoint, token, identity });
+    const historyExport = Schema.decodeUnknownSync(WorkerUsage.Export)(
+      await client.call("usage.history", {}),
+    );
+    const historyChunk = Schema.decodeUnknownSync(WorkerUsage.Chunk)(
+      await client.call("usage.read", { exportId: historyExport.exportId, offset: 0 }),
+    );
+    const history = decodeUsageHistory(Buffer.from(historyChunk.data, "base64").toString("utf8"));
+    expect(history.some((source) => source.provider === "pi")).toBe(true);
+    await client.call("usage.release", { exportId: historyExport.exportId });
+
     const instanceId = ProviderInstanceId.make("codex");
     await client.transient(
       "configureProvider",

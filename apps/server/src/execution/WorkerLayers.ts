@@ -1,3 +1,7 @@
+import * as UsageService from "../usage/UsageService.ts";
+import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
+import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
+import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain";
 import { prepareHarnessState } from "./HarnessDefaults.ts";
 import * as CredentialSources from "./credentialSources.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
@@ -74,6 +78,13 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
     }),
   );
   return Layer.mergeAll(
+    UsageService.layer.pipe(
+      Layer.provide(
+        CursorUsageAccounts.layer.pipe(
+          Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
+        ),
+      ),
+    ),
     ProviderInfrastructure.layer,
     AcpRegistrySupport.layerFromHost,
     ResetCreditCoordinator.layer,
