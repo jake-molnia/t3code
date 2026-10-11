@@ -6,7 +6,7 @@ import {
   setApertureCatalog,
 } from "./ApertureCatalog.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Worker deployment configuration boundary.
-import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import * as NodeFS from "node:fs";
 import type { ProviderInstanceConfig } from "@t3tools/contracts";
 import type { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as Schema from "effect/Schema";
@@ -51,15 +51,6 @@ export function harnessDefaults(
     return value;
   };
   return (instance) => {
-    if (
-      instance.enabled !== false &&
-      environment.APERTURE_UPSTREAM &&
-      ["cursor", "muse"].includes(instance.driver)
-    ) {
-      throw new Error(
-        `${instance.driver} requires native provider authentication and cannot use Aperture model credentials`,
-      );
-    }
     const override = defaults[instance.driver];
     if (!override) return instance;
     const variables = new Map((instance.environment ?? []).map((entry) => [entry.name, entry]));
@@ -80,9 +71,25 @@ export function harnessDefaults(
   };
 }
 
+/** Launch eligibility is separate from configuration: disabled providers can retain history. */
+export function validateHarnessLaunch(
+  instance: ProviderInstanceConfig,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  if (
+    instance.enabled !== false &&
+    environment.APERTURE_UPSTREAM &&
+    ["cursor", "muse"].includes(instance.driver)
+  ) {
+    throw new Error(
+      `${instance.driver} requires native provider authentication and cannot use Aperture model credentials`,
+    );
+  }
+}
+
 export function deploymentHarnessDefaults() {
   const path = process.env.T3_HARNESS_DEFAULTS_FILE;
-  return harnessDefaults(path ? readFileSync(path, "utf8") : undefined);
+  return harnessDefaults(path ? NodeFS.readFileSync(path, "utf8") : undefined);
 }
 
 export function sandboxPolicy(
@@ -115,7 +122,7 @@ export async function prepareHarnessState(stateDir: string) {
     throw new Error("Invalid Aperture upstream");
   const base = aperture.replace(/\/$/, "");
   const directory = `${stateDir}/harnesses/pi`;
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  NodeFS.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const response = await fetch(`${base}/v1/models`, {
     headers: { Authorization: `Bearer ${process.env.APERTURE_API_KEY ?? "-"}` },
     signal: AbortSignal.timeout(15000),
@@ -124,8 +131,14 @@ export async function prepareHarnessState(stateDir: string) {
   const catalog = managedApertureCatalog(Schema.decodeUnknownSync(Catalog)(await response.json()));
   setApertureCatalog(catalog);
   const configs = nativeApertureConfigs(catalog, base);
-  writeFileSync(`${directory}/models.json`, JSON.stringify(configs.pi, null, 2), { mode: 0o600 });
-  writeFileSync(`${stateDir}/harnesses/opencode2.json`, JSON.stringify(configs.opencode, null, 2), {
+  NodeFS.writeFileSync(`${directory}/models.json`, JSON.stringify(configs.pi, null, 2), {
     mode: 0o600,
   });
+  NodeFS.writeFileSync(
+    `${stateDir}/harnesses/opencode2.json`,
+    JSON.stringify(configs.opencode, null, 2),
+    {
+      mode: 0o600,
+    },
+  );
 }

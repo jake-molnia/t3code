@@ -1,3 +1,4 @@
+import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
 import * as History from "./UsageHistorySources.ts";
 /**
  * UsageService - reads every driver's usage history and returns priced usage
@@ -230,6 +231,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* ServerSettings.ServerSettingsService;
+  const configurationOverrides = yield* ProviderConfigurationOverrides;
   const httpClient = yield* HttpClient.HttpClient;
   const hostEnvironment = yield* HostProcess.Environment;
   // The readers yield their own services; scans run them against this context.
@@ -359,11 +361,23 @@ export const make = Effect.gen(function* () {
     return yield* Effect.forEach(
       entries,
       Effect.fnUntraced(function* ([instanceId, instance, configured]) {
+        const effective = yield* Effect.try(() =>
+          configurationOverrides({ ...instance, driver: driver.driverKind }),
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new UsageReadError({
+                reason: "scanFailed",
+                detail: "Provider usage configuration could not be resolved.",
+                cause,
+              }),
+          ),
+        );
         const instanceConfig: ProviderUsageInstance<Config> = {
           instanceId,
-          config: Option.getOrUndefined(decodeConfig(instance.config ?? {})),
+          config: Option.getOrUndefined(decodeConfig(effective.config ?? {})),
           environment: yield* mergeProviderInstanceEnvironment(
-            instance.environment,
+            effective.environment,
             hostEnvironment,
           ),
           configured,

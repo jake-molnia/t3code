@@ -1,3 +1,5 @@
+import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
+import { deploymentHarnessDefaults } from "./HarnessDefaults.ts";
 import * as UsageService from "../usage/UsageService.ts";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
@@ -109,6 +111,16 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
       ModelManifest.layerModelCatalog.pipe(Layer.provideMerge(ModelManifest.layer)),
     ),
     Layer.provideMerge(ServerEnvironment.layerIdentity),
+    Layer.provideMerge(
+      Layer.effect(
+        ProviderConfigurationOverrides,
+        Effect.gen(function* () {
+          // Config bootstraps the retained harness home before variables are expanded.
+          yield* ServerConfig.ServerConfig;
+          return yield* Effect.try(() => deploymentHarnessDefaults());
+        }),
+      ),
+    ),
     Layer.provideMerge(WorkerSettings.layer),
     Layer.provideMerge(ServerSecretStore.layer),
     Layer.provideMerge(config),

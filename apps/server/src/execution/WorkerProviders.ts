@@ -1,7 +1,8 @@
 import { resolveModelPreferences } from "@t3tools/shared/serverSettings";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { filterApertureSnapshot } from "./ApertureCatalog.ts";
-import { deploymentHarnessDefaults } from "./HarnessDefaults.ts";
+import { validateHarnessLaunch } from "./HarnessDefaults.ts";
+import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
 import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -121,7 +122,7 @@ export const make = Effect.gen(function* () {
   const registry = yield* Registry.ProviderInstanceRegistry;
   const mutator = yield* Mutator.ProviderInstanceRegistryMutator;
   const settings = yield* Settings.ServerSettingsService;
-  const normalizeHarness = yield* Effect.try(() => deploymentHarnessDefaults());
+  const normalizeHarness = yield* ProviderConfigurationOverrides;
   const configurations: Record<string, C.ProviderInstanceConfig> = {};
   const adapters = new Map<C.ProviderInstanceId, ProviderAdapterV2["Service"]>();
   const lock = yield* Semaphore.make(1);
@@ -135,9 +136,10 @@ export const make = Effect.gen(function* () {
               ...input.settings,
               ...resolveModelPreferences(input.settings),
             });
-            configurations[input.instanceId] = yield* Effect.try(() =>
-              normalizeHarness(input.config),
-            );
+            configurations[input.instanceId] = yield* Effect.try(() => {
+              validateHarnessLaunch(input.config);
+              return normalizeHarness(input.config);
+            });
             yield* mutator.reconcile(configurations);
             const instance = yield* registry.getInstance(input.instanceId);
             if (!instance) return yield* new WorkerProviderError({ operation: "configure" });

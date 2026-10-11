@@ -1,3 +1,5 @@
+import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
+import { harnessDefaults } from "../execution/HarnessDefaults.ts";
 import * as HistorySources from "./UsageHistorySources.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real
 // transcript trees on disk, outside the service's Effect FileSystem.
@@ -519,6 +521,117 @@ describe("UsageService", () => {
         Effect.provide(layerService({ prefix: "usage-pi-malformed", home, settings })),
       );
     }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "scans deployed Pi homes with the same overrides as launch without authorizing implicit providers",
+    () =>
+      Effect.gen(function* () {
+        const { home, settings } = yield* setup;
+        const stateDir = NodePath.join(home, ".t3-worker");
+        const secret = "operator-key-never-persisted";
+        for (const scenario of [
+          "deployed-default",
+          "explicit-instance",
+          "explicit-operator",
+        ] as const) {
+          const expectedAgentDir =
+            scenario === "deployed-default"
+              ? NodePath.join(stateDir, "harnesses/pi")
+              : NodePath.join(home, scenario);
+          const instances =
+            scenario === "deployed-default"
+              ? settings.providerInstances
+              : {
+                  ...settings.providerInstances,
+                  [ProviderInstanceId.make("pi")]: {
+                    driver: ProviderDriverKind.make("pi"),
+                    environment: [
+                      {
+                        name: "PI_CODING_AGENT_DIR",
+                        value: NodePath.join(home, "explicit-instance"),
+                        sensitive: false,
+                      },
+                    ],
+                  },
+                };
+          const operator = harnessDefaults(
+            JSON.stringify({
+              ...(scenario === "explicit-instance"
+                ? {}
+                : {
+                    pi: {
+                      environment: [
+                        {
+                          name: "PI_CODING_AGENT_DIR",
+                          value:
+                            scenario === "deployed-default"
+                              ? "${T3_HARNESS_STATE_DIR}/pi"
+                              : expectedAgentDir,
+                          sensitive: false,
+                        },
+                      ],
+                    },
+                  }),
+              codex: {
+                environment: [
+                  { name: "OPENAI_API_KEY", value: "${APERTURE_API_KEY}", sensitive: true },
+                ],
+              },
+            }),
+            {
+              APERTURE_UPSTREAM: "http://aperture",
+              APERTURE_API_KEY: secret,
+              T3_HARNESS_STATE_DIR: NodePath.join(stateDir, "harnesses"),
+            },
+          );
+          const rawBefore = JSON.stringify(instances);
+          const sessionDir = NodePath.join(expectedAgentDir, "sessions");
+          yield* Effect.promise(async () => {
+            await NodeFSP.mkdir(sessionDir, { recursive: true });
+            await NodeFSP.writeFile(
+              NodePath.join(sessionDir, "session.jsonl"),
+              [
+                { type: "session", id: scenario },
+                {
+                  type: "usage",
+                  id: scenario,
+                  timestamp: "2026-08-01T10:00:00Z",
+                  provider: "aperture",
+                  model: "gpt-6-luna",
+                  usage: { input: 123, output: 7 },
+                },
+              ]
+                .map((line) => encodeUnknownJsonString(line))
+                .join("\n") + "\n",
+            );
+          });
+          yield* Effect.gen(function* () {
+            const service = yield* UsageService.make;
+            const history = yield* service.readHistory;
+            const pi = history.find((source) => source.provider === "pi");
+            assert.strictEqual(pi?.dir, sessionDir);
+            assert.strictEqual(pi?.files?.[0]?.records[0]?.totals.uncachedInputTokens, 123);
+            assert.strictEqual(pi?.files?.[0]?.records[0]?.sessionId, scenario);
+            assert.strictEqual(JSON.stringify(instances), rawBefore);
+            assert.isFalse(JSON.stringify(instances).includes(secret));
+          }).pipe(
+            Effect.scoped,
+            Effect.provide(
+              layerService({
+                prefix: scenario,
+                home,
+                settings: { ...settings, providerInstances: instances },
+                environment: {
+                  APERTURE_UPSTREAM: "http://aperture",
+                  PI_CODING_AGENT_DIR: NodePath.join(home, "wrong-host-dir"),
+                },
+              }),
+            ),
+            Effect.provideService(ProviderConfigurationOverrides, operator),
+          );
+        }
+      }).pipe(Effect.scoped),
   );
 
   it.live("discovers Pi history in its default home and directory overrides", () =>

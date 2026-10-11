@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@effect/vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
-import { harnessDefaults, sandboxPolicy } from "./HarnessDefaults.ts";
+import { harnessDefaults, sandboxPolicy, validateHarnessLaunch } from "./HarnessDefaults.ts";
 
 describe("sandbox harness defaults", () => {
   it("resolves operator credentials privately and preserves native instance settings", () => {
@@ -36,10 +36,19 @@ describe("sandbox harness defaults", () => {
       { APERTURE_UPSTREAM: "http://aperture" },
     );
     expect(() => apply({ driver: ProviderDriverKind.make("codex") })).toThrow("requires MISSING");
-    expect(() => apply({ driver: ProviderDriverKind.make("cursor") })).toThrow(
-      "cannot use Aperture",
-    );
-    expect(() => apply({ driver: ProviderDriverKind.make("muse") })).toThrow("cannot use Aperture");
+    expect(() =>
+      validateHarnessLaunch(
+        { driver: ProviderDriverKind.make("cursor") },
+        { APERTURE_UPSTREAM: "http://aperture" },
+      ),
+    ).toThrow("cannot use Aperture");
+    expect(() =>
+      validateHarnessLaunch(
+        { driver: ProviderDriverKind.make("muse") },
+        { APERTURE_UPSTREAM: "http://aperture" },
+      ),
+    ).toThrow("cannot use Aperture");
+    expect(apply({ driver: ProviderDriverKind.make("cursor") }).driver).toBe("cursor");
     expect(apply({ driver: ProviderDriverKind.make("cursor"), enabled: false }).enabled).toBe(
       false,
     );
