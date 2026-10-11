@@ -123,6 +123,9 @@ function harness(initial = snapshot()) {
     },
   });
   const ports: Policy.LifecyclePolicyPorts = {
+    recoverSettlements: Effect.void,
+    enroll: () => Effect.void,
+    retire: () => Effect.void,
     collectUsage: () => Effect.void,
     enabled: true,
     idleMs: 0,
@@ -552,5 +555,236 @@ it.effect(
       expect(yield* policy.reconcileThread(root)).toBe("release-submitted");
       expect(order.slice(-2)).toEqual(["final-history", "stop"]);
       expect(h.scriptRuns()).toBe(1);
+    }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "observes and collects busy workspace usage only every 30 seconds, or after a new admission",
+  () =>
+    Effect.gen(function* () {
+      const h = harness();
+      let observations = 0;
+      let collections = 0;
+      const policy = yield* Policy.makePolicy({
+        ...h.ports,
+        observe: (workspace) =>
+          h.ports.observe(workspace).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                observations++;
+              }),
+            ),
+          ),
+        collectUsage: () =>
+          Effect.sync(() => {
+            collections++;
+          }),
+      }).pipe(Effect.provideService(WorkspaceActivity, new Map([["workspace", 1]])));
+      expect(yield* policy.reconcileThread(root)).toBe("busy");
+      for (let tick = 0; tick < 5; tick++) {
+        yield* TestClock.adjust("5 seconds");
+        expect(yield* policy.reconcileThread(root)).toBe("busy");
+      }
+      expect(observations).toBe(1);
+      expect(collections).toBe(1);
+      yield* TestClock.adjust("5 seconds");
+      expect(yield* policy.reconcileThread(root)).toBe("busy");
+      expect(observations).toBe(2);
+      h.setSnapshot({ ...snapshot(), revision: 11 });
+      expect(yield* policy.reconcileThread(root)).toBe("busy");
+      expect(observations).toBe(3);
+      expect(collections).toBe(3);
+    }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "does not retire a suspended settled workspace with pending cleanup; cleanup runs when the outbox clears",
+  () =>
+    Effect.gen(function* () {
+      const h = harness({ ...snapshot(), pendingEffects: true });
+      h.setStopped();
+      let retirements = 0;
+      let enrollments = 0;
+      const policy = yield* Policy.makePolicy({
+        ...h.ports,
+        enroll: () =>
+          Effect.sync(() => {
+            enrollments++;
+          }),
+        retire: () =>
+          Effect.sync(() => {
+            retirements++;
+          }),
+        observe: (workspace) =>
+          h.ports.observe(workspace).pipe(
+            Effect.map((observed) =>
+              observed.kind === "stopped"
+                ? {
+                    ...observed,
+                    phase: "suspended" as const,
+                    identity,
+                    completedStop: {
+                      operationId: "idle:10",
+                      revision: 10,
+                      action: "suspend" as const,
+                    },
+                  }
+                : observed,
+            ),
+          ),
+      });
+      expect(yield* policy.reconcileThread(root)).toBe("busy");
+      expect(retirements).toBe(0);
+      h.setSnapshot(snapshot());
+      expect(yield* policy.reconcileThread(root)).toBe("release-submitted");
+      expect(h.resumes()).toBe(1);
+      expect(h.scriptRuns()).toBe(1);
+      expect(retirements).toBe(0);
+      expect(h.stops).toHaveLength(1);
+      yield* policy.requestSettlement(root);
+      expect(enrollments).toBe(1);
+    }).pipe(Effect.scoped),
+);
+
+it.effect("retires dormant roots only after lifecycle work is complete", () =>
+  Effect.gen(function* () {
+    const idle = member();
+    const h = harness({
+      ...snapshot([
+        { ...idle, thread: { ...idle.thread, settledOverride: null, settledAt: null } },
+      ]),
+      settleScript: null,
+    });
+    const retired: string[] = [];
+    const policy = yield* Policy.makePolicy({
+      ...h.ports,
+      observe: () =>
+        Effect.succeed({
+          kind: "stopped",
+          phase: "suspended",
+          identity,
+          completedStop: { operationId: "idle:10", revision: 10, action: "suspend" },
+        }),
+      retire: (state) =>
+        Effect.sync(() => {
+          retired.push(state.workspaceId);
+        }),
+    });
+    expect(yield* policy.reconcileThread(root)).toBe("stopped");
+    expect(retired).toEqual(["workspace"]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "does not acknowledge explicit settlement until failed enrollment is durably retried",
+  () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const attempted = yield* Deferred.make<void>();
+      let attempts = 0;
+      let observations = 0;
+      let acknowledged = false;
+      const policy = yield* Policy.makePolicy({
+        ...h.ports,
+        enroll: () =>
+          Effect.gen(function* () {
+            attempts++;
+            if (attempts === 1) {
+              yield* Deferred.succeed(attempted, undefined);
+              return yield* new Policy.LifecyclePolicyError({
+                operation: "enroll",
+                cause: "transient SQLite failure",
+              });
+            }
+          }),
+        observe: (workspace) =>
+          h.ports.observe(workspace).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                observations++;
+              }),
+            ),
+          ),
+      });
+      const request = yield* policy.requestSettlement(root).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            acknowledged = true;
+          }),
+        ),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(attempted);
+      expect(acknowledged).toBe(false);
+      expect(observations).toBe(0);
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(request);
+      expect(attempts).toBe(2);
+      expect(acknowledged).toBe(true);
+    }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "startup recovers a settlement committed before enrollment and then stops polling its completed cleanup",
+  () =>
+    Effect.gen(function* () {
+      const h = harness();
+      h.setStopped();
+      let enrolled = false;
+      let released = false;
+      let observations = 0;
+      const stopped = yield* Deferred.make<void>();
+      const retired = yield* Deferred.make<void>();
+      const policy = yield* Policy.makePolicy({
+        ...h.ports,
+        recoverSettlements: Effect.sync(() => {
+          enrolled = true;
+        }),
+        roots: Effect.sync(() => (enrolled ? [root] : [])),
+        observe: (workspace) =>
+          h.ports.observe(workspace).pipe(
+            Effect.map((current) => {
+              observations++;
+              return current.kind === "running"
+                ? current
+                : {
+                    ...current,
+                    phase: released ? ("released" as const) : ("suspended" as const),
+                    identity,
+                    completedStop: {
+                      operationId: released ? "release:10" : "idle:10",
+                      revision: 10,
+                      action: released ? ("release_compute" as const) : ("suspend" as const),
+                    },
+                  };
+            }),
+          ),
+        stop: (...args) =>
+          h.ports.stop(...args).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                released = true;
+                h.setSnapshot({ ...snapshot(), settlementProven: true });
+                h.setStopped();
+              }),
+            ),
+            Effect.andThen(Deferred.succeed(stopped, undefined)),
+            Effect.asVoid,
+          ),
+        retire: () =>
+          Effect.sync(() => {
+            enrolled = false;
+          }).pipe(Effect.andThen(Deferred.succeed(retired, undefined)), Effect.asVoid),
+      });
+      yield* policy.start;
+      yield* Deferred.await(stopped);
+      expect(h.scriptRuns()).toBe(1);
+      yield* TestClock.adjust("5 seconds");
+      yield* Deferred.await(retired);
+      const before = observations;
+      yield* TestClock.adjust("30 seconds");
+      expect(observations).toBe(before);
+      expect(h.scriptRuns()).toBe(1);
+      expect(h.stops).toHaveLength(1);
     }).pipe(Effect.scoped),
 );

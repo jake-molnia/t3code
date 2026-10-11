@@ -92,6 +92,10 @@ it.layer(layer, { excludeTestServices: true })("durable lifecycle submission", (
         revision: number;
       }>`SELECT admission_revision AS revision FROM agent_runtime_workspaces WHERE workspace_id='utility-workspace'`;
       expect(rows[0]?.revision).toBe(11);
+      const enrolled = yield* sql<{
+        execution_requested: number;
+      }>`SELECT execution_requested FROM agent_runtime_workspaces WHERE workspace_id='utility-workspace'`;
+      expect(enrolled[0]?.execution_requested).toBe(1);
       fail = false;
       yield* runtime.stop(owner, "suspend", { ...options, expectedRevision: 11 });
       expect(posts).toHaveLength(2);
