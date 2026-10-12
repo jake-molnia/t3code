@@ -3,7 +3,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as C from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -146,9 +148,17 @@ it.layer(services, { excludeTestServices: true })("sandbox preview execution", (
           }),
         });
         const frames = yield* Schema.decodeUnknownEffect(P.ViewerBatch)(
-          yield* executor.execute("preview.viewerPoll", viewer),
+          yield* executor.execute("preview.viewerPoll", { ...viewer, afterSequence: 0 }),
         );
-        expect(frames).toEqual([{ _tag: "frame", data: "AQID", ackId: 1 }]);
+        expect(frames).toEqual({ sequence: 1, items: [{ _tag: "frame", data: "AQID", ackId: 1 }] });
+        expect(
+          yield* executor.execute("preview.viewerPoll", { ...viewer, afterSequence: 0 }),
+        ).toEqual(frames);
+        expect(
+          (yield* executor
+            .execute("preview.viewerPoll", { ...viewer, afterSequence: 2 })
+            .pipe(Effect.exit))._tag,
+        ).toBe("Failure");
         expect(acknowledged).toBe(0);
         yield* executor.execute("preview.viewerAck", { ...viewer, ackId: 1 });
         yield* executor.execute("preview.viewerAck", { ...viewer, ackId: 1 });
@@ -158,16 +168,106 @@ it.layer(services, { excludeTestServices: true })("sandbox preview execution", (
           message: { type: "pointerMove", x: 1, y: 2 },
         });
         expect(inputs).toHaveLength(1);
+        yield* Queue.offer(output, { _tag: "viewport", width: 1280, height: 720 });
+        expect(
+          yield* executor.execute("preview.viewerPoll", { ...viewer, afterSequence: 1 }),
+        ).toEqual({ sequence: 2, items: [{ _tag: "viewport", width: 1280, height: 720 }] });
+        expect(
+          (yield* executor
+            .execute("preview.viewerPoll", { ...viewer, afterSequence: 0 })
+            .pipe(Effect.exit))._tag,
+        ).toBe("Failure");
+        const pendingPoll = yield* executor
+          .execute("preview.viewerPoll", { ...viewer, afterSequence: 2 })
+          .pipe(Effect.exit, Effect.forkScoped);
+        const queuedPoll = yield* executor
+          .execute("preview.viewerPoll", { ...viewer, afterSequence: 2 })
+          .pipe(Effect.exit, Effect.forkScoped);
+        yield* Effect.yieldNow;
         yield* executor.execute("preview.viewerClose", viewer);
-        expect((yield* Effect.exit(executor.execute("preview.viewerPoll", viewer)))._tag).toBe(
+        expect((yield* Fiber.join(pendingPoll).pipe(Effect.timeout("1 second")))._tag).toBe(
+          "Success",
+        );
+        expect((yield* Fiber.join(queuedPoll).pipe(Effect.timeout("1 second")))._tag).toBe(
           "Failure",
         );
+        expect(
+          (yield* Effect.exit(
+            executor.execute("preview.viewerPoll", { ...viewer, afterSequence: 0 }),
+          ))._tag,
+        ).toBe("Failure");
       }),
+  );
+  it.effect("bounds total close cleanup with stored and queued stalled acknowledgements", () =>
+    Effect.gen(function* () {
+      const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>({ capacity: 64 });
+      let acknowledged = 0;
+      let interrupted = 0;
+      let released = false;
+      const executor = yield* makePreviewExecutor({ publish: async () => {} }).pipe(
+        Effect.provideService(ServerBrowser.ServerBrowser, {
+          attachViewer: () =>
+            Effect.gen(function* () {
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  released = true;
+                }),
+              );
+              return { output, input: () => Effect.void };
+            }),
+          answerFileChooser: () => Effect.succeed(false),
+          openDownload: () => Effect.succeed(Option.none()),
+          clearProfile: () => Effect.void,
+          reportProfiles: () => Effect.void,
+        }),
+        Effect.provideService(ServerEnvironment.ServerEnvironment, {
+          getEnvironmentId: Effect.succeed(C.EnvironmentId.make("worker-env")),
+          getDescriptor: Effect.die("unused"),
+        }),
+      );
+      const viewer = yield* Schema.decodeUnknownEffect(P.ViewerRef)(
+        yield* executor.execute("preview.viewerOpen", {
+          threadId: "thread",
+          tabId: "tab",
+          maxWidth: 100,
+          maxHeight: 100,
+          quality: 50,
+          canOperate: false,
+        }),
+      );
+      const frame = {
+        _tag: "frame" as const,
+        data: new Uint8Array([0]),
+        ack: Effect.gen(function* () {
+          acknowledged++;
+          return yield* Effect.never;
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              interrupted++;
+            }),
+          ),
+        ),
+      };
+      for (let i = 0; i < 8; i++) yield* Queue.offer(output, frame);
+      yield* executor.execute("preview.viewerPoll", { ...viewer, afterSequence: 0 });
+      for (let i = 0; i < 64; i++) yield* Queue.offer(output, frame);
+      const started = yield* Clock.currentTimeMillis;
+      yield* executor.execute("preview.viewerClose", viewer);
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(2500);
+      expect(acknowledged).toBe(72);
+      expect(interrupted).toBe(72);
+      expect(released).toBe(true);
+      expect((yield* executor.activity).activeOperations).toBe(0);
+    }),
   );
   it.effect("bounds unacknowledged frames and acknowledges dropped frames", () =>
     Effect.gen(function* () {
       const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>({ capacity: 20 });
       let acknowledgements = 0;
+      const droppedStarted = yield* Deferred.make<void>();
+      const allDropped = yield* Deferred.make<void>();
+      const releaseDropped = yield* Deferred.make<void>();
       const executor = yield* makePreviewExecutor({ publish: async () => {} }).pipe(
         Effect.provideService(ServerBrowser.ServerBrowser, {
           attachViewer: () => Effect.succeed({ output, input: () => Effect.void }),
@@ -195,15 +295,79 @@ it.layer(services, { excludeTestServices: true })("sandbox preview execution", (
         yield* Queue.offer(output, {
           _tag: "frame",
           data: new Uint8Array([i]),
-          ack: Effect.sync(() => {
+          ack: Effect.gen(function* () {
             acknowledgements++;
+            if (acknowledgements === 4) yield* Deferred.succeed(allDropped, undefined);
+            if (i === 8) {
+              yield* Deferred.succeed(droppedStarted, undefined);
+              yield* Deferred.await(releaseDropped);
+            }
           }),
         });
+      const control = {
+        _tag: "control" as const,
+        canOperate: true,
+        controller: "you" as const,
+        generation: 7,
+        dialog: null,
+      };
+      yield* Queue.offer(output, control);
+      const lostPoll = yield* executor
+        .execute("preview.viewerPoll", { ...viewer, afterSequence: 0 })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(droppedStarted).pipe(Effect.timeout("1 second"));
+      yield* Fiber.interrupt(lostPoll);
       const batch = yield* Schema.decodeUnknownEffect(P.ViewerBatch)(
-        yield* executor.execute("preview.viewerPoll", viewer),
+        yield* executor
+          .execute("preview.viewerPoll", { ...viewer, afterSequence: 0 })
+          .pipe(Effect.timeout("1 second")),
       );
-      expect(batch).toHaveLength(8);
+      expect(batch.items.filter((item) => item._tag === "frame")).toHaveLength(8);
+      expect(batch.items.at(-1)).toEqual(control);
+      yield* Deferred.await(allDropped).pipe(Effect.timeout("1 second"));
       expect(acknowledgements).toBe(4);
+      yield* executor.execute("preview.viewerClose", viewer);
+      expect(acknowledgements).toBe(12);
+      expect((yield* executor.activity).activeOperations).toBe(0);
+      for (const terminal of ["gone", "reconnect"] as const) {
+        const ended = yield* Schema.decodeUnknownEffect(P.ViewerRef)(
+          yield* executor.execute("preview.viewerOpen", {
+            threadId: "thread",
+            tabId: "tab",
+            maxWidth: 100,
+            maxHeight: 100,
+            quality: 50,
+            canOperate: true,
+          }),
+        );
+        const firstPoll = yield* executor
+          .execute("preview.viewerPoll", { ...ended, afterSequence: 0 })
+          .pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        const queuedRetry = yield* executor
+          .execute("preview.viewerPoll", { ...ended, afterSequence: 0 })
+          .pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* Queue.offer(output, { _tag: terminal });
+        const first = yield* Fiber.join(firstPoll);
+        expect(yield* Fiber.join(queuedRetry)).toEqual(first);
+        expect(first).toEqual({ sequence: 1, items: [{ _tag: terminal }] });
+        expect((yield* executor.activity).activeOperations).toBe(0);
+        expect(
+          yield* executor.execute("preview.viewerPoll", { ...ended, afterSequence: 0 }),
+        ).toEqual(first);
+        expect(
+          (yield* executor
+            .execute("preview.viewerPoll", { ...ended, afterSequence: 2 })
+            .pipe(Effect.exit))._tag,
+        ).toBe("Failure");
+        yield* executor.execute("preview.viewerClose", ended);
+        expect(
+          (yield* executor
+            .execute("preview.viewerPoll", { ...ended, afterSequence: 0 })
+            .pipe(Effect.exit))._tag,
+        ).toBe("Failure");
+      }
     }),
   );
 });

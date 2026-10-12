@@ -7,12 +7,14 @@ import * as Option from "effect/Option";
 import * as C from "@t3tools/contracts";
 import * as Base64 from "effect/encoding/Base64";
 import * as Crypto from "effect/Crypto";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as PreviewManager from "../../preview/Manager.ts";
 import * as ServerBrowser from "../../preview/ServerBrowser.ts";
@@ -36,6 +38,10 @@ export const makePreviewExecutor = (options: {
     const fs = yield* FileSystem.FileSystem;
     const executorScope = yield* Effect.scope;
     const tabs = new Set<string>();
+    const terminalReceipts = new Map<
+      string,
+      { batch: typeof P.ViewerBatch.Type; expiresAt: number }
+    >();
     const viewers = new Map<
       string,
       {
@@ -45,6 +51,9 @@ export const makePreviewExecutor = (options: {
         scope: Scope.Closeable;
         acks: Map<number, Effect.Effect<void>>;
         sequence: number;
+        pollSequence: number;
+        pendingBatch: typeof P.ViewerBatch.Type | null;
+        pollLock: Semaphore.Semaphore;
       }
     >();
     const closeViewer = (viewerId: string) =>
@@ -55,16 +64,21 @@ export const makePreviewExecutor = (options: {
         yield* Deferred.succeed(value.closed, undefined);
         const acks = Array.from(value.acks.values());
         value.acks.clear();
-        for (const ack of acks) yield* ack.pipe(Effect.ignore);
-        const queued = yield* Queue.takeBetween(
-          value.viewer.output,
-          0,
-          Number.MAX_SAFE_INTEGER,
-        ).pipe(Effect.exit);
-        if (Exit.isSuccess(queued))
-          for (const item of queued.value)
-            if (item._tag === "frame") yield* item.ack.pipe(Effect.ignore);
-        yield* Scope.close(value.scope, Exit.void);
+        value.pendingBatch = null;
+        const queuedCount = yield* Queue.size(value.viewer.output);
+        for (let i = 0; i < queuedCount; i++) {
+          const item = yield* Queue.poll(value.viewer.output);
+          if (Option.isSome(item) && item.value._tag === "frame") acks.push(item.value.ack);
+        }
+        yield* Effect.forEach(acks, (ack) => ack.pipe(Effect.ignore), {
+          concurrency: "unbounded",
+          discard: true,
+        }).pipe(
+          Effect.interruptible,
+          Effect.timeout("1 second"),
+          Effect.ignore,
+          Effect.ensuring(Scope.close(value.scope, Exit.void)),
+        );
       }).pipe(Effect.uninterruptible);
     const subscription = yield* manager.subscribeEvents;
     yield* Stream.fromSubscription(subscription).pipe(
@@ -233,6 +247,9 @@ export const makePreviewExecutor = (options: {
               tabKey: `${input.threadId}\0${input.tabId}`,
               acks: new Map(),
               sequence: 0,
+              pollSequence: 0,
+              pendingBatch: null,
+              pollLock: yield* Semaphore.make(1),
             });
             yield* Queue.await(viewer.output).pipe(
               Effect.ignoreCause,
@@ -245,6 +262,7 @@ export const makePreviewExecutor = (options: {
           }
           case "preview.viewerClose": {
             const { viewerId } = yield* Schema.decodeUnknownEffect(P.ViewerRef)(raw);
+            terminalReceipts.delete(viewerId);
             yield* closeViewer(viewerId);
             return null;
           }
@@ -264,26 +282,89 @@ export const makePreviewExecutor = (options: {
             return null;
           }
           case "preview.viewerPoll": {
-            const input = yield* Schema.decodeUnknownEffect(P.ViewerRef)(raw);
+            const input = yield* Schema.decodeUnknownEffect(P.ViewerPoll)(raw);
+            const now = yield* Clock.currentTimeMillis;
+            for (const [key, receipt] of terminalReceipts)
+              if (receipt.expiresAt <= now) terminalReceipts.delete(key);
+            const readTerminalReceipt = Effect.gen(function* () {
+              const receipt = terminalReceipts.get(input.viewerId);
+              if (!receipt) return undefined;
+              if (input.afterSequence === receipt.batch.sequence - 1) return receipt.batch;
+              if (input.afterSequence === receipt.batch.sequence) {
+                terminalReceipts.delete(input.viewerId);
+                return { sequence: input.afterSequence, items: [] };
+              }
+              return yield* new WorkspaceExecutionError({ code: "preview_viewer_cursor_mismatch" });
+            });
+            const terminalReceipt = yield* readTerminalReceipt;
+            if (terminalReceipt) return terminalReceipt;
             const viewer = yield* lookupViewer(input.viewerId);
-            const outputs = yield* Queue.takeAll(viewer.viewer.output).pipe(
-              Effect.raceFirst(Deferred.await(viewer.closed).pipe(Effect.as([]))),
+            return yield* viewer.pollLock.withPermit(
+              Effect.uninterruptibleMask((restore) =>
+                Effect.gen(function* () {
+                  const queuedReceipt = yield* readTerminalReceipt;
+                  if (queuedReceipt) return queuedReceipt;
+                  yield* lookupViewer(input.viewerId);
+                  if (input.afterSequence > viewer.pollSequence)
+                    return yield* new WorkspaceExecutionError({
+                      code: "preview_viewer_cursor_mismatch",
+                    });
+                  if (input.afterSequence < viewer.pollSequence) {
+                    if (viewer.pendingBatch && input.afterSequence === viewer.pollSequence - 1)
+                      return viewer.pendingBatch;
+                    return yield* new WorkspaceExecutionError({
+                      code: "preview_viewer_cursor_mismatch",
+                    });
+                  }
+                  viewer.pendingBatch = null;
+                  // Return an idle heartbeat before the transport's 30-second deadline.
+                  const outputs = yield* restore(
+                    Queue.takeBetween(viewer.viewer.output, 1, 32).pipe(
+                      Effect.raceFirst(Deferred.await(viewer.closed).pipe(Effect.as([]))),
+                      Effect.raceFirst(Effect.sleep("20 seconds").pipe(Effect.as([]))),
+                    ),
+                  );
+                  const droppedAcks: Array<Effect.Effect<void>> = [];
+                  const items: Array<typeof P.ViewerOutput.Type> = [];
+                  for (const output of outputs) {
+                    if (output._tag === "frame") {
+                      if (viewer.acks.size >= 8) {
+                        droppedAcks.push(output.ack);
+                        continue;
+                      }
+                      const ackId = ++viewer.sequence;
+                      viewer.acks.set(ackId, output.ack);
+                      items.push({ _tag: "frame", data: Base64.encode(output.data), ackId });
+                    } else items.push(output);
+                  }
+                  if (items.length > 0) viewer.pollSequence++;
+                  const terminal = items.find(
+                    (output) => output._tag === "gone" || output._tag === "reconnect",
+                  );
+                  const batch = {
+                    sequence: viewer.pollSequence,
+                    items: terminal ? [terminal] : items,
+                  };
+                  // One bounded batch survives a lost HTTP response until the next cursor acknowledges it.
+                  if (items.length > 0) viewer.pendingBatch = batch;
+                  if (terminal) {
+                    if (terminalReceipts.size >= 128) {
+                      const oldest = terminalReceipts.keys().next().value;
+                      if (oldest !== undefined) terminalReceipts.delete(oldest);
+                    }
+                    terminalReceipts.set(input.viewerId, { batch, expiresAt: now + 5 * 60_000 });
+                  }
+                  for (const ack of droppedAcks)
+                    yield* ack.pipe(
+                      Effect.timeout("1 second"),
+                      Effect.ignore,
+                      Effect.forkIn(viewer.scope),
+                    );
+                  if (terminal) yield* closeViewer(input.viewerId);
+                  return batch;
+                }),
+              ),
             );
-            const batch: Array<typeof P.ViewerOutput.Type> = [];
-            for (const output of outputs) {
-              if (output._tag === "frame") {
-                if (viewer.acks.size >= 8) {
-                  yield* output.ack;
-                  continue;
-                }
-                const ackId = ++viewer.sequence;
-                viewer.acks.set(ackId, output.ack);
-                batch.push({ _tag: "frame", data: Base64.encode(output.data), ackId });
-              } else batch.push(output);
-            }
-            if (batch.some((output) => output._tag === "gone" || output._tag === "reconnect"))
-              yield* closeViewer(input.viewerId);
-            return batch;
           }
           default:
             return yield* new WorkspaceExecutionError({ code: "unsupported_preview_method" });

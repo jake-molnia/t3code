@@ -46,7 +46,14 @@ export const ViewerOutput = Schema.Union([
   Schema.TaggedStruct("gone", {}),
   Schema.TaggedStruct("reconnect", {}),
 ]);
-export const ViewerBatch = Schema.Array(ViewerOutput);
+export const ViewerPoll = Schema.Struct({
+  ...ViewerRef.fields,
+  afterSequence: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+});
+export const ViewerBatch = Schema.Struct({
+  sequence: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  items: Schema.Array(ViewerOutput),
+});
 export const Automation = Schema.Struct({ request: C.PreviewAutomationRequest });
 export const AutomationOutcome = Schema.Struct({
   ok: Schema.Boolean,
