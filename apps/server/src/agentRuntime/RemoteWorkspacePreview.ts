@@ -1,3 +1,4 @@
+import { ExecutionTransportError } from "../execution/ExecutionClient.ts";
 import * as Scope from "effect/Scope";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -5,6 +6,7 @@ import * as ServerConfig from "../config.ts";
 import * as C from "@t3tools/contracts";
 import * as Base64 from "effect/encoding/Base64";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -16,6 +18,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as Schedule from "effect/Schedule";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as RuntimeClient from "./RuntimeClient.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -257,26 +260,48 @@ const layerCore = Layer.effect(
           );
           const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>({
             capacity: 8,
-            strategy: "dropping",
           });
           yield* Effect.gen(function* () {
+            let afterSequence = 0;
             while (true) {
-              const batch = yield* Effect.tryPromise(() =>
-                client.transient("preview.viewerPoll", opened),
-              ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(P.ViewerBatch)));
-              for (const item of batch) {
+              const batch = yield* Effect.tryPromise({
+                try: () => client.transient("preview.viewerPoll", { ...opened, afterSequence }),
+                catch: (cause) =>
+                  cause instanceof ExecutionTransportError
+                    ? cause
+                    : new ServerBrowser.ServerBrowserLaunchError({ cause }),
+              }).pipe(
+                Effect.retry({
+                  while: (cause) =>
+                    cause instanceof ExecutionTransportError &&
+                    (cause.code === "timeout" || cause.code === "unavailable"),
+                  schedule: Schedule.spaced("1 second"),
+                }),
+                Effect.flatMap(Schema.decodeUnknownEffect(P.ViewerBatch)),
+              );
+              if (batch.sequence !== afterSequence + (batch.items.length > 0 ? 1 : 0))
+                return yield* new ServerBrowser.ServerBrowserLaunchError({
+                  cause: "Invalid preview stream sequence",
+                });
+              for (const item of batch.items) {
                 if (item._tag === "frame") {
                   const ack = Effect.tryPromise(() =>
                     client.transient("preview.viewerAck", { ...opened, ackId: item.ackId }),
                   ).pipe(Effect.asVoid, Effect.ignore);
                   const data = yield* Effect.fromResult(Base64.decode(item.data));
-                  if (!(yield* Queue.offer(output, { _tag: "frame", data, ack }))) yield* ack;
-                } else yield* Queue.offer(output, item);
+                  if (!(yield* Queue.offer(output, { _tag: "frame", data, ack }))) {
+                    yield* ack;
+                    return yield* Effect.interrupt;
+                  }
+                } else if (!(yield* Queue.offer(output, item))) return yield* Effect.interrupt;
               }
+              afterSequence = batch.sequence;
               yield* Effect.sleep("30 millis");
             }
           }).pipe(
-            Effect.catchCause(() => Queue.offer(output, { _tag: "gone" })),
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause) ? Effect.void : Queue.offer(output, { _tag: "gone" }),
+            ),
             Effect.forkScoped,
           );
           return {
