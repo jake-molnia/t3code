@@ -1,6 +1,7 @@
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
 import {
   resolveExecutionPoolSelection,
+  hasExecutionPoolAffinity,
   reconcileExecutionPoolProvider,
 } from "@t3tools/client-runtime/load-balancing";
 import { useExecutionPools } from "../hooks/useExecutionPools";
@@ -2922,10 +2923,11 @@ export default function ChatView(props: ChatViewProps) {
   const envLocked = Boolean(activeThread && (activeMessageCount > 0 || activeRuntime !== null));
 
   const loadBalancingSettings = useClientSettings();
-  const poolPlacementLocked =
-    envLocked ||
-    composerHasAttachments ||
-    Boolean(draftThread?.branch || draftThread?.worktreePath);
+  const poolPlacementLocked = hasExecutionPoolAffinity({
+    threadLocked: envLocked,
+    hasAttachments: composerHasAttachments,
+    worktreePath: draftThread?.worktreePath,
+  });
   const automaticPool = Boolean(
     clientSettingsHydrated &&
     draftId &&
@@ -4273,10 +4275,7 @@ export default function ChatView(props: ChatViewProps) {
   ]);
   const onAutoEnvironment = useCallback(() => {
     if (!draftId || envLocked) return;
-    if (
-      selectedExecutionPoolId &&
-      (composerHasAttachments || draftThread?.branch || draftThread?.worktreePath)
-    ) {
+    if (selectedExecutionPoolId && poolPlacementLocked) {
       toastManager.add({
         type: "warning",
         title: "Choose a pool directly",
@@ -4291,9 +4290,7 @@ export default function ChatView(props: ChatViewProps) {
     draftId,
     envLocked,
     selectedExecutionPoolId,
-    composerHasAttachments,
-    draftThread?.branch,
-    draftThread?.worktreePath,
+    poolPlacementLocked,
     poolCatalog.refresh,
     setDraftThreadContext,
   ]);

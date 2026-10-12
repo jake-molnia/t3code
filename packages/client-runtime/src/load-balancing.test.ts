@@ -1,6 +1,7 @@
 import { ExecutionPoolId, ProviderDriverKind, type ExecutionPool } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  hasExecutionPoolAffinity,
   chooseExecutionPool,
   reconcileExecutionPoolProvider,
   resolveExecutionPoolSelection,
@@ -189,4 +190,51 @@ it("resolves mixed-provider automatic submissions independently before dispatch"
     }),
   );
   expect(placements).toEqual([gompers, portal]);
+});
+
+describe("persisted new-thread branch hints", () => {
+  // Captured from the V5 browser before enabling automatic balancing.
+  const draft = {
+    threadId: "c5250a68-4f4e-4267-9a42-339297ed321b",
+    executionPoolId: "gompers",
+    executionPoolSelection: "auto",
+    branch: "main",
+    worktreePath: null,
+    envMode: "local",
+    startFromOrigin: false,
+  };
+  const resolve = (
+    input: {
+      manual?: boolean;
+      worktreePath?: string | null;
+      hasAttachments?: boolean;
+      threadLocked?: boolean;
+    } = {},
+  ) => {
+    const placementLocked = hasExecutionPoolAffinity({
+      threadLocked: input.threadLocked ?? false,
+      hasAttachments: input.hasAttachments ?? false,
+      worktreePath: input.worktreePath ?? draft.worktreePath,
+    });
+    return resolveExecutionPoolSelection({
+      catalog: { ...catalog([pool(gompers), pool(portal)]), pending: false },
+      selectedPoolId: ExecutionPoolId.make(draft.executionPoolId),
+      driver: codex,
+      automatic: !input.manual && draft.executionPoolSelection === "auto" && !placementLocked,
+      placementLocked,
+      weights: { [gompers]: 0, [portal]: 50 },
+      now,
+    });
+  };
+  it("moves the UI-created main/local draft to Portal when its cached pool becomes manual-only", () => {
+    expect(draft.branch).toBe("main");
+    expect(draft.envMode).toBe("local");
+    expect(resolve()).toBe(portal);
+  });
+  it("keeps explicit manual choices, real worktrees, staged attachments, and started threads pinned", () => {
+    expect(resolve({ manual: true })).toBe(gompers);
+    expect(resolve({ worktreePath: "/workspace/bound/worktrees/existing" })).toBe(gompers);
+    expect(resolve({ hasAttachments: true })).toBe(gompers);
+    expect(resolve({ threadLocked: true })).toBe(gompers);
+  });
 });

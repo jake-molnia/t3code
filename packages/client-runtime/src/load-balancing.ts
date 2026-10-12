@@ -99,3 +99,12 @@ export function resolveExecutionPoolSelection(input: {
   if (input.catalog.pending) return null;
   return chooseExecutionPool(input.catalog, input.driver, input.weights, input.now);
 }
+
+/** A draft branch can be checked out in either pool; staged input and existing worktrees have affinity. */
+export function hasExecutionPoolAffinity(input: {
+  threadLocked: boolean;
+  hasAttachments: boolean;
+  worktreePath: string | null | undefined;
+}) {
+  return input.threadLocked || input.hasAttachments || Boolean(input.worktreePath);
+}
