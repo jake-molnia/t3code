@@ -981,8 +981,12 @@ function OpenCommandPaletteDialog(props: {
       desktopLocalBootstraps.find((bootstrap) => bootstrap.httpBaseUrl === displayUrl)?.id ?? null
     );
   }, [browseEnvironment, browseEnvironmentIsDesktopLocal, desktopLocalBootstraps]);
+  const needsSourceControlDiscovery =
+    currentView?.groups[0]?.value === `sources:${browseEnvironmentId}` ||
+    addProjectCloneFlow !== null ||
+    newProjectFlow !== null;
   const sourceControlDiscovery = useEnvironmentQuery(
-    browseEnvironmentId === null
+    !needsSourceControlDiscovery || browseEnvironmentId === null
       ? null
       : sourceControlEnvironment.discovery({
           environmentId: browseEnvironmentId,

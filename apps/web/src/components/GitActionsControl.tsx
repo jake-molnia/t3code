@@ -471,7 +471,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const openLink = useOpenLink(props.threadRef);
   const navigate = useNavigate();
   const sourceControlDiscovery = useEnvironmentQuery(
-    props.environmentId === null
+    !props.open || props.environmentId === null
       ? null
       : sourceControlEnvironment.discovery({
           environmentId: props.environmentId,

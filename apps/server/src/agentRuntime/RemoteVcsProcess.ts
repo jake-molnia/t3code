@@ -10,6 +10,7 @@ import { ChildProcessSpawner } from "effect/process";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as Routing from "./WorkspaceRouting.ts";
 import * as Runtime from "./RuntimeClient.ts";
+import type { ExecutionClient } from "../execution/ExecutionClient.ts";
 import * as P from "./worker/GitDriverProtocol.ts";
 
 const encodeProcess = Schema.encodeEffect(P.ProcessRequest);
@@ -23,6 +24,17 @@ export const layer = Layer.effect(
     const runtime = yield* Runtime.RuntimeClient;
     const fs = yield* FileSystem.FileSystem;
     const crypto = yield* Crypto.Crypto;
+    // Share pending acquisition, but revalidate residency on the next interaction.
+    const acquireUtility = yield* Effect.cachedWithTTL(runtime.forUtility("source-control"), 0);
+    const versions = new Map<string, typeof P.ProcessResult.Type>();
+    const probeVersionKey = (client: ExecutionClient, input: VcsProcess.VcsProcessInput) =>
+      input.operation === "source-control.discovery.probe" &&
+      input.args.length === 1 &&
+      input.args[0] === "--version" &&
+      input.env === undefined &&
+      !input.cwd.startsWith("/workspace/")
+        ? JSON.stringify([client.identity, input.command])
+        : null;
     return VcsProcess.VcsProcess.of({
       run: (input) =>
         Effect.gen(function* () {
@@ -49,20 +61,37 @@ export const layer = Layer.effect(
             outputMode: input.outputMode ?? "truncate",
             attachments,
           });
+          let versionKey: string | null = null;
+          const callUtility = (
+            client: ExecutionClient,
+            method: "vcs.process" | "vcs.process.probe",
+          ) =>
+            Effect.gen(function* () {
+              versionKey = probeVersionKey(client, input);
+              const cached = versionKey === null ? undefined : versions.get(versionKey);
+              if (cached !== undefined) return { ok: true, value: cached };
+              return yield* Effect.tryPromise(() =>
+                method === "vcs.process.probe"
+                  ? client.transient(method, { ...payload, cwd: "." })
+                  : client.call(method, { ...payload, cwd: "." }, operationId),
+              );
+            });
           const raw = P.isSourceControlProbe(input.command, input.args)
             ? yield* Effect.gen(function* () {
                 const client = input.cwd.startsWith("/workspace/")
                   ? yield* routes.clientForCwd(input.cwd)
-                  : (observation?.client ?? (yield* runtime.forUtility("source-control")));
+                  : (observation?.client ?? (yield* acquireUtility));
                 const route = input.cwd.startsWith("/workspace/")
                   ? yield* routes.describeCwd(input.cwd)
                   : null;
                 const cwd = route
                   ? route.relativeCwd + input.cwd.slice(route.virtualCwd.length)
                   : ".";
-                return yield* Effect.tryPromise(() =>
-                  client.transient("vcs.process.probe", { ...payload, cwd }),
-                );
+                return yield* route
+                  ? Effect.tryPromise(() =>
+                      client.transient("vcs.process.probe", { ...payload, cwd }),
+                    )
+                  : callUtility(client, "vcs.process.probe");
               })
             : input.cwd.startsWith("/workspace/")
               ? yield* routes
@@ -74,14 +103,20 @@ export const layer = Layer.effect(
                   })
                   .pipe(Effect.retry(Schedule.recurs(1)))
               : yield* Effect.gen(function* () {
-                  const client =
-                    observation?.client ?? (yield* runtime.forUtility("source-control"));
-                  return yield* Effect.tryPromise(() =>
-                    client.call("vcs.process", { ...payload, cwd: "." }, operationId),
-                  ).pipe(Effect.retry(Schedule.recurs(1)));
+                  const client = observation?.client ?? (yield* acquireUtility);
+                  return yield* callUtility(client, "vcs.process").pipe(
+                    Effect.retry(Schedule.recurs(1)),
+                  );
                 });
           const result = yield* decodeProcess(raw);
           if (!result.ok) return yield* result.error;
+          if (versionKey !== null && result.value.exitCode === 0) {
+            versions.set(versionKey, result.value);
+            if (versions.size > 64) {
+              const oldest = versions.keys().next();
+              if (!oldest.done) versions.delete(oldest.value);
+            }
+          }
           if (input.onStdoutChunk)
             input.onStdoutChunk(new TextEncoder().encode(result.value.stdout));
           return { ...result.value, exitCode: ChildProcessSpawner.ExitCode(result.value.exitCode) };
