@@ -40,9 +40,10 @@ replace live provider authentication and UI acceptance.
 4. Build the worker target and inspect the version report and boot result.
 
 The worker includes Codex, Claude Code, Grok, Pi, OpenCode, OpenCode 2, Muse, and
-the Cursor SDK. Generic ACP extensions remain an explicit allowlist in the
-manifest. Source-control tools are `gh`, `glab`, `tea`, `fj`, and Azure CLI with
-the Azure DevOps extension. Go and pnpm support work on these repositories.
+the Cursor SDK. OpenCode 2 comes from the pinned runtime image; T3 adds an
+absolute `opencode2` alias and its session configuration. Generic ACP extensions
+remain an explicit allowlist in the manifest. Source-control tools are `gh`,
+`glab`, `tea`, `fj`, and Azure CLI with the Azure DevOps extension. Go and pnpm support work on these repositories.
 Azure CLI uses Microsoft's checksum-pinned Debian package with its bundled
 Python. The Azure DevOps wheel is pinned separately, and dynamic extension
 installation is disabled.

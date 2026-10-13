@@ -40,6 +40,12 @@ jobs:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}-${{ matrix.target == 't3-worker' && 'sandbox' || 'web' }}
+          flavor: latest=false
+          tags: ${{ matrix.target }}-git-${{ github.sha }}
       - name: Build and execute image verification
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -48,6 +54,7 @@ jobs:
           target: ${{ matrix.target }}
           platforms: linux/amd64
           tags: t3-local:${{ matrix.target }}-${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
           load: true
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
@@ -62,6 +69,13 @@ jobs:
             t3-web) python3 images/t3/smoke-image.py "$TARGET" "$image" ;;
           esac
           docker image inspect "$image" > "$RUNNER_TEMP/$TARGET.inspect.json"
+          python3 - <<'PYLABEL'
+          import json, os
+          with open(f"{os.environ['RUNNER_TEMP']}/{os.environ['TARGET']}.inspect.json") as source:
+              labels = json.load(source)[0]["Config"]["Labels"]
+          assert labels["org.opencontainers.image.revision"] == os.environ["T3_SHA"]
+          assert labels["org.opencontainers.image.source"] == "https://github.com/" + os.environ["GITHUB_REPOSITORY"]
+          PYLABEL
           printf 't3=%s\n' "$T3_SHA" > "$RUNNER_TEMP/$TARGET.sources.txt"
           awk '/^FROM ghcr.io\/jake-molnia\/agent-runtime-sandbox@/ {print "runtime_base=" $2}' images/t3/Dockerfile >> "$RUNNER_TEMP/$TARGET.sources.txt"
       - name: Log in to GHCR

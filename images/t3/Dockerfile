@@ -19,9 +19,7 @@ FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bd
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 COPY images/t3/harnesses/package*.json /opt/harnesses/
-COPY images/t3/opencode2/package*.json /opt/opencode2/
-RUN npm ci --prefix /opt/harnesses --omit=dev --no-audit --no-fund \
-    && npm ci --prefix /opt/opencode2 --omit=dev --no-audit --no-fund
+RUN npm ci --prefix /opt/harnesses --omit=dev --no-audit --no-fund
 COPY images/t3/providers.lock.json /opt/providers.lock.json
 COPY images/t3/install-native.py /tmp/install-native.py
 RUN python3 /tmp/install-native.py /opt/providers.lock.json /opt/native
@@ -33,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY images/t3/install-code-server.sh /tmp/
 RUN sh /tmp/install-code-server.sh "${TARGETARCH}" /opt/code-server
 
-FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:6a9861d48573e37c19f89cd7f74c3bd00acd9d5524f83df6c702073d07f18f10 AS t3-worker
+FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:75ba12eae619c4944d51e35bdf8998655ec7342a0a8a92d3139073397b77bf2b AS t3-worker
 ARG TARGETARCH
 RUN test "$TARGETARCH" = amd64 \
     && apt-get update && apt-get install -y --no-install-recommends ca-certificates git git-lfs openssh-client python3 python3-venv ripgrep tini lsof procps chromium make g++ libffi8 libssl3t64 libbz2-1.0 libuuid1 zlib1g \
@@ -45,13 +43,12 @@ COPY --from=go-toolchain /usr/local/go /usr/local/go
 COPY images/t3/harness-configs /opt/t3/harness-configs
 COPY --from=worker-package /out/worker /opt/t3
 COPY --from=harnesses /opt/harnesses /opt/harnesses
-COPY --from=harnesses /opt/opencode2 /opt/opencode2
 COPY --from=harnesses /opt/native/bin /opt/native/bin
 COPY --from=harnesses /opt/native/az/opt/az /opt/az
 COPY --from=harnesses /opt/native/az/usr/bin/az /usr/bin/az
 COPY --from=harnesses /opt/native/extensions /opt/azure/extensions
 COPY --from=harnesses /opt/providers.lock.json /opt/t3/providers.lock.json
-RUN ln -sfn /opt/opencode2/node_modules/.bin/opencode2 /usr/local/bin/opencode2 \
+RUN ln -sfn /usr/local/bin/opencode /usr/local/bin/opencode2 \
     && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
     && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs
