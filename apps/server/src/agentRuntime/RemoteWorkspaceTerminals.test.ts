@@ -4,6 +4,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -18,6 +20,7 @@ import * as NodePtyAdapter from "../terminal/NodePtyAdapter.ts";
 import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 import * as ProcessRunner from "../processRunner.ts";
 import { makeTerminalExecutor } from "./worker/TerminalExecutor.ts";
+import { captureRunPromise } from "../execution/EffectHttpBoundary.ts";
 import { createExecutionWorker } from "../execution/ExecutionWorker.ts";
 import { createExecutionClient } from "../execution/ExecutionClient.ts";
 import { openWorkerJournal } from "../execution/WorkerJournal.ts";
@@ -71,12 +74,13 @@ it.layer(layer, { excludeTestServices: true })("remote native terminal", (it) =>
           protocolVersion: 1,
         } satisfies Parameters<typeof createExecutionWorker>[0]["identity"];
         const token = "terminal-test-token-more-than-thirty-two-characters";
+        const runPromise = yield* captureRunPromise;
         worker = createExecutionWorker({
           identity,
           token,
           journal,
-          execute: (method, input) => Effect.runPromise(terminalExecutor.execute(method, input)),
-          activity: () => Effect.runPromise(terminalExecutor.activity),
+          execute: (method, input) => runPromise(terminalExecutor.execute(method, input)),
+          activity: () => runPromise(terminalExecutor.activity),
         });
         const server = yield* Effect.acquireRelease(
           Effect.tryPromise(() =>
@@ -243,3 +247,91 @@ it.layer(layer, { excludeTestServices: true })("remote native terminal", (it) =>
       }),
   );
 });
+
+it.effect("releases pending attach ownership on interruption and permits a fresh attach", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    let observations = 0;
+    let openings = 0;
+    let interruptedDeliveries = 0;
+    const snapshot = {
+      threadId: "pending",
+      terminalId: "shell",
+      cwd: "/workspace/repo",
+      worktreePath: null,
+      status: "exited",
+      pid: null,
+      history: "retained",
+      exitCode: 0,
+      exitSignal: null,
+      label: "shell",
+      updatedAt: "2026-10-13T12:00:00.000Z",
+    };
+    const runtime = Layer.mock(RuntimeClient.RuntimeClient)({
+      enabled: true,
+      observeThread: () =>
+        Effect.sync(() => {
+          observations++;
+          return { kind: "stopped" as const };
+        }),
+    });
+    const routing = Layer.mock(Routing.WorkspaceRouting)({
+      enabled: true,
+      callThread: () =>
+        Effect.gen(function* () {
+          openings++;
+          if (openings === 1) {
+            yield* Deferred.succeed(entered, undefined);
+            return yield* Effect.never;
+          }
+          return snapshot;
+        }),
+    });
+    yield* Effect.gen(function* () {
+      const terminals = yield* TerminalManager.TerminalManager;
+      const input = { threadId: "pending", terminalId: "shell", cwd: "/workspace/repo" };
+      const pending = yield* terminals
+        .attachStream(input, () =>
+          Effect.sync(() => {
+            interruptedDeliveries++;
+          }),
+        )
+        .pipe(
+          (acquire) => Effect.acquireRelease(acquire, (unsubscribe) => Effect.sync(unsubscribe)),
+          Effect.scoped,
+          Effect.forkChild,
+        );
+      yield* Deferred.await(entered);
+      yield* Fiber.interrupt(pending);
+      yield* TestClock.adjust("3 seconds");
+      const stoppedAt = observations;
+      yield* TestClock.adjust("10 seconds");
+      expect(observations).toBe(stoppedAt);
+      let received = "";
+      const detach = yield* terminals.attachStream(input, (event) =>
+        Effect.sync(() => {
+          if (event.type === "snapshot") received = event.snapshot.history;
+        }),
+      );
+      expect(received).toBe("retained");
+      expect(openings).toBe(2);
+      expect(interruptedDeliveries).toBe(0);
+      detach();
+      yield* TestClock.adjust("3 seconds");
+      const detachedAt = observations;
+      yield* TestClock.adjust("10 seconds");
+      expect(observations).toBe(detachedAt);
+      const failedDelivery = yield* terminals
+        .attachStream(input, () => Effect.die("snapshot delivery failed"))
+        .pipe(Effect.exit);
+      expect(failedDelivery._tag).toBe("Failure");
+      yield* TestClock.adjust("3 seconds");
+      const failedAt = observations;
+      yield* TestClock.adjust("10 seconds");
+      expect(observations).toBe(failedAt);
+    }).pipe(
+      Effect.provide(RemoteTerminals.layer.pipe(Layer.provide(runtime), Layer.provide(routing))),
+      Effect.scoped,
+    );
+  }),
+);

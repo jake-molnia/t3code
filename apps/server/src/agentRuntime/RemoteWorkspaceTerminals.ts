@@ -1,6 +1,7 @@
 import { withWorkspaceActivity } from "./WorkspaceActivity.ts";
 import * as C from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as RuntimeClient from "./RuntimeClient.ts";
@@ -227,58 +228,74 @@ export const layer = Layer.effect(
       listener: (event: C.TerminalAttachStreamEvent) => Effect.Effect<void>,
       allowOpen: boolean,
     ) =>
-      Effect.gen(function* () {
-        const release = pin(input.threadId);
-        yield* watch(input.threadId).pipe(Effect.tapError(() => Effect.sync(release)));
-        let sequence = -1;
-        let ready = false;
-        const buffered: C.TerminalEvent[] = [];
-        const forward = (event: C.TerminalEvent) =>
-          Effect.gen(function* () {
-            if (event.threadId !== input.threadId || event.terminalId !== input.terminalId) return;
-            if (!ready) {
-              buffered.push(event);
-              return;
-            }
-            if (event.sequence !== undefined && event.sequence <= sequence) return;
-            if (event.type === "closed") {
-              sequence = -1;
-              yield* listener(event);
-              return;
-            }
-            if (event.type === "started") {
-              sequence = event.snapshot.sequence ?? -1;
-              yield* listener({ type: "snapshot", snapshot: event.snapshot });
-              return;
-            }
-            if (event.sequence !== undefined) sequence = event.sequence;
-            yield* listener(event);
-          });
-        const removeListener = yield* subscribe(forward);
-        const unsubscribe = () => {
-          removeListener();
-          release();
-        };
-        const snapshot = yield* invoke("terminals.snapshot", input, C.TerminalSessionSnapshot).pipe(
-          Effect.catch((error) =>
-            allowOpen && input.cwd ? open({ ...input, cwd: input.cwd }) : Effect.fail(error),
-          ),
-          Effect.flatMap((snapshot) =>
-            allowOpen &&
-            input.cwd &&
-            input.restartIfNotRunning === true &&
-            (snapshot.status === "exited" || snapshot.status === "error")
-              ? open({ ...input, cwd: input.cwd })
-              : Effect.succeed(snapshot),
-          ),
-          Effect.tapError(() => Effect.sync(unsubscribe)),
-        );
-        sequence = snapshot.sequence ?? -1;
-        yield* listener({ type: "snapshot", snapshot });
-        ready = true;
-        for (const event of buffered) yield* forward(event);
-        return unsubscribe;
-      }).pipe(Effect.mapError(() => lookupError(input.threadId, input.terminalId)));
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const release = pin(input.threadId);
+          let unsubscribe = release;
+          return yield* Effect.gen(function* () {
+            yield* restore(watch(input.threadId));
+            let sequence = -1;
+            let ready = false;
+            const buffered: C.TerminalEvent[] = [];
+            const forward = (event: C.TerminalEvent) =>
+              Effect.gen(function* () {
+                if (event.threadId !== input.threadId || event.terminalId !== input.terminalId)
+                  return;
+                if (!ready) {
+                  buffered.push(event);
+                  return;
+                }
+                if (event.sequence !== undefined && event.sequence <= sequence) return;
+                if (event.type === "closed") {
+                  sequence = -1;
+                  yield* listener(event);
+                  return;
+                }
+                if (event.type === "started") {
+                  sequence = event.snapshot.sequence ?? -1;
+                  yield* listener({ type: "snapshot", snapshot: event.snapshot });
+                  return;
+                }
+                if (event.sequence !== undefined) sequence = event.sequence;
+                yield* listener(event);
+              });
+            const removeListener = yield* subscribe(forward);
+            unsubscribe = () => {
+              removeListener();
+              release();
+            };
+            const snapshot = yield* restore(
+              invoke("terminals.snapshot", input, C.TerminalSessionSnapshot).pipe(
+                Effect.catch((error) =>
+                  allowOpen && input.cwd ? open({ ...input, cwd: input.cwd }) : Effect.fail(error),
+                ),
+                Effect.flatMap((snapshot) =>
+                  allowOpen &&
+                  input.cwd &&
+                  input.restartIfNotRunning === true &&
+                  (snapshot.status === "exited" || snapshot.status === "error")
+                    ? open({ ...input, cwd: input.cwd })
+                    : Effect.succeed(snapshot),
+                ),
+              ),
+            );
+            sequence = snapshot.sequence ?? -1;
+            yield* restore(listener({ type: "snapshot", snapshot }));
+            ready = true;
+            for (const event of buffered) yield* restore(forward(event));
+            return unsubscribe;
+          }).pipe(
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit) ? Effect.sync(unsubscribe) : Effect.void,
+            ),
+          );
+        }),
+      ).pipe(
+        // WebSocket streams acquire this subscription with acquireRelease.
+        // Waiting for a sandbox must remain cancellable inside that acquisition.
+        Effect.interruptible,
+        Effect.mapError(() => lookupError(input.threadId, input.terminalId)),
+      );
     return TerminalManager.TerminalManager.of({
       open,
       attachStream: (input, listener) => attach(input, listener, true),
