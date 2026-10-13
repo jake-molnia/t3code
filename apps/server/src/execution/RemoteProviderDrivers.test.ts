@@ -345,92 +345,139 @@ it.live(
     }).pipe(Effect.scoped),
 );
 
-it.live.each(["live", "stopped", "replaced"] as const)(
-  "reattaches only to a surviving worker session (%s)",
-  (state) =>
-    Effect.gen(function* () {
-      const calls: string[] = [];
-      const identity = {
-        workspaceId: "thread-workspace",
-        allocationId: "one",
-        podUid: "pod",
-        generation: 1,
-        incarnation: "current",
-        protocolVersion: 1 as const,
-      };
-      const client = createExecutionClient({
-        identity,
-        endpoint: "http://worker.test",
-        token: "test-token",
-        fetch: async (url, init) => {
-          if (String(url).endsWith("/v1/identity")) return Response.json(identity);
-          const { method } = decodePollingRequest(init?.body);
-          calls.push(method);
-          return method === "configureProvider"
-            ? Response.json({ ok: true, value: null })
-            : Response.json({ ok: false, code: "test_open_boundary" });
-        },
+it.live.each([
+  "live",
+  "stopped",
+  "replaced",
+  "pending-live",
+  "pending-replaced",
+  "pending-status",
+  "unauthorized",
+  "profile-error",
+  "identity-mismatch",
+] as const)("reattaches only to a surviving worker session (%s)", (state) =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    let acquisitions = 0;
+    const identity = {
+      workspaceId: "thread-workspace",
+      allocationId: "one",
+      podUid: "pod",
+      generation: 1,
+      incarnation: "current",
+      protocolVersion: 1 as const,
+    };
+    const client = createExecutionClient({
+      identity,
+      endpoint: "http://worker.test",
+      token: "test-token",
+      fetch: async (url, init) => {
+        if (String(url).endsWith("/v1/identity"))
+          return Response.json(
+            state === "identity-mismatch" ? { ...identity, incarnation: "unexpected" } : identity,
+          );
+        const { method } = decodePollingRequest(init?.body);
+        calls.push(method);
+        return method === "configureProvider"
+          ? Response.json({ ok: true, value: null })
+          : Response.json({ ok: false, code: "test_open_boundary" });
+      },
+    });
+    yield* Effect.gen(function* () {
+      const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
+      const driver = drivers.find((entry) => entry.driverKind === "grok");
+      if (!driver) throw new Error("Missing Grok");
+      const instanceId = C.ProviderInstanceId.make("grok");
+      const instance = yield* driver.create({
+        instanceId,
+        displayName: undefined,
+        environment: [],
+        enabled: true,
+        config: driver.defaultConfig(),
       });
-      yield* Effect.gen(function* () {
-        const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
-        const driver = drivers.find((entry) => entry.driverKind === "grok");
-        if (!driver) throw new Error("Missing Grok");
-        const instanceId = C.ProviderInstanceId.make("grok");
-        const instance = yield* driver.create({
-          instanceId,
-          displayName: undefined,
-          environment: [],
-          enabled: true,
-          config: driver.defaultConfig(),
-        });
-        const providerSessionId = C.ProviderSessionId.make("resume-session");
-        yield* instance.orchestrationAdapter
-          .openSession({
-            threadId: C.ThreadId.make("root"),
-            providerSessionId,
-            modelSelection: { instanceId, model: "test" },
-            runtimePolicy: {
-              cwd: "/workspace/repo",
-              runtimeMode: "full-access",
-              interactionMode: "default",
-            },
-            resumeFromSession: {
-              id: providerSessionId,
-              driver: C.ProviderDriverKind.make("grok"),
-              providerInstanceId: instanceId,
-              status: "ready",
-              cwd: "/workspace/repo",
-              model: "test",
-              capabilities: CodexProviderCapabilitiesV2,
-              createdAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
-              updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
-              lastError: null,
-            },
-          })
-          .pipe(Effect.flip);
-        expect(calls.at(-1)).toBe(state === "live" ? "attachSession" : "openSession");
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            Settings.layerTest(),
-            Layer.mock(Runtime.RuntimeClient)({
-              enabled: true,
-              forUtility: () => Effect.succeed(client),
-              forThread: () => Effect.succeed(client),
-              observeThread: () =>
-                Effect.succeed(
-                  state === "stopped"
-                    ? { kind: "stopped" as const }
-                    : { kind: "running" as const, client },
-                ),
-              sessionResidency: () =>
-                Effect.succeed(
-                  state === "replaced" ? { ...identity, incarnation: "previous" } : identity,
-                ),
-              rememberSession: () => Effect.void,
-            }),
-          ),
+      const providerSessionId = C.ProviderSessionId.make("resume-session");
+      yield* instance.orchestrationAdapter
+        .openSession({
+          threadId: C.ThreadId.make("root"),
+          providerSessionId,
+          modelSelection: { instanceId, model: "test" },
+          runtimePolicy: {
+            cwd: "/workspace/repo",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
+          resumeFromSession: {
+            id: providerSessionId,
+            driver: C.ProviderDriverKind.make("grok"),
+            providerInstanceId: instanceId,
+            status: "ready",
+            cwd: "/workspace/repo",
+            model: "test",
+            capabilities: CodexProviderCapabilitiesV2,
+            createdAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            lastError: null,
+          },
+        })
+        .pipe(Effect.flip);
+      if (state === "unauthorized" || state === "profile-error" || state === "identity-mismatch") {
+        expect(calls).toEqual([]);
+        expect(acquisitions).toBe(0);
+      } else {
+        expect(calls.at(-1)).toBe(
+          state === "live" || state === "pending-live" || state === "pending-status"
+            ? "attachSession"
+            : "openSession",
+        );
+        expect(acquisitions).toBe(state.startsWith("pending") || state === "stopped" ? 1 : 0);
+      }
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Settings.layerTest(),
+          Layer.mock(Runtime.RuntimeClient)({
+            enabled: true,
+            forUtility: () => Effect.succeed(client),
+            forThread: () =>
+              Effect.sync(() => {
+                acquisitions++;
+                return client;
+              }),
+            observeThread: () =>
+              state.startsWith("pending") || state === "unauthorized" || state === "profile-error"
+                ? Effect.fail(
+                    new Runtime.RuntimeClientError({
+                      operation: "observe-thread",
+                      cause:
+                        state === "pending-status"
+                          ? new Runtime.WorkerNotReady({})
+                          : new Runtime.RuntimeClientError({
+                              operation: "request",
+                              httpStatus:
+                                state === "unauthorized"
+                                  ? 401
+                                  : state === "profile-error"
+                                    ? 409
+                                    : 503,
+                              cause: "controller rejected observation",
+                            }),
+                    }),
+                  )
+                : Effect.succeed(
+                    state === "stopped"
+                      ? { kind: "stopped" as const }
+                      : { kind: "running" as const, client },
+                  ),
+            sessionResidency: () =>
+              Effect.succeed(
+                state === "replaced" || state === "pending-replaced"
+                  ? { ...identity, incarnation: "previous" }
+                  : identity,
+              ),
+            rememberSession: () => Effect.void,
+          }),
         ),
-      );
-    }),
+      ),
+    );
+  }),
 );

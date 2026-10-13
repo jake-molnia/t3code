@@ -73,6 +73,8 @@ const controller = (name: string) =>
         metricsStatus: 200,
         metrics: resourceSample,
         failNextStop: false,
+        workspaceStatus: 200,
+        workspacePhase: "running",
       };
       const server = await listenWorker({
         host: "127.0.0.1",
@@ -106,6 +108,8 @@ const controller = (name: string) =>
             return Response.json({});
           }
           if (url.pathname.startsWith("/control/v1/workspaces/")) {
+            if (health.workspaceStatus !== 200)
+              return Response.json({}, { status: health.workspaceStatus });
             const workspaceId = decodeURIComponent(
               url.pathname.slice("/control/v1/workspaces/".length),
             );
@@ -116,7 +120,7 @@ const controller = (name: string) =>
               state: {
                 request: state,
                 epoch: 1,
-                phase: "running",
+                phase: health.workspacePhase,
                 completedOperation: state.operationId,
                 identity: identity(workspaceId, name),
                 endpoint: `http://worker.invalid/${name}/${encodeURIComponent(workspaceId)}`,
@@ -243,6 +247,35 @@ it.layer(services, { excludeTestServices: true })("durable execution pool routin
           expect(shell.threads.find((value) => value.id === b.id)?.executionPoolId).toBe("portal");
         }),
       ),
+  );
+
+  it.effect("classifies only pending controller observations for provider acquisition", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        const root = thread("pending-observation");
+        yield* create([root]);
+        const runtime = yield* f.runtime();
+        yield* runtime.forThread(root.id);
+        for (const phase of ["starting", "suspending", "releasing", "failed", "unexpected"]) {
+          f.a.health.workspacePhase = phase;
+          expect(
+            Runtime.isWorkerObservationPending(
+              yield* runtime.observeThread(root.id).pipe(Effect.flip),
+            ),
+          ).toBe(["starting", "suspending", "releasing"].includes(phase));
+        }
+        f.a.health.workspacePhase = "running";
+        for (const status of [503, 401, 403, 404, 409]) {
+          f.a.health.workspaceStatus = status;
+          expect(
+            Runtime.isWorkerObservationPending(
+              yield* runtime.observeThread(root.id).pipe(Effect.flip),
+            ),
+          ).toBe(status === 503);
+        }
+      }),
+    ),
   );
 
   it.effect(

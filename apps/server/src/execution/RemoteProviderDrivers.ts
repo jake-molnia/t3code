@@ -186,7 +186,15 @@ export const makeRemoteDrivers = Effect.gen(function* () {
                 resume !== undefined && resume.status !== "stopped" && resume.status !== "error";
               const acquire = Effect.gen(function* () {
                 const observation = attachOnly
-                  ? yield* runtime.observeThread(value.threadId)
+                  ? yield* runtime
+                      .observeThread(value.threadId)
+                      .pipe(
+                        Effect.catch((error) =>
+                          Runtime.isWorkerObservationPending(error)
+                            ? Effect.succeed(null)
+                            : Effect.fail(error),
+                        ),
+                      )
                   : null;
                 if (observation?.kind === "stopped") attachOnly = false;
                 return observation?.kind === "running"
@@ -198,6 +206,11 @@ export const makeRemoteDrivers = Effect.gen(function* () {
                   if (attachOnly) {
                     const residency = yield* runtime.sessionResidency(value.providerSessionId);
                     const current = yield* Effect.tryPromise(() => client.inspectIdentity());
+                    if (!sameIdentity(client.identity, current))
+                      return yield* new Runtime.RuntimeClientError({
+                        operation: "session-identity",
+                        cause: "Worker changed after acquisition",
+                      });
                     if (!residency || !sameIdentity(residency, current)) attachOnly = false;
                   }
                   yield* runtime.rememberSession(

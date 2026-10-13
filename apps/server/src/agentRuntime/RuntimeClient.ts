@@ -56,6 +56,24 @@ export class RuntimeClientError extends Schema.TaggedError<RuntimeClientError>()
   }
 }
 
+export class WorkerNotReady extends Schema.TaggedError<WorkerNotReady>()(
+  "AgentRuntimeWorkerNotReady",
+  {},
+) {}
+
+const isRuntimeClientError = Schema.is(RuntimeClientError);
+const isWorkerNotReady = Schema.is(WorkerNotReady);
+
+/** Only controller readiness failures permit acquisition after an observation. */
+export function isWorkerObservationPending(error: RuntimeClientError): boolean {
+  let cause: unknown = error;
+  while (isRuntimeClientError(cause)) {
+    if (cause.operation === "request" && cause.httpStatus === 503) return true;
+    cause = cause.cause;
+  }
+  return isWorkerNotReady(cause);
+}
+
 export type CompletedStop = Pick<
   typeof LifecycleStopRequest.Type,
   "operationId" | "revision" | "action"
@@ -500,7 +518,9 @@ export const layer = Layer.effect(
         )
           return yield* new RuntimeClientError({
             operation: "observe",
-            cause: "Worker status is not established",
+            cause: ["starting", "suspending", "releasing"].includes(access.state.phase)
+              ? new WorkerNotReady({})
+              : "Worker status is not established",
           });
         if (access.state.identity.workspaceId !== workspaceId)
           return yield* new RuntimeClientError({
