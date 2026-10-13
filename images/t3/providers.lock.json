@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "platform": "linux/amd64",
+  "harnesses": {
+    "codex": {
+      "kind": "npm",
+      "package": "@openai/codex",
+      "version": "0.161.0",
+      "binary": "codex"
+    },
+    "claudeAgent": {
+      "kind": "npm",
+      "package": "@anthropic-ai/claude-code",
+      "version": "2.1.294",
+      "binary": "claude"
+    },
+    "grok": {
+      "kind": "npm",
+      "package": "@xai-official/grok",
+      "version": "1.0.50",
+      "binary": "grok"
+    },
+    "pi": {
+      "kind": "npm",
+      "package": "@earendil-works/pi-coding-agent",
+      "version": "1.1.0",
+      "binary": "pi"
+    },
+    "opencode": {
+      "kind": "npm",
+      "package": "opencode-ai",
+      "version": "1.18.35",
+      "binary": "opencode"
+    },
+    "opencode2": {
+      "kind": "npm",
+      "package": "@opencode/cli",
+      "version": "2.0.26",
+      "binary": "opencode2"
+    },
+    "cursor": {
+      "kind": "sdk",
+      "package": "@cursor/sdk",
+      "version": "1.0.35"
+    },
+    "muse": {
+      "kind": "binary",
+      "version": "1.4.4-R5419.1",
+      "binary": "muse",
+      "url": "https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version=1.4.4-R5419.1&file=muse-x86-linux",
+      "sha256": "cfc9d068441ff46036ad6bbf30dd794043b25b7efb69648c92c022ccf65f7d19"
+    }
+  },
+  "acp": {
+    "kind": "extensions",
+    "entries": []
+  },
+  "sourceControl": {
+    "gh": {
+      "kind": "tar.gz",
+      "version": "2.102.0",
+      "binary": "gh",
+      "url": "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz",
+      "sha256": "bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386",
+      "member": "gh_2.102.0_linux_amd64/bin/gh"
+    },
+    "glab": {
+      "kind": "tar.gz",
+      "version": "1.121.0",
+      "binary": "glab",
+      "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E121%2E0/glab_1%2E121%2E0_linux_amd64%2Etar%2Egz",
+      "sha256": "52266084418da237222a2146a7fd82b0ac9be263133efeb296fe3b12b6bfd48f",
+      "member": "bin/glab"
+    },
+    "tea": {
+      "kind": "binary",
+      "version": "0.16.0",
+      "binary": "tea",
+      "url": "https://gitea.com/gitea/tea/releases/download/v0.16.0/tea-0.16.0-linux-amd64",
+      "sha256": "9c142c8a0b31485eea2387031c1c404f12b7141075eb4ffbd7ced49441590636"
+    },
+    "fj": {
+      "kind": "tar.gz",
+      "version": "0.6.0",
+      "binary": "fj",
+      "url": "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/v0.6.0/forgejo-cli-x86_64-linux.tar.gz",
+      "sha256": "ea559da5449b6dd7e0dd9f7ea51c906b575696f782edd606b52adcf773602742",
+      "member": "fj",
+      "versionArgs": ["version"]
+    },
+    "az": {
+      "kind": "deb",
+      "version": "2.91.0",
+      "binary": "az",
+      "url": "https://packages.microsoft.com/repos/azure-cli/pool/main/a/azure-cli/azure-cli_2.91.0-1~bookworm_amd64.deb",
+      "sha256": "bcc05016bc32af140709e6f6a1178c3b0abddb8091cd9285817ce11ebb6dcd30"
+    },
+    "azure-devops": {
+      "kind": "wheel",
+      "version": "1.0.8",
+      "url": "https://azcliprod.blob.core.windows.net/cli-extensions/azure_devops-1.0.8-py2.py3-none-any.whl",
+      "sha256": "b90cc9c764cb66b063e8b5d407163f3e7a944bb50cf5dd7c482f4ae198f9364e",
+      "directory": "azure-devops"
+    }
+  },
+  "development": {
+    "go": "1.27.1",
+    "pnpm": "11.10.0"
+  }
+}

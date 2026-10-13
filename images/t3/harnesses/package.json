@@ -1,0 +1,12 @@
+{
+  "name": "t3-worker-harnesses",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.294",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@openai/codex": "0.161.0",
+    "@xai-official/grok": "1.0.50",
+    "opencode-ai": "1.18.35"
+  }
+}

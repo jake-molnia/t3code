@@ -1,0 +1,85 @@
+{
+  "codex": {
+    "config": {
+      "setupMode": "existing",
+      "launchArgs": "-c 'model_provider=\"aperture\"' -c 'model_providers.aperture.name=\"Aperture\"' -c 'model_providers.aperture.base_url=\"${APERTURE_UPSTREAM}/v1\"' -c 'model_providers.aperture.env_key=\"OPENAI_API_KEY\"' -c 'model_providers.aperture.wire_api=\"responses\"'"
+    },
+    "environment": [
+      {
+        "name": "OPENAI_API_KEY",
+        "value": "${APERTURE_API_KEY}",
+        "sensitive": true
+      },
+      {
+        "name": "OPENAI_BASE_URL",
+        "value": "${APERTURE_UPSTREAM}/v1",
+        "sensitive": false
+      }
+    ]
+  },
+  "claudeAgent": {
+    "environment": [
+      {
+        "name": "ANTHROPIC_API_KEY",
+        "value": "${APERTURE_API_KEY}",
+        "sensitive": true
+      },
+      {
+        "name": "ANTHROPIC_BASE_URL",
+        "value": "${APERTURE_UPSTREAM}",
+        "sensitive": false
+      },
+      {
+        "name": "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+        "value": "1",
+        "sensitive": false
+      }
+    ]
+  },
+  "grok": {
+    "environment": [
+      {
+        "name": "XAI_API_KEY",
+        "value": "${APERTURE_API_KEY}",
+        "sensitive": true
+      },
+      {
+        "name": "XAI_API_BASE_URL",
+        "value": "${APERTURE_UPSTREAM}/v1",
+        "sensitive": false
+      },
+      {
+        "name": "GROK_XAI_API_BASE_URL",
+        "value": "${APERTURE_UPSTREAM}/v1",
+        "sensitive": false
+      },
+      {
+        "name": "GROK_MODELS_BASE_URL",
+        "value": "${APERTURE_UPSTREAM}/v1",
+        "sensitive": false
+      }
+    ]
+  },
+  "opencode": {
+    "config": {
+      "binaryPath": "opencode2",
+      "serverUrl": ""
+    },
+    "environment": [
+      {
+        "name": "OPENCODE_CONFIG",
+        "value": "${T3_HARNESS_STATE_DIR}/opencode2.json",
+        "sensitive": false
+      }
+    ]
+  },
+  "pi": {
+    "environment": [
+      {
+        "name": "PI_CODING_AGENT_DIR",
+        "value": "${T3_HARNESS_STATE_DIR}/pi",
+        "sensitive": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "defaultModelSelection": {
+    "instanceId": "codex",
+    "model": "gpt-6-luna"
+  },
+  "providerInstances": {
+    "codex": {
+      "driver": "codex",
+      "displayName": "Codex \u00b7 Aperture",
+      "enabled": true,
+      "config": {
+        "setupMode": "existing"
+      }
+    },
+    "claudeAgent": {
+      "driver": "claudeAgent",
+      "displayName": "Claude (requires managed Aperture Messages route)",
+      "enabled": false
+    },
+    "grok": {
+      "driver": "grok",
+      "displayName": "Grok \u00b7 Aperture",
+      "enabled": true
+    },
+    "opencode": {
+      "driver": "opencode",
+      "displayName": "OpenCode \u00b7 Aperture",
+      "enabled": true,
+      "config": {
+        "binaryPath": "opencode2"
+      }
+    },
+    "pi": {
+      "driver": "pi",
+      "displayName": "Pi \u00b7 Aperture",
+      "enabled": true
+    },
+    "cursor": {
+      "driver": "cursor",
+      "displayName": "Cursor (requires native credentials)",
+      "enabled": false
+    },
+    "muse": {
+      "driver": "muse",
+      "displayName": "Muse (requires native credentials)",
+      "enabled": false
+    }
+  },
+  "defaultRuntimeMode": "full-access"
+}
