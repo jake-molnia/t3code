@@ -1937,9 +1937,10 @@ export function deriveMessagesTimelineRows(input: {
       snapshot: input.worktreeSetup,
       embedded: setupHandedOff,
     } as const;
-    const firstUserRowIndex = nextRows.findIndex(
-      (row) => row.kind === "message" && row.message.role === "user",
-    );
+    const setupUserRowIndex =
+      input.worktreeSetup.kind === "sandbox-resume"
+        ? nextRows.findLastIndex((row) => row.kind === "message" && row.message.role === "user")
+        : nextRows.findIndex((row) => row.kind === "message" && row.message.role === "user");
     // While the setup runs, the working header leads the card in the same
     // slot it keeps once the agent's own turn takes over. The main pass may
     // already have placed that header (a bootstrap counts as working).
@@ -1949,7 +1950,7 @@ export function deriveMessagesTimelineRows(input: {
     if (workingRowIndex >= 0) {
       nextRows.splice(workingRowIndex + 1, 0, setupRow);
     } else {
-      const insertAt = firstUserRowIndex >= 0 ? firstUserRowIndex + 1 : nextRows.length;
+      const insertAt = setupUserRowIndex >= 0 ? setupUserRowIndex + 1 : nextRows.length;
       nextRows.splice(
         insertAt,
         0,

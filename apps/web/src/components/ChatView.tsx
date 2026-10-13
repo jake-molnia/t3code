@@ -3867,8 +3867,7 @@ export default function ChatView(props: ChatViewProps) {
   const setupTarget = worktreeSetupActive ? worktreeSetupRef : routeThreadRef;
   const worktreeSetupQuery = useEnvironmentQuery(
     worktreeSetupActive ||
-      (activeThread?.id === routeThreadRef.threadId &&
-        (isLocallyPreparingWorktree || activeRunPreparing || activeThread.worktreePath !== null))
+      activeThread?.id === routeThreadRef.threadId
       ? vcsEnvironment.worktreeSetup({
           environmentId: setupTarget.environmentId,
           input: { threadId: setupTarget.threadId },
@@ -3898,6 +3897,7 @@ export default function ChatView(props: ChatViewProps) {
   const worktreeSetup = resolveVisibleWorktreeSetup({
     live: liveWorktreeSetup,
     recorded: null,
+    latestUserMessageAt: timelineMessages.findLast((message) => message.role === "user")?.createdAt,
     turnStarted: activeActivityRun?.startedAt != null,
     // Counts the optimistic send too, so the row retires the moment the
     // follow-up is on screen rather than when the server echoes it back.
@@ -3946,11 +3946,18 @@ export default function ChatView(props: ChatViewProps) {
   );
   const onCancelWorktreeSetup = useCallback(() => {
     if (!worktreeSetup || worktreeSetup.phase !== "running") return;
+    if (worktreeSetup.kind === "sandbox-resume") {
+      void interruptThreadTurn({
+        environmentId: setupTarget.environmentId,
+        input: { threadId: worktreeSetup.threadId },
+      });
+      return;
+    }
     void cancelWorktreeSetup({
       environmentId: setupTarget.environmentId,
       input: { threadId: worktreeSetup.threadId },
     });
-  }, [cancelWorktreeSetup, setupTarget.environmentId, worktreeSetup]);
+  }, [cancelWorktreeSetup, interruptThreadTurn, setupTarget.environmentId, worktreeSetup]);
   // The setup terminal belongs to the thread that was set up. A failed
   // bootstrap deletes that thread and closes its terminals, so only offer the
   // terminal while the setup thread is still the active one.

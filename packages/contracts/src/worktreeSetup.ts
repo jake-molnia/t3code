@@ -52,6 +52,8 @@ export type WorktreeSetupPhase = typeof WorktreeSetupPhase.Type;
 
 export const WorktreeSetupSnapshot = Schema.Struct({
   threadId: ThreadId,
+  /** Resuming execution uses run cancellation; omitted for initial worktree setup. */
+  kind: Schema.optional(Schema.Literal("sandbox-resume")),
   phase: WorktreeSetupPhase,
   startedAt: IsoDateTime,
   endedAt: Schema.NullOr(IsoDateTime),

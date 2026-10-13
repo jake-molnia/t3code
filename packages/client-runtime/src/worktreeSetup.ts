@@ -38,7 +38,8 @@ export function findRecordedWorktreeSetup(
  * cancelled one stays so the outcome, exit code, and terminal are reachable.
  * Before the turn is live everything stays so nothing collapses in the
  * handoff gap. Visibility never depends on whether a turn happens to be
- * running, which would make the row come and go.
+ * running, which would make the row come and go. Resumed sandbox setup belongs
+ * to its latest send; failures stay visible until another message is sent.
  */
 export function resolveVisibleWorktreeSetup(input: {
   live: WorktreeSetupSnapshot | null;
@@ -46,6 +47,7 @@ export function resolveVisibleWorktreeSetup(input: {
   turnStarted: boolean;
   /** The user sent a message after the one that created the worktree. */
   followUpSent: boolean;
+  latestUserMessageAt?: string | undefined;
 }): WorktreeSetupSnapshot | null {
   const snapshot =
     input.live && (!input.recorded || input.live.sequence >= input.recorded.sequence)
@@ -53,6 +55,14 @@ export function resolveVisibleWorktreeSetup(input: {
       : input.recorded;
   if (!snapshot) return null;
   if (snapshot.phase === "running") return snapshot;
+  if (snapshot.kind === "sandbox-resume") {
+    if (
+      input.latestUserMessageAt &&
+      Date.parse(input.latestUserMessageAt) > Date.parse(snapshot.startedAt)
+    )
+      return null;
+    return snapshot.phase === "done" ? null : snapshot;
+  }
   if (input.followUpSent) return null;
   if (snapshot.phase !== "done") return snapshot;
   if (!input.turnStarted) return snapshot;

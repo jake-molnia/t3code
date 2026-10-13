@@ -5469,3 +5469,45 @@ it("keeps completed run duration stable after follow-ups and reload, excluding s
   );
   expect(refreshed.rows.find((row) => row.kind === "turn-fold")?.label).toBe("Worked for 24s");
 });
+
+it("places a failed resumed sandbox setup after the latest send instead of the initial turn", () => {
+  const entries = [0, 1].map((index) => {
+    const createdAt = `2026-10-13T12:0${index}:00.000Z`;
+    return {
+      id: `user-${index}`,
+      kind: "message" as const,
+      createdAt,
+      message: {
+        id: MessageId.make(`user-${index}`),
+        role: "user" as const,
+        text: `message ${index}`,
+        runId: null,
+        createdAt,
+        updatedAt: createdAt,
+        streaming: false,
+      },
+    };
+  });
+  const rows = deriveMessagesTimelineRows({
+    timelineEntries: entries,
+    isWorking: false,
+    turnDiffSummaries: [],
+    supportsConversationRollback: false,
+    worktreeSetup: {
+      threadId: ThreadId.make("resume-placement"),
+      kind: "sandbox-resume",
+      phase: "failed",
+      startedAt: "2026-10-13T12:01:01.000Z",
+      endedAt: "2026-10-13T12:01:30.000Z",
+      branch: null,
+      baseRef: null,
+      worktreePath: null,
+      setupScript: null,
+      stages: [],
+      error: "Sandbox execution could not start. Retry the turn.",
+      sequence: 3,
+    },
+  });
+  const ids = rows.map((row) => row.id);
+  expect(ids.indexOf("worktree-setup-row")).toBe(ids.indexOf("user-1") + 1);
+});

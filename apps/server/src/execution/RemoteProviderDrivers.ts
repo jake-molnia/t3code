@@ -1,5 +1,7 @@
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { credentialPolicy, applyCredentialPolicy } from "./credentialPolicy.ts";
+import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
+import { trackRemoteSessionSetup } from "./RemoteSessionSetup.ts";
 import * as AttachmentStaging from "../agentRuntime/AttachmentStaging.ts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as Config from "effect/Config";
@@ -44,6 +46,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const settings = yield* Settings.ServerSettingsService;
   const workspaceRouting = yield* Effect.serviceOption(WorkspaceRouting.WorkspaceRouting);
+  const setupTracker = yield* Effect.serviceOption(WorktreeSetupTracker.WorktreeSetupTracker);
   const attachments = yield* Effect.serviceOption(AttachmentStaging.AttachmentStaging);
   const advertisedMcp = yield* Config.option(Config.String("T3_MCP_ADVERTISED_URL"));
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
@@ -181,24 +184,38 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               const resume = value.resumeFromSession;
               let attachOnly =
                 resume !== undefined && resume.status !== "stopped" && resume.status !== "error";
-              const observation = attachOnly ? yield* runtime.observeThread(value.threadId) : null;
-              if (observation?.kind === "stopped") attachOnly = false;
-              const client =
-                observation?.kind === "running"
+              const acquire = Effect.gen(function* () {
+                const observation = attachOnly
+                  ? yield* runtime.observeThread(value.threadId)
+                  : null;
+                if (observation?.kind === "stopped") attachOnly = false;
+                return observation?.kind === "running"
                   ? observation.client
                   : yield* runtime.forThread(value.threadId, driver.driverKind);
-              if (attachOnly) {
-                const residency = yield* runtime.sessionResidency(value.providerSessionId);
-                const current = yield* Effect.tryPromise(() => client.inspectIdentity());
-                if (!residency || !sameIdentity(residency, current)) attachOnly = false;
-              }
-              yield* runtime.rememberSession(
-                value.providerSessionId,
-                value.threadId,
-                client.identity,
-              );
-              yield* configure(client);
-              return yield* adapter(client, attachOnly).openSession(value);
+              });
+              const open = (client: ExecutionClient) =>
+                Effect.gen(function* () {
+                  if (attachOnly) {
+                    const residency = yield* runtime.sessionResidency(value.providerSessionId);
+                    const current = yield* Effect.tryPromise(() => client.inspectIdentity());
+                    if (!residency || !sameIdentity(residency, current)) attachOnly = false;
+                  }
+                  yield* runtime.rememberSession(
+                    value.providerSessionId,
+                    value.threadId,
+                    client.identity,
+                  );
+                  yield* configure(client);
+                  return yield* adapter(client, attachOnly).openSession(value);
+                });
+              return yield* Option.isSome(setupTracker)
+                ? trackRemoteSessionSetup({
+                    tracker: setupTracker.value,
+                    threadId: value.threadId,
+                    acquire,
+                    open,
+                  })
+                : acquire.pipe(Effect.flatMap(open));
             }).pipe(Effect.mapError(adapterFailure)),
         };
         function invoke<T, E>(
