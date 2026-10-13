@@ -3,6 +3,9 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import { captureRunPromise } from "../execution/EffectHttpBoundary.ts";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -56,6 +59,9 @@ it.live.each([
     yield* RuntimeSchema.migrate;
     yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id,owner_thread_id,admission_revision) VALUES ('readiness-workspace','readiness-owner',1)`;
     const activity = yield* WorkspaceActivity;
+    const run = yield* captureRunPromise;
+    const admissionEntered = yield* Deferred.make<void>();
+    const allowAdmission = yield* Deferred.make<void>();
     let posts = 0;
     let reads = 0;
     const controller = yield* Effect.acquireRelease(
@@ -67,6 +73,8 @@ it.live.each([
             expect(activity.has("readiness-workspace")).toBe(true);
             if (request.method === "POST") {
               posts += 1;
+              await run(Deferred.succeed(admissionEntered, undefined));
+              await run(Deferred.await(allowAdmission));
               expect(await request.json()).toMatchObject({
                 workspaceId: "readiness-workspace",
                 revision: 1,
@@ -119,10 +127,27 @@ it.live.each([
         ),
       ),
     );
-    const result = yield* runtime.forWorkspace("readiness-workspace").pipe(Effect.exit);
-    expect(Exit.isSuccess(result)).toBe(testCase.succeeds);
+    const cancelledCaller = yield* runtime
+      .forWorkspace("readiness-workspace")
+      .pipe(Effect.forkChild);
+    const waitingCallers = yield* Effect.all(
+      Array.from({ length: 2 }, () =>
+        runtime.forWorkspace("readiness-workspace").pipe(Effect.exit),
+      ),
+      { concurrency: "unbounded" },
+    ).pipe(Effect.forkChild);
+    yield* Deferred.await(admissionEntered);
+    yield* Fiber.interrupt(cancelledCaller);
+    yield* Deferred.succeed(allowAdmission, undefined);
+    const results = yield* Fiber.join(waitingCallers);
+    expect(results.map(Exit.isSuccess)).toEqual([testCase.succeeds, testCase.succeeds]);
     expect(posts).toBe(1);
     expect(reads).toBe(testCase.reads);
     expect(activity.has("readiness-workspace")).toBe(false);
+    if (testCase.succeeds) {
+      yield* runtime.forWorkspace("readiness-workspace");
+      expect(posts).toBe(2);
+      expect(reads).toBe(testCase.reads + 1);
+    }
   }).pipe(Effect.scoped, Effect.provide(services)),
 );

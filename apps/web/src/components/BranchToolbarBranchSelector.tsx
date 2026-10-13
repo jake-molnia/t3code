@@ -261,9 +261,14 @@ export function BranchToolbarBranchSelector({
   // from the response entirely, which would defeat the collision check below.
   // Ref names cannot contain an ASCII space, so sanitizing loses no matches.
   const branchRefQuery = sanitizeNewRefName(deferredTrimmedBranchQuery);
+  const needsDefaultWorktreeBase =
+    serverSession === null &&
+    effectiveEnvMode === "worktree" &&
+    activeWorktreePath === null &&
+    activeThreadBranch === null;
   const branchRefState = usePaginatedBranches({
     environmentId,
-    cwd: branchCwd,
+    cwd: isBranchMenuOpen || needsDefaultWorktreeBase ? branchCwd : null,
     query: branchRefQuery,
   });
   const refs = branchRefState.refs;
@@ -343,7 +348,11 @@ export function BranchToolbarBranchSelector({
   const listedActiveBranch =
     resolvedActiveBranch === null ? null : (branchByName.get(resolvedActiveBranch) ?? null);
   const activeBranchRefQuery = useEnvironmentQuery(
-    branchCwd !== null && resolvedActiveBranch !== null
+    branchCwd !== null &&
+      resolvedActiveBranch !== null &&
+      listedActiveBranch === null &&
+      (isBranchMenuOpen ||
+        (effectiveEnvMode === "worktree" && activeWorktreePath === null && startFromOrigin))
       ? vcsEnvironment.listRefs({
           environmentId,
           input: {

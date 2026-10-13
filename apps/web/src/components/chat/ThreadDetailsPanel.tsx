@@ -61,11 +61,27 @@ export interface ThreadDetailsPanelProps extends Pick<
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
 }
 
-export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
+function ThreadProjectScripts(props: ThreadDetailsPanelProps) {
   const fileScripts = useT3ProjectFileScripts(
     props.environmentId,
     props.activeProjectScripts ? props.gitCwd : null,
   );
+  return (
+    <ProjectScriptsControl
+      environmentId={props.environmentId}
+      displayMode="panel"
+      scripts={props.activeProjectScripts ?? []}
+      fileScripts={fileScripts}
+      preferredScriptId={props.preferredScriptId}
+      onRunScript={props.onRunProjectScript}
+      onAddScript={props.onAddProjectScript}
+      onUpdateScript={props.onUpdateProjectScript}
+      onDeleteScript={props.onDeleteProjectScript}
+    />
+  );
+}
+
+export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const activeThreadRef = { environmentId: props.environmentId, threadId: props.threadId };
   const branchToolbarProps = {
     showGitControls: props.isGitRepo,
@@ -127,19 +143,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
-              {props.activeProjectScripts ? (
-                <ProjectScriptsControl
-                  environmentId={props.environmentId}
-                  displayMode="panel"
-                  scripts={props.activeProjectScripts}
-                  fileScripts={fileScripts}
-                  preferredScriptId={props.preferredScriptId}
-                  onRunScript={props.onRunProjectScript}
-                  onAddScript={props.onAddProjectScript}
-                  onUpdateScript={props.onUpdateProjectScript}
-                  onDeleteScript={props.onDeleteProjectScript}
-                />
-              ) : null}
+              {props.activeProjectScripts ? <ThreadProjectScripts {...props} /> : null}
             </div>
           </ThreadDetailsSection>
 

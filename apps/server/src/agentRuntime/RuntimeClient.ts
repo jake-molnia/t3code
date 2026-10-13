@@ -7,6 +7,8 @@ import * as Pools from "./ExecutionPools.ts";
 import { sameIdentity } from "../execution/ExecutionWorker.ts";
 import { ThreadId, type ProviderDriverKind } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Cache from "effect/Cache";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
@@ -18,6 +20,11 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import { createExecutionClient, type ExecutionClient } from "../execution/ExecutionClient.ts";
 import * as Bindings from "./Bindings.ts";
+
+class ReadinessKey extends Data.Class<{
+  readonly workspaceId: string;
+  readonly revision: number;
+}> {}
 
 const RuntimeState = Schema.Struct({
   request: Schema.Struct({
@@ -167,7 +174,7 @@ export const layer = Layer.effect(
           });
         return yield* result.json;
       });
-    const ensure = (workspaceId: string, revision: number) =>
+    const ensureUncached = (workspaceId: string, revision: number) =>
       Effect.gen(function* () {
         const pool = yield* placement(workspaceId);
         const profile = pool.profile;
@@ -263,6 +270,14 @@ export const layer = Layer.effect(
         (effect) => withWorkspaceActivity(workspaceId, effect),
         Effect.mapError(failure("ensure-running")),
       );
+    // Concurrent Git, file, and provider operations share readiness, not their results.
+    // A newer admission revision must never join an older wake or stop transition.
+    const readiness = yield* Cache.makeWith(
+      (input: ReadinessKey) => ensureUncached(input.workspaceId, input.revision),
+      { capacity: 256, timeToLive: () => 0, requireServicesAt: "lookup" },
+    );
+    const ensure = (workspaceId: string, revision: number) =>
+      Cache.get(readiness, new ReadinessKey({ workspaceId, revision }));
     const forWorkspace = (workspaceId: string) =>
       Effect.gen(function* () {
         const rows = yield* sql<{
