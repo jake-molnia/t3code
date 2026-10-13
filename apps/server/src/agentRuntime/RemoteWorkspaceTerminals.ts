@@ -82,23 +82,27 @@ export const layer = Layer.effect(
         watchers.add(threadId);
         let cursor = 0;
         let incarnation: string | undefined;
-        const initial = yield* runtime.observeThread(C.ThreadId.make(threadId));
-        if (initial.kind === "running") {
-          const baseline = yield* Effect.tryPromise(() =>
-            initial.client.events(0, undefined, `terminal:${threadId}`),
-          );
-          cursor = baseline.at(-1)?.sequence ?? 0;
-          incarnation = initial.client.identity.incarnation;
-          const metadata = yield* Effect.tryPromise(() =>
-            initial.client.call("terminals.list", { threadId }),
-          ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(C.TerminalSummary))));
-          for (const summary of metadata) {
-            summaries.set(key(summary.threadId, summary.terminalId), summary);
-            yield* notifyMetadata({ type: "upsert", terminal: summary });
+        // Observation cannot create a worker. A pending/replaced worker is recovered
+        // by open below; keep its event watcher alive while that acquisition runs.
+        yield* Effect.gen(function* () {
+          const initial = yield* runtime.observeThread(C.ThreadId.make(threadId));
+          if (initial.kind === "running") {
+            const baseline = yield* Effect.tryPromise(() =>
+              initial.client.events(0, undefined, `terminal:${threadId}`),
+            );
+            cursor = baseline.at(-1)?.sequence ?? 0;
+            incarnation = initial.client.identity.incarnation;
+            const metadata = yield* Effect.tryPromise(() =>
+              initial.client.call("terminals.list", { threadId }),
+            ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(C.TerminalSummary))));
+            for (const summary of metadata) {
+              summaries.set(key(summary.threadId, summary.terminalId), summary);
+              yield* notifyMetadata({ type: "upsert", terminal: summary });
+            }
+            if (cursor > 0)
+              yield* Effect.tryPromise(() => initial.client.ack(`terminal:${threadId}`, cursor));
           }
-          if (cursor > 0)
-            yield* Effect.tryPromise(() => initial.client.ack(`terminal:${threadId}`, cursor));
-        }
+        }).pipe(Effect.ignore);
         yield* Effect.gen(function* () {
           while (true) {
             yield* Effect.gen(function* () {
@@ -258,6 +262,14 @@ export const layer = Layer.effect(
         const snapshot = yield* invoke("terminals.snapshot", input, C.TerminalSessionSnapshot).pipe(
           Effect.catch((error) =>
             allowOpen && input.cwd ? open({ ...input, cwd: input.cwd }) : Effect.fail(error),
+          ),
+          Effect.flatMap((snapshot) =>
+            allowOpen &&
+            input.cwd &&
+            input.restartIfNotRunning === true &&
+            (snapshot.status === "exited" || snapshot.status === "error")
+              ? open({ ...input, cwd: input.cwd })
+              : Effect.succeed(snapshot),
           ),
           Effect.tapError(() => Effect.sync(unsubscribe)),
         );

@@ -90,16 +90,26 @@ it.layer(layer, { excludeTestServices: true })("remote native terminal", (it) =>
           endpoint: `http://127.0.0.1:${server.port}`,
         });
         let wakes = 0;
+        let ready = false;
         const runtime = RuntimeClient.RuntimeClient.of({
           enabled: true,
           forThread: () =>
             Effect.sync(() => {
               wakes++;
+              ready = true;
               return client;
             }),
           forWorkspace: () => Effect.succeed(client),
           forUtility: () => Effect.succeed(client),
-          observeThread: () => Effect.succeed({ kind: "running", client }),
+          observeThread: () =>
+            ready
+              ? Effect.succeed({ kind: "running", client })
+              : Effect.fail(
+                  new RuntimeClient.RuntimeClientError({
+                    operation: "observe",
+                    cause: "Worker status is not established",
+                  }),
+                ),
           observeWorkspace: () => Effect.succeed({ kind: "running", client }),
           sessionResidency: () => Effect.succeed(identity),
           rememberSession: () => Effect.void,
@@ -110,11 +120,20 @@ it.layer(layer, { excludeTestServices: true })("remote native terminal", (it) =>
           RemoteTerminals.layer.pipe(Layer.provide(Routing.layer)),
         ).pipe(Effect.provideService(RuntimeClient.RuntimeClient, runtime));
         const remote = Context.get(remoteContext, TerminalManager.TerminalManager);
-        yield* remote.open({
-          threadId: "parent",
-          terminalId: "shell",
-          cwd: "/workspace/test/repo",
-        });
+        const observeFailure = yield* remote
+          .observeStream({ threadId: "parent", terminalId: "shell" }, () => Effect.void)
+          .pipe(Effect.flip);
+        expect(observeFailure._tag).toBe("TerminalSessionLookupError");
+        expect(wakes).toBe(0);
+        const initialDetach = yield* remote.attachStream(
+          {
+            threadId: "parent",
+            terminalId: "shell",
+            cwd: "/workspace/test/repo",
+          },
+          () => Effect.void,
+        );
+        initialDetach();
         yield* remote.open({ threadId: "child", terminalId: "shell", cwd: "/workspace/test/repo" });
         const received = yield* Deferred.make<void>();
         let output = "";
@@ -153,6 +172,64 @@ it.layer(layer, { excludeTestServices: true })("remote native terminal", (it) =>
         expect(replay).toContain("REMOTE_SUCCESS");
         expect(recentActivity.get("terminal-workspace")).toBe(inputAt);
         detach();
+        // A retained terminal tab outlives its process and must recover through
+        // acquisition, even while observing its replacement is not yet possible.
+        yield* native.close({ threadId: "child", terminalId: "shell" });
+        ready = false;
+        let recoveredHistory = "";
+        const recovered = yield* remote.attachStream(
+          { threadId: "child", terminalId: "shell", cwd: "/workspace/test/repo" },
+          (event) =>
+            Effect.sync(() => {
+              if (event.type === "snapshot") recoveredHistory = event.snapshot.history;
+            }),
+        );
+        expect(recoveredHistory).toContain("REMOTE_SUCCESS");
+        recovered();
+        const exited = yield* Deferred.make<void>();
+        const exitListener = yield* remote.attachStream(
+          { threadId: "child", terminalId: "shell" },
+          (event) =>
+            event.type === "exited"
+              ? Deferred.succeed(exited, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        );
+        yield* remote.write({ threadId: "child", terminalId: "shell", data: "exit\n" });
+        yield* Deferred.await(exited).pipe(Effect.timeout("10 seconds"));
+        exitListener();
+        let reattachedStatus = "";
+        let reattachedHistory = "";
+        const unchanged = yield* remote.attachStream(
+          { threadId: "child", terminalId: "shell", cwd: "/workspace/test/repo" },
+          (event) =>
+            Effect.sync(() => {
+              if (event.type === "snapshot") {
+                reattachedStatus = event.snapshot.status;
+                reattachedHistory = event.snapshot.history;
+              }
+            }),
+        );
+        expect(reattachedStatus).toBe("exited");
+        expect(reattachedHistory).toContain("REMOTE_SUCCESS");
+        unchanged();
+        const restarted = yield* remote.attachStream(
+          {
+            threadId: "child",
+            terminalId: "shell",
+            cwd: "/workspace/test/repo",
+            restartIfNotRunning: true,
+          },
+          (event) =>
+            Effect.sync(() => {
+              if (event.type === "snapshot") {
+                reattachedStatus = event.snapshot.status;
+                reattachedHistory = event.snapshot.history;
+              }
+            }),
+        );
+        expect(reattachedStatus).toBe("running");
+        expect(reattachedHistory).not.toContain("REMOTE_SUCCESS");
+        restarted();
         const before = wakes;
         yield* remote.close({ threadId: "parent" });
         yield* remote.write({
