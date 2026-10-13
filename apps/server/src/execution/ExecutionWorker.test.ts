@@ -1,6 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off -- Tests exercise the actual on-disk journal and HTTP boundary.
 import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
+import * as Effect from "effect/Effect";
+import { VcsProcessExitError } from "@t3tools/contracts";
+import { WorkspaceExecutionError } from "../agentRuntime/worker/Protocol.ts";
 import { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -362,3 +365,54 @@ test.each(["", "/"])(
     ]);
   },
 );
+
+test("returns safe workspace failure codes through durable and transient HTTP operations", async () => {
+  const { client } = await fixture(() =>
+    Effect.runPromise(
+      Effect.fail(
+        new WorkspaceExecutionError({ code: "fork_destination_exists", cause: "sensitive stderr" }),
+      ),
+    ),
+  );
+  await expect(client.call("git.importFork", {})).rejects.toMatchObject({
+    code: "fork_destination_exists",
+  });
+  await expect(client.transient("asset.stage", {})).rejects.toMatchObject({
+    code: "fork_destination_exists",
+  });
+});
+
+test("does not serialize arbitrary exception messages or malformed codes", async () => {
+  const { client } = await fixture(() =>
+    Effect.runPromise(
+      Effect.fail(
+        new WorkspaceExecutionError({ code: "secret token value", cause: "sensitive stderr" }),
+      ),
+    ),
+  );
+  await expect(client.call("git.importFork", {})).rejects.toMatchObject({
+    code: "operation_failed",
+    message: "operation_failed",
+  });
+});
+
+test("returns Git failure classification without exposing paths or stderr", async () => {
+  const { client } = await fixture(() =>
+    Effect.runPromise(
+      Effect.fail(
+        new VcsProcessExitError({
+          operation: "fork.bundle",
+          command: "git",
+          cwd: "/private/source",
+          exitCode: 128,
+          detail: "sensitive stderr",
+          failureKind: "authentication",
+        }),
+      ),
+    ),
+  );
+  await expect(client.call("git.bundleFork", {})).rejects.toMatchObject({
+    code: "vcs_authentication",
+    message: "vcs_authentication",
+  });
+});

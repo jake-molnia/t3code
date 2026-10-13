@@ -1,12 +1,45 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type { ExecutionClient } from "../execution/ExecutionClient.ts";
+import {
+  ExecutionOperationError,
+  ExecutionTransportError,
+  type ExecutionClient,
+} from "../execution/ExecutionClient.ts";
 import * as Fork from "../execution/ForkWorkspaceProtocol.ts";
 import * as Assets from "./worker/AssetProtocol.ts";
 
-class SeedTransferError extends Schema.TaggedError<SeedTransferError>()("SeedTransferError", {
-  message: Schema.String,
-}) {}
+export class SeedWorkspaceError extends Schema.TaggedError<SeedWorkspaceError>()(
+  "SeedWorkspaceError",
+  {
+    operation: Schema.String,
+    code: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return `Project seed ${this.operation} failed (${this.code})`;
+  }
+}
+
+const request = <A>(operation: string, run: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) =>
+      new SeedWorkspaceError({
+        operation,
+        code:
+          (cause instanceof ExecutionOperationError || cause instanceof ExecutionTransportError) &&
+          /^[a-z][a-z0-9_]{0,79}$/.test(cause.code)
+            ? cause.code
+            : "request_failed",
+        cause,
+      }),
+  });
+
+export const inspectSeedDestination = (client: Pick<ExecutionClient, "call">, cwd: string) =>
+  request("destination.inspect", () => client.call("git.isRepository", { cwd })).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)),
+  );
 
 /** Each root receives a stable project snapshot, including uncommitted files. */
 export const seedWorkspace = (input: {
@@ -20,28 +53,26 @@ export const seedWorkspace = (input: {
     // Checkpoint refs and atomic import receipts provide retry safety. Transport
     // receipts cannot be reused for temporary exports or failed transfers.
     const checkpointRef = `refs/t3/seeds/${input.key}`;
-    const prepared = yield* Effect.tryPromise(() =>
-      input.destination.call("git.isRepository", { cwd: input.destinationCwd }),
-    ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)));
+    const prepared = yield* inspectSeedDestination(input.destination, input.destinationCwd);
     if (prepared) return;
-    yield* Effect.tryPromise(() =>
+    yield* request("source.checkpoint", () =>
       input.source.call("git.captureCheckpoint", { cwd: input.sourceCwd, checkpointRef }),
     );
-    const bundle = yield* Effect.tryPromise(() =>
+    const bundle = yield* request("source.bundle", () =>
       input.source.call("git.bundleFork", { cwd: input.sourceCwd, checkpointRef }),
     ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Fork.ForkBundle)));
-    const blob = yield* Effect.tryPromise(() =>
+    const blob = yield* request("source.snapshot", () =>
       input.source.call("asset.snapshot", { path: bundle.bundlePath }),
     ).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(Assets.Blob)),
       Effect.ensuring(
-        Effect.tryPromise(() =>
+        request("source.cleanup", () =>
           input.source.call("git.cleanupFork", { bundlePath: bundle.bundlePath }),
         ).pipe(Effect.ignore),
       ),
     );
     for (let offset = 0; ; offset += Assets.CHUNK_BYTES) {
-      const part = yield* Effect.tryPromise(() =>
+      const part = yield* request("source.read", () =>
         input.source.transient("asset.read", {
           blobId: blob.blobId,
           offset,
@@ -50,8 +81,12 @@ export const seedWorkspace = (input: {
         }),
       ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Assets.ReadResult)));
       if (part.offset !== offset || part.size !== blob.size)
-        return yield* new SeedTransferError({ message: "Project seed changed during transfer" });
-      const staged = yield* Effect.tryPromise(() =>
+        return yield* new SeedWorkspaceError({
+          operation: "source.read",
+          code: "snapshot_changed",
+          cause: "Blob size or offset changed during transfer",
+        });
+      const staged = yield* request("destination.stage", () =>
         input.destination.transient("asset.stage", {
           blobId: blob.blobId,
           offset,
@@ -61,10 +96,14 @@ export const seedWorkspace = (input: {
       ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Assets.Staged)));
       if (staged.complete) break;
       if (offset + Assets.CHUNK_BYTES >= blob.size)
-        return yield* new SeedTransferError({ message: "Project seed transfer was not verified" });
+        return yield* new SeedWorkspaceError({
+          operation: "destination.stage",
+          code: "transfer_unverified",
+          cause: "Destination did not verify the complete blob",
+        });
     }
     const { bundlePath: _path, ...snapshot } = bundle;
-    yield* Effect.tryPromise(() =>
+    yield* request("destination.import", () =>
       input.destination.call("git.importFork", {
         ...snapshot,
         cwd: input.destinationCwd,

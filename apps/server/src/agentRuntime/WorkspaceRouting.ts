@@ -1,5 +1,5 @@
 import { withWorkspaceActivity, withWorkspaceObservationActivity } from "./WorkspaceActivity.ts";
-import { seedWorkspace } from "./SeedWorkspace.ts";
+import { inspectSeedDestination, seedWorkspace } from "./SeedWorkspace.ts";
 import * as GitProtocol from "./worker/GitDriverProtocol.ts";
 import { validateCloneSourceUrl } from "./RepositoryUrl.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
@@ -354,9 +354,7 @@ export const layer = Layer.effect(
                 sourceUrl: source.sourceUrl,
               });
               yield* stage("seed", "running");
-              const prepared = yield* Effect.tryPromise(() =>
-                client.call("git.isRepository", { cwd: root.relativeCwd }),
-              ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)));
+              const prepared = yield* inspectSeedDestination(client, root.relativeCwd);
               if (!prepared)
                 yield* seedWorkspace({
                   source: yield* runtime.forWorkspace(source.workspaceId),

@@ -8,6 +8,28 @@ import {
 } from "../../../../packages/contracts/src/execution.ts";
 import { JournalCapacityError, type WorkerJournal } from "./WorkerJournal.ts";
 
+import {
+  VcsProcessExitError,
+  VcsProcessTimeoutError,
+  VcsProcessSpawnError,
+} from "@t3tools/contracts";
+import { WorkspaceExecutionError } from "../agentRuntime/worker/Protocol.ts";
+
+const isWorkspaceExecutionError = Schema.is(WorkspaceExecutionError);
+const isVcsProcessExitError = Schema.is(VcsProcessExitError);
+const isVcsProcessTimeoutError = Schema.is(VcsProcessTimeoutError);
+const isVcsProcessSpawnError = Schema.is(VcsProcessSpawnError);
+
+const operationFailureCode = (error: unknown): string => {
+  if (isWorkspaceExecutionError(error) && /^[a-z][a-z0-9_]{0,79}$/.test(error.code))
+    return error.code;
+  if (isVcsProcessExitError(error))
+    return `vcs_${(error.failureKind ?? "command-failed").replaceAll("-", "_")}`;
+  if (isVcsProcessTimeoutError(error)) return "vcs_timeout";
+  if (isVcsProcessSpawnError(error)) return "vcs_spawn_failed";
+  return "operation_failed";
+};
+
 const decodeExecutionOperationSync = Schema.decodeUnknownSync(ExecutionOperation);
 
 const READ_ONLY_EXECUTION_METHODS = new Set([
@@ -193,8 +215,8 @@ export function createExecutionWorker(options: {
             ok: true,
             value: (await options.execute(operation.method, operation.input)) ?? null,
           };
-        } catch {
-          result = { ok: false, code: "operation_failed" };
+        } catch (error) {
+          result = { ok: false, code: operationFailureCode(error) };
         }
         if (journaled)
           await options.journal.append({ kind: "completed", id: operation.operationId, result });
@@ -305,8 +327,8 @@ export function createExecutionWorker(options: {
             ok: true,
             value: (await options.execute(input.method, input.input)) ?? null,
           });
-        } catch {
-          return Response.json({ ok: false, code: "operation_failed" }, { status: 422 });
+        } catch (error) {
+          return Response.json({ ok: false, code: operationFailureCode(error) }, { status: 422 });
         } finally {
           if (mutation) activeTransient--;
         }
