@@ -24,13 +24,17 @@ jobs:
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+      - name: Download this fork revision
+        env:
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          curl --fail --location --retry 3 \
+            "https://codeload.github.com/$SOURCE_REPOSITORY/tar.gz/$SOURCE_SHA" \
+            --output "$RUNNER_TEMP/t3-source.tar.gz"
+          tar -xzf "$RUNNER_TEMP/t3-source.tar.gz" --strip-components=1 \
+            --exclude='*/.repos' -C "$GITHUB_WORKSPACE"
+          rm "$RUNNER_TEMP/t3-source.tar.gz"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
           buildkitd-config-inline: |
