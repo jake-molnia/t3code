@@ -255,9 +255,15 @@ const layerCore = Layer.effect(
           const opened = yield* Effect.tryPromise(() =>
             client.call("preview.viewerOpen", input),
           ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(P.ViewerRef)));
+          // Worker close gives pending frame ACKs one second; bound the whole remote request too.
           yield* Effect.addFinalizer(() =>
-            Effect.tryPromise(() => client.call("preview.viewerClose", opened)).pipe(Effect.ignore),
+            Effect.tryPromise((signal) =>
+              client.call("preview.viewerClose", opened, undefined, signal),
+            ).pipe(Effect.interruptible, Effect.timeout("2 seconds"), Effect.ignore),
           );
+          const inputLock = yield* Semaphore.make(1);
+          const inputClosed = yield* Deferred.make<void>();
+          yield* Effect.addFinalizer(() => Deferred.succeed(inputClosed, undefined));
           const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>({
             capacity: 8,
           });
@@ -306,10 +312,26 @@ const layerCore = Layer.effect(
           );
           return {
             output,
-            input: (message: unknown) =>
-              Effect.tryPromise(() =>
-                client.transient("preview.viewerInput", { ...opened, message }),
-              ).pipe(Effect.asVoid, Effect.ignore),
+            input: (message: unknown) => {
+              const send = Effect.gen(function* () {
+                if (yield* Deferred.isDone(inputClosed)) return yield* Effect.interrupt;
+                yield* Effect.tryPromise((signal) =>
+                  client.transient("preview.viewerInput", { ...opened, message }, signal),
+                ).pipe(Effect.asVoid, Effect.ignore);
+              });
+              // Dialog replies and control changes must unblock an action waiting on the page.
+              const bypass =
+                typeof message === "object" &&
+                message !== null &&
+                "type" in message &&
+                (message.type === "dialog" ||
+                  message.type === "takeControl" ||
+                  message.type === "releaseControl");
+              return Effect.raceFirst(
+                bypass ? send : inputLock.withPermits(1)(send),
+                Deferred.await(inputClosed).pipe(Effect.andThen(Effect.interrupt)),
+              );
+            },
           };
         }).pipe(Effect.mapError((cause) => new ServerBrowser.ServerBrowserLaunchError({ cause }))),
       answerFileChooser: (input) =>

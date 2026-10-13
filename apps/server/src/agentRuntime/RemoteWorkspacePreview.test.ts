@@ -1,12 +1,15 @@
+// @effect-diagnostics globalFetch:off -- The ordering regression drives real HTTP with a controlled input delay.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { expect, it } from "@effect/vitest";
 import * as C from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -37,6 +40,199 @@ const layer = Layer.mergeAll(
   ServerConfig.layerTest(process.cwd(), { prefix: "remote-preview-" }),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 it.layer(layer, { excludeTestServices: true })("remote browser transport", (it) => {
+  it.effect(
+    "preserves viewer input order across delayed HTTP without blocking dialog or another viewer",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "preview-input-order-" });
+        const journal = yield* Effect.acquireRelease(
+          Effect.tryPromise(() => openWorkerJournal(path.join(root, "journal"))),
+          (value) => Effect.promise(value.close),
+        );
+        const identity = {
+          workspaceId: "ordering",
+          allocationId: "one",
+          generation: 1,
+          incarnation: "one",
+          podUid: "one",
+          protocolVersion: 1,
+        } as const;
+        const token = "ordering-token-longer-than-thirty-two-characters";
+        const received: Array<{ viewerId: string; type: string }> = [];
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const closeEntered = yield* Deferred.make<void>();
+        const closeRelease = yield* Deferred.make<void>();
+        let viewerNumber = 0;
+        let hungCloseAborted = false;
+        const worker = createExecutionWorker({
+          identity,
+          token,
+          journal,
+          execute: async (method, input) => {
+            if (method === "preview.viewerOpen") return { viewerId: String(++viewerNumber) };
+            if (method === "preview.viewerPoll") return { sequence: 0, items: [] };
+            if (method === "preview.viewerInput") {
+              const value = Schema.decodeUnknownSync(
+                Schema.Struct({
+                  viewerId: Schema.String,
+                  message: Schema.Struct({
+                    type: Schema.String,
+                    action: Schema.optional(Schema.String),
+                  }),
+                }),
+              )(input);
+              received.push({
+                viewerId: value.viewerId,
+                type:
+                  value.message.type === "key" ? `key:${value.message.action}` : value.message.type,
+              });
+            }
+            return null;
+          },
+        });
+        const server = yield* Effect.acquireRelease(
+          Effect.tryPromise(() =>
+            listenWorker({ host: "127.0.0.1", port: 0, handle: worker.handle }),
+          ),
+          (value) => Effect.promise(value.close),
+        );
+        const run = yield* captureRunPromise;
+        const client = createExecutionClient({
+          identity,
+          token,
+          endpoint: `http://127.0.0.1:${server.port}`,
+          fetch: async (url, init) => {
+            const operation = Schema.decodeUnknownSync(
+              Schema.Struct({
+                method: Schema.optional(Schema.String),
+                input: Schema.optional(Schema.Unknown),
+              }),
+            )(JSON.parse(String(init?.body ?? "{}")));
+            if (
+              operation.method === "preview.viewerClose" &&
+              Schema.decodeUnknownSync(P.ViewerRef)(operation.input).viewerId === "1"
+            ) {
+              const signal = init?.signal;
+              if (!signal) throw new Error("Close request requires cancellation signal");
+              return new Promise<Response>((_resolve, reject) => {
+                const abort = () => {
+                  hungCloseAborted = true;
+                  reject(new Error("aborted owned close"));
+                };
+                if (signal.aborted) abort();
+                else signal.addEventListener("abort", abort, { once: true });
+              });
+            }
+            if (operation.method === "preview.viewerInput") {
+              const value = Schema.decodeUnknownSync(
+                Schema.Struct({
+                  viewerId: Schema.String,
+                  message: Schema.Struct({
+                    type: Schema.String,
+                    action: Schema.optional(Schema.String),
+                  }),
+                }),
+              )(operation.input);
+              if (value.viewerId === "1" && value.message.type === "text") {
+                await run(Deferred.succeed(entered, undefined));
+                await run(Deferred.await(release));
+              }
+              if (value.viewerId === "1" && value.message.type === "blocked") {
+                await run(Deferred.succeed(closeEntered, undefined));
+                await run(Deferred.await(closeRelease));
+              }
+            }
+            return fetch(url, init);
+          },
+        });
+        const browser = yield* ServerBrowser.ServerBrowser.pipe(
+          Effect.provide(
+            RemotePreview.browserLayer.pipe(
+              Layer.provide(
+                Layer.mock(RuntimeClient.RuntimeClient, {
+                  enabled: true,
+                  observeThread: () => Effect.succeed({ kind: "running", client }),
+                }),
+              ),
+            ),
+          ),
+        );
+        const scope = yield* Scope.fork(yield* Effect.scope);
+        const first = yield* browser
+          .attachViewer({
+            threadId: "thread",
+            tabId: "first",
+            maxWidth: 100,
+            maxHeight: 100,
+            quality: 50,
+            canOperate: true,
+          })
+          .pipe(Effect.provideService(Scope.Scope, scope));
+        const second = yield* browser.attachViewer({
+          threadId: "thread",
+          tabId: "second",
+          maxWidth: 100,
+          maxHeight: 100,
+          quality: 50,
+          canOperate: true,
+        });
+        const text = yield* first
+          .input({ type: "text", text: "new value" })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        const keyDown = yield* first
+          .input({ type: "key", action: "down", key: "Enter" })
+          .pipe(Effect.forkScoped);
+        const keyUp = yield* first
+          .input({ type: "key", action: "up", key: "Enter" })
+          .pipe(Effect.forkScoped);
+        const click = yield* first.input({ type: "mouse", action: "down" }).pipe(Effect.forkScoped);
+        yield* second.input({ type: "key", key: "x", action: "down" });
+        yield* first.input({ type: "dialog", accept: true });
+        yield* first.input({ type: "takeControl" });
+        yield* first.input({ type: "releaseControl" });
+        expect(received).not.toContainEqual({ viewerId: "1", type: "mouse" });
+        expect(received).toContainEqual({ viewerId: "2", type: "key:down" });
+        expect(received).toContainEqual({ viewerId: "1", type: "dialog" });
+        expect(received).toContainEqual({ viewerId: "1", type: "takeControl" });
+        expect(received).toContainEqual({ viewerId: "1", type: "releaseControl" });
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(text);
+        yield* Fiber.join(keyDown);
+        yield* Fiber.join(keyUp);
+        yield* Fiber.join(click);
+        expect(
+          received
+            .filter(
+              (entry) =>
+                entry.viewerId === "1" &&
+                !["dialog", "takeControl", "releaseControl"].includes(entry.type),
+            )
+            .map((entry) => entry.type),
+        ).toEqual(["text", "key:down", "key:up", "mouse"]);
+        const beforeClose = received.length;
+        const blocked = yield* first.input({ type: "blocked" }).pipe(Effect.forkScoped);
+        yield* Deferred.await(closeEntered);
+        const queued = yield* first
+          .input({ type: "text", text: "must not arrive" })
+          .pipe(Effect.forkScoped);
+        const closingAt = yield* Clock.currentTimeMillis;
+        yield* Scope.close(scope, Exit.void);
+        expect((yield* Clock.currentTimeMillis) - closingAt).toBeLessThan(3_000);
+        expect(hungCloseAborted).toBe(true);
+        expect((yield* Fiber.await(blocked))._tag).toBe("Failure");
+        expect((yield* Fiber.await(queued))._tag).toBe("Failure");
+        expect((yield* first.input({ type: "mouse", action: "up" }).pipe(Effect.exit))._tag).toBe(
+          "Failure",
+        );
+        yield* Deferred.succeed(closeRelease, undefined);
+        yield* second.input({ type: "dialog", accept: true });
+        expect(received.slice(beforeClose)).toEqual([{ viewerId: "2", type: "dialog" }]);
+      }),
+  );
   it.effect(
     "bridges real HTTP frames without journaling them and routes automation to the worker broker",
     () =>

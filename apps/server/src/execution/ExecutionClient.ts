@@ -94,13 +94,14 @@ export function createExecutionClient(options: {
       token: options.token,
       identity: options.identity,
     }),
-    async transient(method: string, input: unknown) {
+    async transient(method: string, input: unknown, signal?: AbortSignal) {
       return exchange(
         "/v1/transient",
         {
           method: "POST",
           headers,
           body: JSON.stringify({ identity: options.identity, method, input }),
+          ...(signal ? { signal } : {}),
         },
         operationResult,
         30_000,
@@ -138,13 +139,19 @@ export function createExecutionClient(options: {
         15_000,
       );
     },
-    async call(method: string, input: unknown, operationId: string = NodeCrypto.randomUUID()) {
+    async call(
+      method: string,
+      input: unknown,
+      operationId: string = NodeCrypto.randomUUID(),
+      signal?: AbortSignal,
+    ) {
       return exchange(
         "/v1/operations",
         {
           method: "POST",
           headers,
           body: JSON.stringify({ identity: options.identity, operationId, method, input }),
+          ...(signal ? { signal } : {}),
         },
         operationResult,
       );
