@@ -12,6 +12,8 @@ import * as T3ProjectFileLoader from "../../project/T3ProjectFileLoader.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -143,9 +145,89 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
       });
     }),
   );
-  it.effect.each([false, true])(
-    "copies project files into independent roots and preserves edits on retry (committed remote: %s)",
-    (remote) =>
+  it.effect.each(["fork.lfs.env", "fork.lfs.objects"])(
+    "rejects truncated LFS metadata before publishing a partial manifest (%s)",
+    (operation) =>
+      Effect.gen(function* () {
+        const { fs, path, root, worker } = yield* fixture;
+        yield* worker.execute("git.init", { cwd: "repo" });
+        yield* fs.writeFileString(path.join(root, "repo/file.txt"), "snapshot");
+        yield* worker.execute("git.captureCheckpoint", {
+          cwd: "repo",
+          checkpointRef: "refs/t3/truncated",
+        });
+        const git = yield* GitVcsDriver.GitVcsDriver;
+        let injected = false;
+        const bundles: string[] = [];
+        const fork = yield* makeForkExecutor({ resolve: worker.resolve }).pipe(
+          Effect.provideService(GitVcsDriver.GitVcsDriver, {
+            ...git,
+            execute: (input) => {
+              if (input.operation === "fork.bundle" && input.args[2]) bundles.push(input.args[2]);
+              return git.execute(input).pipe(
+                Effect.map((result) => {
+                  if (input.operation !== operation) return result;
+                  expect(input.maxOutputBytes).toBe(
+                    operation === "fork.lfs.objects" ? 16 * 1024 * 1024 : 64 * 1024,
+                  );
+                  injected = true;
+                  // The prefix is syntactically valid; only the process truncation flag reveals missing metadata.
+                  return { ...result, stdoutTruncated: true };
+                }),
+              );
+            },
+          }),
+        );
+        const error = yield* fork
+          .execute("git.bundleFork", { cwd: "repo", checkpointRef: "refs/t3/truncated" })
+          .pipe(Effect.flip);
+        expect(injected).toBe(true);
+        expect(error).toMatchObject({ code: "lfs_metadata_truncated" });
+        expect(bundles).toHaveLength(1);
+        for (const bundle of bundles) expect(yield* fs.exists(path.dirname(bundle))).toBe(false);
+      }),
+  );
+  it.effect("cleans an interrupted export before the worker scope closes", () =>
+    Effect.gen(function* () {
+      const { fs, path, root, worker } = yield* fixture;
+      yield* worker.execute("git.init", { cwd: "repo" });
+      yield* fs.writeFileString(path.join(root, "repo/file.txt"), "snapshot");
+      yield* worker.execute("git.captureCheckpoint", {
+        cwd: "repo",
+        checkpointRef: "refs/t3/interrupted-export",
+      });
+      const git = yield* GitVcsDriver.GitVcsDriver;
+      const entered = yield* Deferred.make<void>();
+      const bundles: string[] = [];
+      const fork = yield* makeForkExecutor({ resolve: worker.resolve }).pipe(
+        Effect.provideService(GitVcsDriver.GitVcsDriver, {
+          ...git,
+          execute: (input) => {
+            if (input.operation === "fork.bundle" && input.args[2]) bundles.push(input.args[2]);
+            if (input.operation === "fork.lfs.env")
+              return Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never));
+            return git.execute(input);
+          },
+        }),
+      );
+      const pending = yield* fork
+        .execute("git.bundleFork", { cwd: "repo", checkpointRef: "refs/t3/interrupted-export" })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      expect(bundles).toHaveLength(1);
+      for (const bundle of bundles) expect(yield* fs.exists(bundle)).toBe(true);
+      yield* Fiber.interrupt(pending);
+      for (const bundle of bundles) expect(yield* fs.exists(path.dirname(bundle))).toBe(false);
+    }),
+  );
+  it.effect.each([
+    { remote: false, lfs: false },
+    { remote: true, lfs: false },
+    { remote: false, lfs: true },
+    { remote: true, lfs: true },
+  ])(
+    "copies project files and offline LFS snapshots into independent roots (%j)",
+    ({ remote, lfs }) =>
       Effect.gen(function* () {
         const { fs, path, root, worker } = yield* fixture;
         yield* worker.execute("git.init", { cwd: "repo" });
@@ -160,6 +242,24 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
             ["remote", "add", "origin", "https://github.com/example/seed.git"],
           ])
             yield* git.execute({ operation: "seed-test", cwd: path.join(root, "repo"), args });
+        }
+        const lfsSnapshot = "uncommitted-lfs-content".repeat(50_000);
+        if (lfs) {
+          const cwd = path.join(root, "repo");
+          for (const args of [
+            ["config", "user.name", "Test"],
+            ["config", "user.email", "test@example.com"],
+            ["lfs", "install", "--local"],
+            ["lfs", "track", "*.bin"],
+          ])
+            yield* git.execute({ operation: "seed-lfs-init", cwd, args });
+          yield* fs.writeFileString(path.join(cwd, "model.bin"), "committed-lfs-content");
+          for (const args of [
+            ["add", ".gitattributes", "model.bin"],
+            ["commit", "-m", "local LFS base"],
+          ])
+            yield* git.execute({ operation: "seed-lfs-base", cwd, args });
+          yield* fs.writeFileString(path.join(cwd, "model.bin"), lfsSnapshot);
         }
         yield* worker.execute("files.write", {
           cwd: "repo",
@@ -269,6 +369,19 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
               destination.call("files.read", { cwd: "repo", relativePath: "README.md" }),
             ),
           ).toMatchObject({ contents: "named project" });
+          if (lfs) {
+            expect(
+              yield* fs.readFileString(
+                path.join(key === "first" ? firstRoot : secondRoot, "repo/model.bin"),
+              ),
+            ).toBe(lfsSnapshot);
+            const destinationRoot = key === "first" ? firstRoot : secondRoot;
+            const origin = yield* git.readConfigValue(
+              path.join(destinationRoot, "repo"),
+              "remote.origin.url",
+            );
+            expect(origin).toBe(remote ? "https://github.com/example/seed.git" : null);
+          }
           const gitStatus = yield* Effect.tryPromise(() =>
             destination.call("git.status", { cwd: "repo" }),
           ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.toCodecJson(C.VcsStatusResult))));
@@ -307,6 +420,10 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
         expect(yield* fs.readFileString(path.join(interruptedRoot, "repo/README.md"))).toBe(
           "named project",
         );
+        if (lfs)
+          expect(yield* fs.readFileString(path.join(interruptedRoot, "repo/model.bin"))).toBe(
+            lfsSnapshot,
+          );
         yield* fs.writeFileString(path.join(root, "repo/README.md"), "named project");
         yield* Effect.tryPromise(() =>
           first.call("files.write", {

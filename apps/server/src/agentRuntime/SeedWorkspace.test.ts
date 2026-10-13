@@ -1,7 +1,13 @@
+import { CheckpointRef } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { createExecutionClient, ExecutionOperationError } from "../execution/ExecutionClient.ts";
-import { inspectSeedDestination, seedWorkspace, SeedWorkspaceError } from "./SeedWorkspace.ts";
+import {
+  inspectSeedDestination,
+  seedWorkspace,
+  transferForkBundle,
+  SeedWorkspaceError,
+} from "./SeedWorkspace.ts";
 
 const identity = {
   workspaceId: "seed-diagnostics",
@@ -105,4 +111,37 @@ it("retains the original rejection for diagnostics but displays only safe codes"
   );
   expect(error).toMatchObject({ operation: "destination.inspect", code: "request_failed", cause });
   expect(error.message).not.toContain(cause.code);
+});
+
+it("rejects an LFS object whose transferred content digest differs from its pointer", async () => {
+  let staged = 0;
+  const error = await Effect.runPromise(
+    Effect.flip(
+      transferForkBundle({
+        source: {
+          call: async (method) =>
+            method === "asset.snapshot" ? { blobId: "b".repeat(64), size: 0, name: "blob" } : null,
+          transient: async () => ({ data: "", offset: 0, size: 0 }),
+        },
+        destination: {
+          call: async () => null,
+          transient: async () => {
+            staged++;
+            return { complete: true, path: "/staged" };
+          },
+        },
+        bundle: {
+          bundlePath: "/bundle",
+          checkpointRef: CheckpointRef.make("refs/t3/seeds/test"),
+          checkpointOid: "a".repeat(40),
+          baseCommit: null,
+          branch: null,
+          origin: null,
+          lfsObjects: [{ oid: "c".repeat(64), path: "/local-lfs-object" }],
+        },
+      }),
+    ),
+  );
+  expect(error).toMatchObject({ operation: "source.snapshot", code: "lfs_digest_mismatch" });
+  expect(staged).toBe(1);
 });

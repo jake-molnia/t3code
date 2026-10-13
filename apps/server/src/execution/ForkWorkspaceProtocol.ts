@@ -8,6 +8,7 @@ export const ExportFork = Schema.Struct({
 });
 export const ForkBundle = Schema.Struct({
   bundlePath: Schema.String,
+  lfsObjects: Schema.optionalKey(Schema.Array(Schema.Struct({ oid: Digest, path: Schema.String }))),
   checkpointRef: CheckpointRef,
   checkpointOid: Oid,
   baseCommit: Schema.NullOr(Oid),
@@ -17,6 +18,7 @@ export const ForkBundle = Schema.Struct({
 export const ImportFork = Schema.Struct({
   cwd: Schema.NonEmptyString,
   blobId: Digest,
+  lfsObjects: Schema.optionalKey(Schema.Array(Digest)),
   checkpointRef: CheckpointRef,
   checkpointOid: Oid,
   baseCommit: Schema.NullOr(Oid),

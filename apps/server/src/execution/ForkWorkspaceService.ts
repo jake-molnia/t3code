@@ -10,7 +10,7 @@ import * as Routing from "../agentRuntime/WorkspaceRouting.ts";
 import * as Runtime from "../agentRuntime/RuntimeClient.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as Settings from "../serverSettings.ts";
-import * as Assets from "../agentRuntime/worker/AssetProtocol.ts";
+import { transferForkBundle } from "../agentRuntime/SeedWorkspace.ts";
 import * as WorkerProtocol from "../agentRuntime/worker/Protocol.ts";
 import * as P from "./ForkWorkspaceProtocol.ts";
 
@@ -32,9 +32,6 @@ export class ForkWorkspaceService extends Context.Service<
   }
 >()("t3/execution/ForkWorkspaceService") {}
 const decodeBundle = Schema.decodeUnknownEffect(P.ForkBundle);
-const decodeBlob = Schema.decodeUnknownEffect(Assets.Blob);
-const decodeRead = Schema.decodeUnknownEffect(Assets.ReadResult);
-const decodeStaged = Schema.decodeUnknownEffect(Assets.Staged);
 const decodeScript = Schema.decodeUnknownEffect(WorkerProtocol.ScriptResult);
 
 export const layer = Layer.effect(
@@ -81,47 +78,17 @@ export const layer = Layer.effect(
               input: { checkpointRef: checkpoint.ref },
             })
             .pipe(Effect.flatMap(decodeBundle));
-          const blob = yield* Effect.tryPromise(() =>
-            sourceClient.call("asset.snapshot", { path: bundle.bundlePath }),
-          ).pipe(Effect.flatMap(decodeBlob));
-          yield* Effect.tryPromise(() =>
-            sourceClient.call("git.cleanupFork", { bundlePath: bundle.bundlePath }),
-          ).pipe(Effect.ignore);
-          for (let offset = 0; ; offset += Assets.CHUNK_BYTES) {
-            const part = yield* Effect.tryPromise(() =>
-              sourceClient.transient("asset.read", {
-                blobId: blob.blobId,
-                offset,
-                maxBytes: Assets.CHUNK_BYTES,
-                ...(blob.leaseId ? { leaseId: blob.leaseId } : {}),
-              }),
-            ).pipe(Effect.flatMap(decodeRead));
-            if (part.offset !== offset || part.size !== blob.size)
-              return yield* new ForkWorkspaceError({
-                targetThreadId: input.targetThreadId,
-                cause: "Fork bundle changed during transfer",
-              });
-            const staged = yield* Effect.tryPromise(() =>
-              targetClient.transient("asset.stage", {
-                blobId: blob.blobId,
-                offset,
-                size: blob.size,
-                data: part.data,
-              }),
-            ).pipe(Effect.flatMap(decodeStaged));
-            if (staged.complete) break;
-            if (offset + Assets.CHUNK_BYTES >= blob.size)
-              return yield* new ForkWorkspaceError({
-                targetThreadId: input.targetThreadId,
-                cause: "Fork bundle verification did not complete",
-              });
-          }
-          const { bundlePath: _bundlePath, ...snapshot } = bundle;
+          const transferred = yield* transferForkBundle({
+            source: sourceClient,
+            destination: targetClient,
+            bundle,
+          });
+          const { bundlePath: _bundlePath, lfsObjects: _lfsObjects, ...snapshot } = bundle;
           yield* Effect.tryPromise(() =>
             targetClient.call("git.importFork", {
               ...snapshot,
               cwd: destination.relativeCwd,
-              blobId: blob.blobId,
+              ...transferred,
             }),
           );
           if (Option.isNone(projects))

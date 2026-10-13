@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -74,23 +75,93 @@ export const makeForkExecutor = <E>(options: {
               allowNonZeroExit: true,
             });
             const baseCommit = head.exitCode === 0 ? head.stdout.trim() : null;
-            const directory = yield* fs.makeTempDirectory({ prefix: "t3-fork-bundle-" });
-            const bundlePath = path.join(directory, "repository.bundle");
-            exports.add(bundlePath);
-            yield* git.execute({
-              operation: "fork.bundle",
-              cwd,
-              args: ["bundle", "create", bundlePath, "--all", ...(baseCommit ? ["HEAD"] : [])],
-              timeoutMs: 180_000,
-            });
-            return {
-              bundlePath,
-              checkpointRef: input.checkpointRef,
-              checkpointOid: checkpoint.stdout.trim(),
-              baseCommit,
-              branch: branch.exitCode === 0 ? branch.stdout.trim() : null,
-              origin: yield* git.readConfigValue(cwd, "remote.origin.url"),
-            } satisfies typeof P.ForkBundle.Type;
+            return yield* Effect.acquireUseRelease(
+              Effect.gen(function* () {
+                const directory = yield* fs.makeTempDirectory({ prefix: "t3-fork-bundle-" });
+                const bundlePath = path.join(directory, "repository.bundle");
+                exports.add(bundlePath);
+                return { directory, bundlePath };
+              }),
+              ({ bundlePath }) =>
+                Effect.gen(function* () {
+                  yield* git.execute({
+                    operation: "fork.bundle",
+                    cwd,
+                    args: [
+                      "bundle",
+                      "create",
+                      bundlePath,
+                      "--all",
+                      ...(baseCommit ? ["HEAD"] : []),
+                    ],
+                    timeoutMs: 180_000,
+                  });
+                  const lfsObjects: Array<{ oid: string; path: string }> = [];
+                  const seen = new Set<string>();
+                  const environment = yield* git.execute({
+                    operation: "fork.lfs.env",
+                    cwd,
+                    args: ["lfs", "env"],
+                    maxOutputBytes: 64 * 1024,
+                  });
+                  if (environment.stdoutTruncated)
+                    return yield* new WorkspaceExecutionError({ code: "lfs_metadata_truncated" });
+                  const mediaDirectory = environment.stdout
+                    .split("\n")
+                    .find((line) => line.startsWith("LocalMediaDir="))
+                    ?.slice("LocalMediaDir=".length);
+                  for (const ref of new Set([
+                    input.checkpointRef,
+                    ...(baseCommit ? [baseCommit] : []),
+                  ])) {
+                    const objects = yield* git.execute({
+                      operation: "fork.lfs.objects",
+                      cwd,
+                      args: ["lfs", "ls-files", "--long", ref],
+                      maxOutputBytes: 16 * 1024 * 1024,
+                    });
+                    if (objects.stdoutTruncated)
+                      return yield* new WorkspaceExecutionError({ code: "lfs_metadata_truncated" });
+                    for (const line of objects.stdout.split("\n")) {
+                      const oid = /^([a-f0-9]{64}) [*-] /.exec(line)?.[1];
+                      if (!oid || seen.has(oid)) continue;
+                      seen.add(oid);
+                      if (!mediaDirectory)
+                        return yield* new WorkspaceExecutionError({
+                          code: "lfs_storage_unavailable",
+                        });
+                      const objectPath = path.join(
+                        mediaDirectory,
+                        oid.slice(0, 2),
+                        oid.slice(2, 4),
+                        oid,
+                      );
+                      // Unhydrated pointers may still resolve from the original remote on import.
+                      if (yield* fs.exists(objectPath)) lfsObjects.push({ oid, path: objectPath });
+                    }
+                  }
+                  return {
+                    bundlePath,
+                    ...(lfsObjects.length > 0 ? { lfsObjects } : {}),
+                    checkpointRef: input.checkpointRef,
+                    checkpointOid: checkpoint.stdout.trim(),
+                    baseCommit,
+                    branch: branch.exitCode === 0 ? branch.stdout.trim() : null,
+                    origin: yield* git.readConfigValue(cwd, "remote.origin.url"),
+                  } satisfies typeof P.ForkBundle.Type;
+                }),
+              ({ directory, bundlePath }, exit) =>
+                Exit.isSuccess(exit)
+                  ? Effect.void
+                  : fs.remove(directory, { recursive: true, force: true }).pipe(
+                      Effect.tap(() =>
+                        Effect.sync(() => {
+                          exports.delete(bundlePath);
+                        }),
+                      ),
+                      Effect.ignore,
+                    ),
+            );
           }
           if (method === "git.importFork") {
             const input = yield* decodeImport(raw);
@@ -129,6 +200,31 @@ export const makeForkExecutor = <E>(options: {
             });
             if (imported.stdout.trim() !== input.checkpointOid)
               return yield* new WorkspaceExecutionError({ code: "fork_checkpoint_mismatch" });
+            if (input.origin)
+              yield* git.execute({
+                operation: "fork.origin",
+                cwd: staging,
+                args: ["remote", "set-url", "origin", input.origin],
+              });
+            else
+              yield* git.execute({
+                operation: "fork.origin",
+                cwd: staging,
+                args: ["remote", "remove", "origin"],
+              });
+            for (const oid of input.lfsObjects ?? []) {
+              const destination = path.join(
+                staging,
+                ".git",
+                "lfs",
+                "objects",
+                oid.slice(0, 2),
+                oid.slice(2, 4),
+                oid,
+              );
+              yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
+              yield* fs.copyFile(blobPath(config.stateDir, oid), destination);
+            }
             if (input.baseCommit)
               yield* git.execute({
                 operation: "fork.checkout-base",
@@ -149,18 +245,6 @@ export const makeForkExecutor = <E>(options: {
               checkpointRef: input.checkpointRef,
               fallbackToHead: false,
             });
-            if (input.origin)
-              yield* git.execute({
-                operation: "fork.origin",
-                cwd: staging,
-                args: ["remote", "set-url", "origin", input.origin],
-              });
-            else
-              yield* git.execute({
-                operation: "fork.origin",
-                cwd: staging,
-                args: ["remote", "remove", "origin"],
-              });
             yield* fs.writeFileString(
               path.join(staging, ".git", "t3-fork.json"),
               yield* encodeReceipt({ blobId: input.blobId, checkpointOid: input.checkpointOid }),
