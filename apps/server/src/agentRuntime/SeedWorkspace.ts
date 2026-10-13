@@ -111,6 +111,8 @@ export const seedWorkspace = (input: {
   sourceCwd: string;
   destinationCwd: string;
   key: string;
+  checkoutBranch?: string;
+  checkoutRef?: string;
 }) =>
   Effect.gen(function* () {
     // Checkpoint refs and atomic import receipts provide retry safety. Transport
@@ -122,7 +124,12 @@ export const seedWorkspace = (input: {
       input.source.call("git.captureCheckpoint", { cwd: input.sourceCwd, checkpointRef }),
     );
     const bundle = yield* request("source.bundle", () =>
-      input.source.call("git.bundleFork", { cwd: input.sourceCwd, checkpointRef }),
+      input.source.call("git.bundleFork", {
+        cwd: input.sourceCwd,
+        checkpointRef,
+        ...(input.checkoutBranch ? { checkoutBranch: input.checkoutBranch } : {}),
+        ...(input.checkoutRef ? { checkoutRef: input.checkoutRef } : {}),
+      }),
     ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Fork.ForkBundle)));
     const transferred = yield* transferForkBundle({ ...input, bundle });
     const { bundlePath: _path, lfsObjects: _lfsObjects, ...snapshot } = bundle;

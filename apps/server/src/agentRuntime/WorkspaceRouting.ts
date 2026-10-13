@@ -362,6 +362,8 @@ export const layer = Layer.effect(
                   sourceCwd: source.relativeCwd,
                   destinationCwd: root.relativeCwd,
                   key: root.relativeCwd.slice(0, root.relativeCwd.indexOf("/")),
+                  ...(input.branch ? { checkoutBranch: input.branch } : {}),
+                  ...(input.refName ? { checkoutRef: input.refName } : {}),
                 });
               yield* stage("seed", prepared ? "skipped" : "done");
               yield* stage("checkout", "running");

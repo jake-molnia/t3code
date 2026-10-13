@@ -221,13 +221,18 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
     }),
   );
   it.effect.each([
-    { remote: false, lfs: false },
-    { remote: true, lfs: false },
-    { remote: false, lfs: true },
-    { remote: true, lfs: true },
+    { remote: false, lfs: false, checkout: false, selection: "local" },
+    { remote: true, lfs: false, checkout: false, selection: "local" },
+    { remote: false, lfs: true, checkout: false, selection: "local" },
+    { remote: true, lfs: true, checkout: false, selection: "local" },
+    { remote: false, lfs: true, checkout: true, selection: "local" },
+    { remote: false, lfs: false, checkout: true, selection: "local" },
+    { remote: true, lfs: true, checkout: true, selection: "remote" },
+    { remote: true, lfs: false, checkout: true, selection: "remote" },
+    { remote: false, lfs: true, checkout: true, selection: "detached" },
   ])(
     "copies project files and offline LFS snapshots into independent roots (%j)",
-    ({ remote, lfs }) =>
+    ({ remote, lfs, checkout, selection }) =>
       Effect.gen(function* () {
         const { fs, path, root, worker } = yield* fixture;
         yield* worker.execute("git.init", { cwd: "repo" });
@@ -259,7 +264,82 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
             ["commit", "-m", "local LFS base"],
           ])
             yield* git.execute({ operation: "seed-lfs-base", cwd, args });
+          if (checkout) {
+            const initialBranch = (yield* git.execute({
+              operation: "seed-lfs-initial-branch",
+              cwd,
+              args: ["branch", "--show-current"],
+            })).stdout.trim();
+            yield* git.execute({
+              operation: "seed-lfs-other-branch",
+              cwd,
+              args: ["checkout", "-b", "lfs-selected"],
+            });
+            yield* fs.writeFileString(
+              path.join(cwd, "branch-only.bin"),
+              "local-only-selected-branch-object",
+            );
+            for (const args of [
+              ["add", "branch-only.bin"],
+              ["commit", "-m", "selected LFS branch"],
+              ["checkout", initialBranch],
+            ])
+              yield* git.execute({ operation: "seed-lfs-other-branch", cwd, args });
+          }
           yield* fs.writeFileString(path.join(cwd, "model.bin"), lfsSnapshot);
+        }
+        if (checkout && !lfs) {
+          const cwd = path.join(root, "repo");
+          for (const args of [
+            ["config", "user.name", "Test"],
+            ["config", "user.email", "test@example.com"],
+            ["commit", "--allow-empty", "-m", "plain base"],
+          ])
+            yield* git.execute({ operation: "seed-local-branch-base", cwd, args });
+          const initialBranch = (yield* git.execute({
+            operation: "seed-local-branch-name",
+            cwd,
+            args: ["branch", "--show-current"],
+          })).stdout.trim();
+          yield* git.execute({
+            operation: "seed-local-branch-create",
+            cwd,
+            args: ["checkout", "-b", "lfs-selected"],
+          });
+          yield* fs.writeFileString(
+            path.join(cwd, "branch-only.txt"),
+            "local-only-selected-branch-object",
+          );
+          for (const args of [
+            ["add", "branch-only.txt"],
+            ["commit", "-m", "plain selected branch"],
+            ["checkout", initialBranch],
+          ])
+            yield* git.execute({ operation: "seed-local-branch", cwd, args });
+        }
+        let selectedRef = "lfs-selected";
+        let selectedCommit: string | undefined;
+        if (checkout) {
+          const cwd = path.join(root, "repo");
+          selectedCommit = (yield* git.execute({
+            operation: "seed-selection-commit",
+            cwd,
+            args: ["rev-parse", "lfs-selected"],
+          })).stdout.trim();
+          if (selection === "remote") {
+            selectedRef = "origin/remote-only";
+            yield* git.execute({
+              operation: "seed-selection-remote",
+              cwd,
+              args: ["update-ref", "refs/remotes/origin/remote-only", selectedCommit],
+            });
+          } else if (selection === "detached") selectedRef = selectedCommit;
+          if (selection !== "local")
+            yield* git.execute({
+              operation: "seed-selection-remove-local",
+              cwd,
+              args: ["branch", "-D", "lfs-selected"],
+            });
         }
         yield* worker.execute("files.write", {
           cwd: "repo",
@@ -353,6 +433,18 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
             sourceCwd: "repo",
             destinationCwd: "repo",
             key,
+            checkoutBranch:
+              checkout && selection === "local" && key === "second"
+                ? "lfs-selected"
+                : `thread-${key}`,
+            ...(checkout
+              ? {
+                  checkoutRef:
+                    selection === "local" && key === "second"
+                      ? "missing-ignored-base"
+                      : selectedRef,
+                }
+              : {}),
           });
           expect(
             yield* Effect.tryPromise(() => destination.call("git.isRepository", { cwd: "repo" })),
@@ -360,7 +452,18 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
           yield* Effect.tryPromise(() =>
             destination.call("workspace.prepare", {
               cwd: "repo",
-              branch: `thread-${key}`,
+              branch:
+                checkout && selection === "local" && key === "second"
+                  ? "lfs-selected"
+                  : `thread-${key}`,
+              ...(checkout
+                ? {
+                    refName:
+                      selection === "local" && key === "second"
+                        ? "missing-ignored-base"
+                        : selectedRef,
+                  }
+                : {}),
               ...(remote ? { sourceUrl: "https://github.com/example/seed.git" } : {}),
             }),
           );
@@ -381,6 +484,22 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
               "remote.origin.url",
             );
             expect(origin).toBe(remote ? "https://github.com/example/seed.git" : null);
+          }
+          if (checkout) {
+            const head = yield* git.execute({
+              operation: "seed-selected-head",
+              cwd: path.join(key === "first" ? firstRoot : secondRoot, "repo"),
+              args: ["rev-parse", "HEAD"],
+            });
+            expect(head.stdout.trim()).toBe(selectedCommit);
+            expect(
+              yield* fs.readFileString(
+                path.join(
+                  key === "first" ? firstRoot : secondRoot,
+                  lfs ? "repo/branch-only.bin" : "repo/branch-only.txt",
+                ),
+              ),
+            ).toBe("local-only-selected-branch-object");
           }
           const gitStatus = yield* Effect.tryPromise(() =>
             destination.call("git.status", { cwd: "repo" }),

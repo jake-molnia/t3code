@@ -75,6 +75,55 @@ export const makeForkExecutor = <E>(options: {
               allowNonZeroExit: true,
             });
             const baseCommit = head.exitCode === 0 ? head.stdout.trim() : null;
+            let checkoutRevision = input.checkoutRef;
+            if (input.checkoutBranch) {
+              const exists = yield* git.execute({
+                operation: "fork.checkout-branch",
+                cwd,
+                args: [
+                  "show-ref",
+                  "--verify",
+                  "--quiet",
+                  "--",
+                  `refs/heads/${input.checkoutBranch}`,
+                ],
+                allowNonZeroExit: true,
+              });
+              if (exists.exitCode === 0) checkoutRevision = `refs/heads/${input.checkoutBranch}`;
+              else if (exists.exitCode !== 1)
+                return yield* new WorkspaceExecutionError({
+                  code: "checkout_branch_lookup_failed",
+                });
+            }
+            const checkoutCommit = checkoutRevision
+              ? (yield* git.execute({
+                  operation: "fork.checkout-ref",
+                  cwd,
+                  args: [
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    `${checkoutRevision}^{commit}`,
+                  ],
+                })).stdout.trim()
+              : null;
+            const symbolicCheckout = checkoutRevision
+              ? (yield* git.execute({
+                  operation: "fork.checkout-symbolic-ref",
+                  cwd,
+                  args: [
+                    "rev-parse",
+                    "--symbolic-full-name",
+                    "--verify",
+                    "--end-of-options",
+                    checkoutRevision,
+                  ],
+                  allowNonZeroExit: true,
+                })).stdout.trim()
+              : "";
+            const checkoutRef = symbolicCheckout.startsWith("refs/remotes/")
+              ? symbolicCheckout
+              : undefined;
             return yield* Effect.acquireUseRelease(
               Effect.gen(function* () {
                 const directory = yield* fs.makeTempDirectory({ prefix: "t3-fork-bundle-" });
@@ -93,6 +142,7 @@ export const makeForkExecutor = <E>(options: {
                       bundlePath,
                       "--all",
                       ...(baseCommit ? ["HEAD"] : []),
+                      ...(checkoutCommit ? [checkoutCommit] : []),
                     ],
                     timeoutMs: 180_000,
                   });
@@ -113,6 +163,7 @@ export const makeForkExecutor = <E>(options: {
                   for (const ref of new Set([
                     input.checkpointRef,
                     ...(baseCommit ? [baseCommit] : []),
+                    ...(checkoutCommit ? [checkoutCommit] : []),
                   ])) {
                     const objects = yield* git.execute({
                       operation: "fork.lfs.objects",
@@ -142,6 +193,8 @@ export const makeForkExecutor = <E>(options: {
                   }
                   return {
                     bundlePath,
+                    ...(checkoutCommit ? { checkoutCommit } : {}),
+                    ...(checkoutRef ? { checkoutRef } : {}),
                     ...(lfsObjects.length > 0 ? { lfsObjects } : {}),
                     checkpointRef: input.checkpointRef,
                     checkpointOid: checkpoint.stdout.trim(),
@@ -191,7 +244,14 @@ export const makeForkExecutor = <E>(options: {
             yield* git.execute({
               operation: "fork.fetch-checkpoint",
               cwd: staging,
-              args: ["fetch", "--", bundle, `${input.checkpointRef}:${input.checkpointRef}`],
+              args: [
+                "fetch",
+                "--update-head-ok",
+                "--",
+                bundle,
+                `${input.checkpointRef}:${input.checkpointRef}`,
+                "+refs/heads/*:refs/heads/*",
+              ],
             });
             const imported = yield* git.execute({
               operation: "fork.verify-checkpoint",
@@ -212,6 +272,15 @@ export const makeForkExecutor = <E>(options: {
                 cwd: staging,
                 args: ["remote", "remove", "origin"],
               });
+            if (input.checkoutRef) {
+              if (!input.checkoutCommit)
+                return yield* new WorkspaceExecutionError({ code: "checkout_commit_missing" });
+              yield* git.execute({
+                operation: "fork.import-checkout-ref",
+                cwd: staging,
+                args: ["update-ref", "--", input.checkoutRef, input.checkoutCommit],
+              });
+            }
             for (const oid of input.lfsObjects ?? []) {
               const destination = path.join(
                 staging,
