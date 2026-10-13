@@ -49,7 +49,6 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
@@ -209,11 +208,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     prefix: "provider-instance-registry-test",
   }).pipe(
     Layer.provideMerge(NodeServices.layer),
-    Layer.provideMerge(
-      Layer.mock(CodexInstallation.CodexInstallation)({
-        managedDirectory: "unused-managed-installation",
-      }),
-    ),
+    Layer.provideMerge(Layer.mock(CodexInstallation.CodexInstallation)({})),
     Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
     Layer.provideMerge(
       Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
@@ -586,11 +581,7 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
   const layerInfra = OpenCodeRuntime.layer.pipe(
     Layer.provide(OpenCodeServerLedger.layerTest),
     Layer.provideMerge(NodeServices.layer),
-    Layer.provideMerge(
-      Layer.mock(CodexInstallation.CodexInstallation)({
-        managedDirectory: "unused-managed-installation",
-      }),
-    ),
+    Layer.provideMerge(Layer.mock(CodexInstallation.CodexInstallation)({})),
     Layer.provideMerge(
       Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
         getEnvironmentId: Effect.succeed(
@@ -599,7 +590,7 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
       }),
     ),
   );
-  const layerBaseDeps = AntigravityInstallation.AntigravityInstallation.layer.pipe(
+  const layerBaseDeps = Layer.empty.pipe(
     Layer.provideMerge(ServerSecretStore.layer),
     Layer.provideMerge(
       ServerConfig.layerTest(process.cwd(), {

@@ -103,18 +103,6 @@ describe("searchSettings", () => {
     ).toEqual(["network-access", "connections-environment"]);
   });
 
-  it("finds settings that used to be reachable only through their section", () => {
-    expect(searchSettings("pull request template")[0]?.id).toBe("follow-change-request-templates");
-    expect(searchSettings("git security keys")[0]?.id).toBe("git-fetch-interval");
-    expect(searchSettings("push notifications")[0]?.id).toBe("publish-agent-activity");
-    expect(searchSettings("battery saver")[0]?.id).toBe("background-activity");
-    expect(searchSettings("binary path")[0]?.id).toBe("providers");
-    expect(searchSettings("Antigravity")[0]?.id).toBe("providers");
-    expect(searchSettings("Google sign in")[0]?.id).toBe("providers");
-    expect(searchSettings("authorized clients")[0]?.id).toBe("connections-environment");
-    expect(searchSettings("administrative access")[0]?.id).toBe("connections-environment");
-  });
-
   it("lists thread confirmations in panel order", () => {
     expect(searchSettings("confirmation").map((item) => item.id)).toEqual([
       "unpin-confirmation",
@@ -339,27 +327,6 @@ describe("searchSettings", () => {
     });
   });
 
-  it("routes conditional window capture settings to the stable toggle row", () => {
-    const targets = [
-      "capture accessibility data",
-      "capture shortcut",
-      "capture sound",
-      "capture flash",
-      "capture animations",
-    ].map((query) => {
-      const match = searchSettings(query)[0];
-      return [match?.id, match?.targetId];
-    });
-
-    expect(targets).toEqual([
-      ["snap-shot-accessibility", "snap-shot-enabled"],
-      ["snap-shot-shortcut", "snap-shot-enabled"],
-      ["snap-shot-sound", "snap-shot-enabled"],
-      ["snap-shot-flash", "snap-shot-enabled"],
-      ["snap-shot-animations", "snap-shot-enabled"],
-    ]);
-  });
-
   it("routes browser recording quality to integrations", () => {
     const result = searchSettings("recording frame rate")[0];
     expect(result).toMatchObject({
@@ -467,7 +434,7 @@ describe("settings search targets", () => {
   });
 
   it("keeps environment-wide settings out of project scopes", () => {
-    const updates = getSettingsSearchTargetScope("provider-update-checks")!;
+    const updates = getSettingsSearchTargetScope("git-fetch-interval")!;
     expect(updates.scope).toBe("environment-defaults");
     expect(isSettingsSearchScopeAvailable(updates.scope, "environment")).toBe(true);
     expect(isSettingsSearchScopeAvailable(updates.scope, "all")).toBe(true);

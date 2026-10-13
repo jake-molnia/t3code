@@ -20,6 +20,7 @@ export const appendUserInputAttachmentPaths = Effect.fn("appendUserInputAttachme
     answers: ProviderUserInputAnswers;
     attachmentsByQuestionId?: UserInputAttachments | undefined;
     attachmentsDir: string;
+    stagedPaths?: ReadonlyMap<string, string> | undefined;
   }) {
     const answers = new Map(Object.entries(input.answers));
     const fs = yield* FileSystem.FileSystem;
@@ -27,19 +28,22 @@ export const appendUserInputAttachmentPaths = Effect.fn("appendUserInputAttachme
       if (attachments.length === 0) continue;
       const references: string[] = [];
       for (const attachment of attachments) {
-        const path = resolveAttachmentPath({ attachmentsDir: input.attachmentsDir, attachment });
+        const path = input.stagedPaths
+          ? input.stagedPaths.get(attachment.id)
+          : resolveAttachmentPath({ attachmentsDir: input.attachmentsDir, attachment });
         if (
           !path ||
-          !(yield* fs.exists(path).pipe(
-            Effect.mapError(
-              (cause) =>
-                new UserInputAttachmentError({
-                  operation: "respondToUserInput",
-                  issue: `Could not access attachment '${attachment.name}'.`,
-                  cause,
-                }),
-            ),
-          ))
+          (!input.stagedPaths &&
+            !(yield* fs.exists(path).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new UserInputAttachmentError({
+                    operation: "respondToUserInput",
+                    issue: `Could not access attachment '${attachment.name}'.`,
+                    cause,
+                  }),
+              ),
+            )))
         ) {
           return yield* new UserInputAttachmentError({
             operation: "respondToUserInput",

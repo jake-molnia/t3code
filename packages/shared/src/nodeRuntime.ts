@@ -7,12 +7,7 @@ import * as Schema from "effect/Schema";
 import * as HostProcess from "./HostProcess.ts";
 import { CommandResolutionCache, resolveCommandPath } from "./shell.ts";
 
-const NodeRuntimeFeature = Schema.Literals([
-  "Local device support",
-  "Device automation",
-  "Antigravity",
-  "Antigravity sign-in",
-]);
+const NodeRuntimeFeature = Schema.Literals(["Local device support", "Device automation"]);
 
 export const nodeRuntimeUnavailableMessage = (feature: typeof NodeRuntimeFeature.Type): string =>
   `${feature} requires Node.js. Install Node.js and make sure node is on PATH, then retry.`;
@@ -45,6 +40,16 @@ export interface SelfInvocation {
  * assemble the pair themselves.
  */
 export const resolveSelfInvocation = Effect.fn("nodeRuntime.resolveSelfInvocation")(function* () {
+  const environment = yield* HostProcess.Environment;
+  if (environment.T3_ACP_MCP_NODE) {
+    const path = yield* Path.Path;
+    return {
+      command: environment.T3_ACP_MCP_NODE,
+      entrypoint: environment.T3_ACP_MCP_ENTRYPOINT
+        ? path.resolve(environment.T3_ACP_MCP_ENTRYPOINT)
+        : undefined,
+    } satisfies SelfInvocation;
+  }
   const command = yield* HostProcess.ExecutablePath;
   if (yield* HostProcess.IsExecutable)
     return { command, entrypoint: undefined } satisfies SelfInvocation;

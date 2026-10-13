@@ -28,6 +28,7 @@ export function PreviewEmptyState({
 }: Props) {
   const servers = useDiscoveredLocalServers({
     environmentId,
+    threadId: threadRef.threadId,
     configuredUrls,
   });
   const recents = recentEntries.filter((entry) => URL.canParse(entry.url)).slice(0, 8);

@@ -1,3 +1,4 @@
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -142,7 +143,11 @@ function makeLayer(input: {
   );
 
   const layer = BitbucketApi.layer.pipe(
-    Layer.provide(ServerSourceControlHost.layer),
+    Layer.provide(
+      ServerSourceControlHost.layer.pipe(
+        Layer.provide(RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
+      ),
+    ),
     Layer.provide(Layer.mock(VcsProcess.VcsProcess)({})),
     Layer.provide(
       Layer.succeed(

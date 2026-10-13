@@ -21,6 +21,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Duration from "effect/Duration";
 import * as Layer from "effect/Layer";
 import * as RpcTest from "effect/rpc/RpcTest";
 
@@ -89,15 +90,9 @@ describe("RPC authorization scopes", () => {
     );
   });
 
-  it("separates ACP Registry discovery from provisioning", () => {
+  it("separates ACP Registry discovery from account authorization", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.serverSearchAcpRegistry)).toBe(
       AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverPrepareAcpRegistryAgent)).toBe(
-      AuthProvidersManageScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverUninstallAcpRegistryManagedBinary)).toBe(
-      AuthProvidersManageScope,
     );
     expect(requiredScopeForRpcMethod(WS_METHODS.serverAcceptAcpRegistryUrlAuth)).toBe(
       AuthProvidersManageScope,
@@ -275,6 +270,34 @@ describe("settings mutation authorization", () => {
     operation: "remove" as const,
     instanceId: ProviderInstanceId.make("codex_work"),
   };
+
+  it.effect("authorizes decoded duration settings without decoding their wire values again", () =>
+    Effect.gen(function* () {
+      let handled = 0;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.serverUpdateSettings, (input) =>
+              Effect.sync(() => {
+                expect(input.patch.automaticGitFetchInterval).toEqual(Duration.millis(15000));
+                expect(input.patch.providerHealthRefreshInterval).toEqual(Duration.millis(60000));
+                handled++;
+                return DEFAULT_SERVER_SETTINGS;
+              }),
+            ),
+            RpcAuthorization.layer([AuthSettingsWriteScope]),
+          ),
+        ),
+      );
+      yield* client[WS_METHODS.serverUpdateSettings]({
+        patch: {
+          automaticGitFetchInterval: Duration.millis(15000),
+          providerHealthRefreshInterval: Duration.millis(60000),
+        },
+      });
+      expect(handled).toBe(1);
+    }).pipe(Effect.scoped),
+  );
 
   it.effect("allows provider-only mutations while denying mixed settings without their grant", () =>
     Effect.gen(function* () {

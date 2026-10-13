@@ -1,3 +1,6 @@
+import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
+import { harnessDefaults } from "../execution/HarnessDefaults.ts";
+import * as HistorySources from "./UsageHistorySources.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real
 // transcript trees on disk, outside the service's Effect FileSystem.
 import * as NodeChildProcess from "node:child_process";
@@ -38,7 +41,6 @@ import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain"
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import * as AntigravityUsage from "../provider/Drivers/AntigravityUsage.ts";
 import * as ProviderHostLive from "../provider/ProviderHostLive.ts";
 import { totalTokens, type UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as UsageService from "./UsageService.ts";
@@ -128,7 +130,6 @@ const layerService = (input: {
   layerCursorUsageAccounts(
     CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer)),
   ).pipe(
-    Layer.provideMerge(AntigravityUsage.layer),
     Layer.provideMerge(ProviderHostLive.layer),
     Layer.provideMerge(Layer.mock(BackgroundPolicy.BackgroundPolicy)({})),
     Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
@@ -157,7 +158,6 @@ const layerService = (input: {
         GROK_HOME: NodePath.join(input.home, "grok"),
         PI_CODING_AGENT_DIR: NodePath.join(input.home, "pi"),
         OPENCODE_DATA_DIR: NodePath.join(input.home, "opencode"),
-        ANTIGRAVITY_DATA_DIR: NodePath.join(input.home, "antigravity"),
         XDG_CONFIG_HOME: NodePath.join(input.home, "config"),
         APPDATA: NodePath.join(input.home, "config"),
         ...input.environment,
@@ -521,6 +521,117 @@ describe("UsageService", () => {
         Effect.provide(layerService({ prefix: "usage-pi-malformed", home, settings })),
       );
     }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "scans deployed Pi homes with the same overrides as launch without authorizing implicit providers",
+    () =>
+      Effect.gen(function* () {
+        const { home, settings } = yield* setup;
+        const stateDir = NodePath.join(home, ".t3-worker");
+        const secret = "operator-key-never-persisted";
+        for (const scenario of [
+          "deployed-default",
+          "explicit-instance",
+          "explicit-operator",
+        ] as const) {
+          const expectedAgentDir =
+            scenario === "deployed-default"
+              ? NodePath.join(stateDir, "harnesses/pi")
+              : NodePath.join(home, scenario);
+          const instances =
+            scenario === "deployed-default"
+              ? settings.providerInstances
+              : {
+                  ...settings.providerInstances,
+                  [ProviderInstanceId.make("pi")]: {
+                    driver: ProviderDriverKind.make("pi"),
+                    environment: [
+                      {
+                        name: "PI_CODING_AGENT_DIR",
+                        value: NodePath.join(home, "explicit-instance"),
+                        sensitive: false,
+                      },
+                    ],
+                  },
+                };
+          const operator = harnessDefaults(
+            JSON.stringify({
+              ...(scenario === "explicit-instance"
+                ? {}
+                : {
+                    pi: {
+                      environment: [
+                        {
+                          name: "PI_CODING_AGENT_DIR",
+                          value:
+                            scenario === "deployed-default"
+                              ? "${T3_HARNESS_STATE_DIR}/pi"
+                              : expectedAgentDir,
+                          sensitive: false,
+                        },
+                      ],
+                    },
+                  }),
+              codex: {
+                environment: [
+                  { name: "OPENAI_API_KEY", value: "${APERTURE_API_KEY}", sensitive: true },
+                ],
+              },
+            }),
+            {
+              APERTURE_UPSTREAM: "http://aperture",
+              APERTURE_API_KEY: secret,
+              T3_HARNESS_STATE_DIR: NodePath.join(stateDir, "harnesses"),
+            },
+          );
+          const rawBefore = JSON.stringify(instances);
+          const sessionDir = NodePath.join(expectedAgentDir, "sessions");
+          yield* Effect.promise(async () => {
+            await NodeFSP.mkdir(sessionDir, { recursive: true });
+            await NodeFSP.writeFile(
+              NodePath.join(sessionDir, "session.jsonl"),
+              [
+                { type: "session", id: scenario },
+                {
+                  type: "usage",
+                  id: scenario,
+                  timestamp: "2026-08-01T10:00:00Z",
+                  provider: "aperture",
+                  model: "gpt-6-luna",
+                  usage: { input: 123, output: 7 },
+                },
+              ]
+                .map((line) => encodeUnknownJsonString(line))
+                .join("\n") + "\n",
+            );
+          });
+          yield* Effect.gen(function* () {
+            const service = yield* UsageService.make;
+            const history = yield* service.readHistory;
+            const pi = history.find((source) => source.provider === "pi");
+            assert.strictEqual(pi?.dir, sessionDir);
+            assert.strictEqual(pi?.files?.[0]?.records[0]?.totals.uncachedInputTokens, 123);
+            assert.strictEqual(pi?.files?.[0]?.records[0]?.sessionId, scenario);
+            assert.strictEqual(JSON.stringify(instances), rawBefore);
+            assert.isFalse(JSON.stringify(instances).includes(secret));
+          }).pipe(
+            Effect.scoped,
+            Effect.provide(
+              layerService({
+                prefix: scenario,
+                home,
+                settings: { ...settings, providerInstances: instances },
+                environment: {
+                  APERTURE_UPSTREAM: "http://aperture",
+                  PI_CODING_AGENT_DIR: NodePath.join(home, "wrong-host-dir"),
+                },
+              }),
+            ),
+            Effect.provideService(ProviderConfigurationOverrides, operator),
+          );
+        }
+      }).pipe(Effect.scoped),
   );
 
   it.live("discovers Pi history in its default home and directory overrides", () =>
@@ -1006,60 +1117,6 @@ describe("UsageService", () => {
           1,
         );
       }).pipe(Effect.scoped),
-  );
-
-  it.live("counts aliased OpenCode and Antigravity directories once", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      const opencode = NodePath.join(home, "opencode-store");
-      const opencodeAlias = NodePath.join(home, "opencode-alias");
-      const conversations = NodePath.join(home, "antigravity-conversations");
-      const antigravityA = NodePath.join(home, "antigravity-a");
-      const antigravityB = NodePath.join(home, "antigravity-b");
-      yield* Effect.promise(async () => {
-        await NodeFSP.mkdir(opencode);
-        await NodeFSP.symlink(opencode, opencodeAlias, "junction");
-        await NodeFSP.mkdir(conversations);
-        await NodeFSP.mkdir(antigravityA);
-        await NodeFSP.mkdir(antigravityB);
-        await NodeFSP.symlink(
-          conversations,
-          NodePath.join(antigravityA, "conversations"),
-          "junction",
-        );
-        await NodeFSP.symlink(
-          conversations,
-          NodePath.join(antigravityB, "conversations"),
-          "junction",
-        );
-      });
-      const service = yield* UsageService.make.pipe(
-        Effect.provide(
-          layerService({
-            prefix: "usage-service-aliased-roots-test",
-            home,
-            settings,
-            environment: {
-              OPENCODE_DATA_DIR: `${opencode},${opencodeAlias}`,
-              ANTIGRAVITY_DATA_DIR: `${antigravityA},${antigravityB}`,
-            },
-          }),
-        ),
-      );
-      const summary = yield* service.readSummary(WINDOW);
-      const sourcesFor = (provider: "opencode" | "antigravity") =>
-        summary.sources.filter((source) => source.fingerprint.provider === provider);
-      assert.strictEqual(sourcesFor("opencode").length, 1);
-      assert.strictEqual(sourcesFor("antigravity").length, 1);
-      assert.strictEqual(
-        sourcesFor("opencode")[0]?.fingerprint.resolvedHomePath,
-        yield* Effect.promise(() => NodeFSP.realpath(opencode)),
-      );
-      assert.strictEqual(
-        sourcesFor("antigravity")[0]?.fingerprint.resolvedHomePath,
-        yield* Effect.promise(() => NodeFSP.realpath(conversations)),
-      );
-    }).pipe(Effect.scoped),
   );
 
   it.live("reads configured and disabled accounts once across shared and aliased homes", () =>
@@ -2018,3 +2075,105 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 });
+
+it.live("exports retained native billing history without fetching prices", () =>
+  Effect.gen(function* () {
+    const { home, settings, transcript } = yield* setup;
+    let pricesFetched = 0;
+    yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(712, 17)));
+    yield* Effect.gen(function* () {
+      const service = yield* UsageService.make;
+      const first = yield* service.readHistory;
+      const native = first.flatMap((source) => source.files ?? []).flatMap((file) => file.records);
+      assert.ok(native.some((record) => record.totals.outputTokens === 17));
+      yield* Effect.promise(() => NodeFSP.unlink(transcript));
+      const retained = yield* service.readHistory;
+      assert.deepStrictEqual(
+        retained.flatMap((source) => source.files ?? []).flatMap((file) => file.records),
+        native,
+      );
+      assert.strictEqual(pricesFetched, 0);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layerService({
+          prefix: "history-export",
+          home,
+          settings,
+          onRatesFetch: () => {
+            pricesFetched++;
+          },
+        }),
+      ),
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.live(
+  "prices durable remote records once across forked workspaces without scanning head transcripts",
+  () =>
+    Effect.gen(function* () {
+      const { home, settings, transcript } = yield* setup;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(912, 9999)));
+      const totals = {
+        uncachedInputTokens: 10,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        outputTokens: 5,
+        reasoningTokens: 0,
+      };
+      const timestampMs = Date.parse("2026-08-01T10:00:00Z");
+      const remoteRecord = (provider: "codex" | "pi"): typeof HistorySources.UsageRecord.Type => ({
+        provider,
+        timestampMs,
+        model: "priced-model",
+        sessionId: "native-session-" + provider,
+        totals,
+        reportedCostUsd: null,
+        speed: "standard",
+        dedupeKey: provider === "pi" ? "pi-entry-native" : null,
+      });
+      const sources: HistorySources.History = ["workspace-a", "workspace-b"].flatMap((workspace) =>
+        (["codex", "pi"] as const).map((provider) => ({
+          provider,
+          dir: `sandbox:${workspace}:/${provider}`,
+          hostId: workspace,
+          volumeId: workspace,
+          files: [
+            {
+              path: `sandbox:${workspace}:/${provider}/session`,
+              records: [remoteRecord(provider)],
+            },
+          ],
+        })),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* UsageService.make;
+        const summary = yield* service.readSummary(WINDOW);
+        assert.strictEqual(totalOutputTokens(summary), 10);
+        assert.deepStrictEqual(
+          [...new Set(summary.buckets.map((bucket) => bucket.provider))].sort(),
+          ["codex", "pi"],
+        );
+        assert.strictEqual(
+          summary.buckets.reduce((sum, bucket) => sum + bucket.costUsd, 0),
+          40,
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(HistorySources.UsageHistorySources, {
+          read: Effect.succeed(sources),
+        }),
+        Effect.provide(
+          layerService({
+            prefix: "remote-history-price",
+            home,
+            settings,
+            ratesDocument: {
+              "priced-model": { input_cost_per_token: 1, output_cost_per_token: 2 },
+            },
+          }),
+        ),
+      );
+    }).pipe(Effect.scoped),
+);

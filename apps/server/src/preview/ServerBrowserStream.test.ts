@@ -307,19 +307,16 @@ const decodeHostSetup = Schema.decodeUnknownEffect(Schema.fromJsonString(Preview
 
 it.effect.each([
   {
-    error: new PreviewBrowserHost.PreviewBrowserSandboxError({
-      setupCommand: "sudo t3 browser setup",
-    }),
+    error: new PreviewBrowserHost.PreviewBrowserSandboxError({}),
     need: "sandbox",
   },
   {
     error: new PreviewBrowserHost.PreviewBrowserLibrariesError({
-      setupCommand: "sudo t3 browser setup",
       libraries: ["libnss3.so"],
     }),
     need: "libraries",
   },
-])("tells viewers the command that sets up the host ($need)", ({ error, need }) =>
+])("tells viewers which worker prerequisite is missing ($need)", ({ error, need }) =>
   Effect.gen(function* () {
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
@@ -359,7 +356,6 @@ it.effect.each([
     expect(code).toBe(PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE);
     expect(yield* decodeHostSetup(reason)).toEqual({
       need,
-      command: "sudo t3 browser setup",
     });
   }).pipe(Effect.scoped),
 );

@@ -247,15 +247,14 @@ export interface AcpAdapterV2Flavor {
   readonly resolveModelId?: (selection: ModelSelection) => string | undefined;
   /**
    * Replaces the default model application on session setup. Returns the model
-   * the session now runs on. Antigravity resolves its provider-default alias
-   * against the account's catalog instead of sending it to the agent.
+   * the session now runs on after resolving any provider-default alias.
    */
   readonly applyModelSelection?: (input: {
     readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
     readonly startResult: AcpSessionRuntime.AcpSessionRuntimeStartResult;
     readonly modelSelection: ModelSelection;
   }) => Effect.Effect<string | undefined, EffectAcpErrors.AcpError>;
-  /** Native session mode to select for a runtime policy (e.g. Antigravity `yolo`). */
+  /** Native session mode to select for a runtime policy. */
   readonly sessionModeForPolicy?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   ) => string | undefined;
@@ -264,8 +263,7 @@ export interface AcpAdapterV2Flavor {
    * files themselves under their own permission model unless a flavor sets
    * this. Requests pass the runtime policy guard, then these handlers, which
    * receive the cwd of the policy active when the request arrives (null when
-   * the session has no workspace). Antigravity sets it and confines requests
-   * to that workspace.
+   * the session has no workspace).
    */
   readonly clientFileSystem?: {
     readonly readTextFile: (
@@ -278,8 +276,7 @@ export interface AcpAdapterV2Flavor {
     ) => Effect.Effect<EffectAcpSchema.WriteTextFileResponse, EffectAcpErrors.AcpError>;
   };
   /**
-   * Permission requests that are really questions (Antigravity `interaction_*`
-   * tool calls). Returns the question and a response builder; undefined routes
+   * Permission requests that are really questions. Returns the question and a response builder; undefined routes
    * the request through the normal approval card.
    */
   readonly extractPermissionQuestion?: (request: EffectAcpSchema.RequestPermissionRequest) =>
@@ -305,7 +302,7 @@ export interface AcpAdapterV2Flavor {
   ) => ReadonlyArray<ProviderApprovalOption>;
   /**
    * Activate saved sessions with `session/resume` before `session/load` when
-   * the agent supports both. Antigravity's load replays history slowly.
+   * the agent supports both.
    */
   readonly preferResumeSession?: boolean;
   readonly onSessionEvent?: (
@@ -693,8 +690,21 @@ function acpMcpContext(
   // every ACP session gets the `t3 acp-mcp-bridge` stdio server, which
   // forwards JSON-RPC to T3's authenticated MCP endpoint. The credential
   // travels via environment variables, never the command line.
+  const additionalServers = Object.entries(session.additionalHttpServers ?? {}).map(
+    ([name, server]) => ({
+      name,
+      command: self.command,
+      args: [...selfInvocationArgs(self, ["acp-mcp-bridge"])],
+      env: [
+        { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+        { name: "T3_ACP_MCP_ENDPOINT", value: server.url },
+        { name: "T3_ACP_MCP_AUTHORIZATION", value: server.headers.Authorization ?? "" },
+      ],
+    }),
+  );
   return {
     servers: [
+      ...additionalServers,
       {
         name: "t3-code",
         command: self.command,
@@ -706,7 +716,7 @@ function acpMcpContext(
         ],
       },
     ],
-    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+    acpServers: [...additionalServers, { type: "acp", name: "t3-code", serverId: "t3-code" }],
     endpoint: session.endpoint,
     authorization: session.authorizationHeader,
     processEnvironment: {
@@ -841,7 +851,7 @@ function textFromUnknown(value: unknown): string | undefined {
     return undefined;
   }
   // Prefer prompt-facing Grok fields before nested envelopes.
-  // Antigravity reports shell output as combinedOutput.
+  // Some ACP agents report shell output as combinedOutput.
   for (const key of [
     "output_for_prompt",
     "stdout",

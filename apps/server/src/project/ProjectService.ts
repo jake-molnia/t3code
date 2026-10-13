@@ -1,3 +1,4 @@
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import {
   CommandId,
   type OrchestrationProjectShell,
@@ -146,6 +147,7 @@ export class ProjectService extends Context.Service<
 >()("t3/project/ProjectService") {}
 
 export const make = Effect.gen(function* () {
+  const routes = yield* WorkspaceRouting.WorkspaceRouting;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
@@ -201,21 +203,22 @@ export const make = Effect.gen(function* () {
     readonly workspaceRoot: string;
     readonly createIfMissing?: boolean;
   }) =>
-    workspacePaths
-      .normalizeWorkspaceRoot(input.workspaceRoot, {
+    Effect.gen(function* () {
+      if (routes.enabled) return yield* routes.validate(input.workspaceRoot);
+      return yield* workspacePaths.normalizeWorkspaceRoot(input.workspaceRoot, {
         createIfMissing: input.createIfMissing ?? false,
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProjectOperationError({
-              operation: "normalize-workspace",
-              ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
-              workspaceRoot: input.workspaceRoot,
-              cause,
-            }),
-        ),
-      );
+      });
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProjectOperationError({
+            operation: "normalize-workspace",
+            ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+            workspaceRoot: input.workspaceRoot,
+            cause,
+          }),
+      ),
+    );
 
   /**
    * Plan one command against rows read under its locks, then commit its event or
@@ -528,12 +531,10 @@ export const make = Effect.gen(function* () {
   );
 
   const enrichShell = (shell: OrchestrationProjectShell) =>
-    projectEnrichment.getAvailable(shell.workspaceRoot).pipe(
-      Effect.map((enrichment) => ({
-        ...shell,
-        repositoryIdentity: enrichment.repositoryIdentity,
-      })),
-    );
+    Effect.gen(function* () {
+      const enrichment = yield* projectEnrichment.getAvailable(shell.workspaceRoot);
+      return { ...shell, repositoryIdentity: enrichment.repositoryIdentity };
+    });
 
   const getShell: ProjectService["Service"]["getShell"] = Effect.fn("ProjectService.getShell")(
     function* (projectId) {

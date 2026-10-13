@@ -1,3 +1,4 @@
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
@@ -97,6 +98,7 @@ const adapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 interface HarnessOptions {
+  readonly workspaceRouting?: Partial<WorkspaceRouting.WorkspaceRouting["Service"]>;
   readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
   readonly createWorktree?: GitWorkflow.GitWorkflowService["Service"]["createWorktree"];
   readonly fetchRemote?: GitWorkflow.GitWorkflowService["Service"]["fetchRemote"];
@@ -201,6 +203,10 @@ function makeHarness(options: HarnessOptions = {}) {
   const layerLaunch = ThreadLaunch.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(WorkspaceRouting.WorkspaceRouting)({
+          enabled: false,
+          ...options.workspaceRouting,
+        }),
         layerExternalServices,
         layerThreadManagement,
         layerReceipts,
@@ -2445,6 +2451,10 @@ it.effect("cancels tracked setup before provider work is released", () =>
       assert.equal((yield* tracker.get(launched.threadId))?.phase, "cancelled");
       const projection = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(projection.runs[0]?.status, "failed");
+      assert.deepEqual(
+        harness.removeWorktree.mock.calls.map(([input]) => input.path),
+        ["/repo-worktrees/feature"],
+      );
       assert.isNull(projection.thread.worktreePath);
       assert.isEmpty(yield* outbox.listByCommandId(CommandId.make(`${input.commandId}:release`)));
     }).pipe(Effect.provide(harness.layer));
@@ -2507,6 +2517,261 @@ it.effect.each([0, 1])("releases an async setup before its completion with exit 
     }).pipe(Effect.provide(harness.layer));
   }),
 );
+
+it.effect(
+  "tracks an ordinary root sandbox launch before allocation and preserves timed stages",
+  () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        workspaceRouting: {
+          enabled: true,
+          prepareThread: (input) =>
+            Effect.gen(function* () {
+              yield* input.onStage?.("sandbox", "running") ?? Effect.void;
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+              yield* input.onStage?.("sandbox", "done") ?? Effect.void;
+              yield* input.onStage?.("seed", "running") ?? Effect.void;
+              yield* input.onStage?.("seed", "done") ?? Effect.void;
+              yield* input.onStage?.("checkout", "running") ?? Effect.void;
+              yield* input.onStage?.("checkout", "done") ?? Effect.void;
+              return "/workspace/root/repo";
+            }),
+        },
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+        const result = yield* launches.launch(
+          launchInput({
+            command: "sandbox:root",
+            thread: "sandbox:root",
+            message: "Start",
+            workspace: { type: "root" },
+          }),
+        );
+        yield* Deferred.await(entered);
+        const running = yield* tracker.get(result.threadId);
+        assert.equal(running?.phase, "running");
+        assert.equal(running?.stages[0]?.id, "sandbox");
+        assert.equal(running?.stages[0]?.status, "running");
+        assert.isNotNull(running?.stages[0]?.startedAt);
+        yield* Deferred.succeed(release, undefined);
+        const finished = yield* tracker.stream(result.threadId).pipe(
+          Stream.filter((snapshot) => snapshot?.phase === "done"),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(finished));
+        if (Option.isSome(finished)) {
+          assert.equal(finished.value?.worktreePath, "/workspace/root/repo");
+          assert.deepEqual(
+            finished.value?.stages.map((stage) => [stage.id, stage.status]),
+            [
+              ["sandbox", "done"],
+              ["seed", "done"],
+              ["checkout", "done"],
+              ["setup-script", "skipped"],
+              ["agent", "done"],
+            ],
+          );
+          for (const stage of finished.value?.stages.filter((stage) => stage.status === "done") ??
+            []) {
+            assert.isNotNull(stage.startedAt);
+            assert.isNotNull(stage.endedAt);
+          }
+        }
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect("cancels remote allocation through the existing setup tracker", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      workspaceRouting: {
+        enabled: true,
+        prepareThread: (input) =>
+          Effect.gen(function* () {
+            yield* input.onStage?.("sandbox", "running") ?? Effect.void;
+            yield* Deferred.succeed(entered, undefined);
+            return yield* Effect.never;
+          }),
+      },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const result = yield* launches.launch(
+        launchInput({
+          command: "sandbox:cancel",
+          thread: "sandbox:cancel",
+          message: "Start",
+          workspace: { type: "root" },
+        }),
+      );
+      yield* Deferred.await(entered);
+      assert.isTrue(yield* tracker.cancel(result.threadId));
+      assert.equal((yield* tracker.get(result.threadId))?.phase, "cancelled");
+      assert.equal((yield* threads.getThreadProjection(result.threadId)).runs[0]?.status, "failed");
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect(
+  "remote async setup releases the run before completion and retains sanitized failure output",
+  () =>
+    Effect.gen(function* () {
+      const completion = yield* Deferred.make<unknown>();
+      const harness = makeHarness({
+        serverSettings: {
+          defaultProjectScripts: [
+            {
+              id: "setup",
+              name: "Setup",
+              command: "install",
+              icon: "configure",
+              runOnWorktreeCreate: true,
+              async: true,
+            },
+          ],
+        },
+        workspaceRouting: {
+          enabled: true,
+          prepareThread: () => Effect.succeed("/workspace/root/repo"),
+          call: () => Deferred.await(completion),
+        },
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const result = yield* launches.launch(
+          launchInput({
+            command: "sandbox:async",
+            thread: "sandbox:async",
+            message: "Start",
+            workspace: { type: "root" },
+          }),
+        );
+        yield* tracker.stream(result.threadId).pipe(
+          Stream.filter(
+            (snapshot) =>
+              snapshot?.stages.some((stage) => stage.id === "agent" && stage.status === "done") ===
+              true,
+          ),
+          Stream.runHead,
+        );
+        assert.equal(
+          (yield* threads.getThreadProjection(result.threadId)).runs[0]?.status,
+          "starting",
+        );
+        assert.equal(
+          (yield* tracker.get(result.threadId))?.stages.find((stage) => stage.id === "setup-script")
+            ?.status,
+          "running",
+        );
+        yield* Deferred.succeed(completion, {
+          stdout: "installed dependencies\n",
+          stderr: "\u001b[31msetup failed\u001b[0m\n",
+          code: 1,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        });
+        const finished = yield* tracker.stream(result.threadId).pipe(
+          Stream.filter((snapshot) => snapshot?.phase === "done"),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(finished));
+        if (Option.isSome(finished)) {
+          const stage = finished.value?.stages.find((candidate) => candidate.id === "setup-script");
+          assert.equal(stage?.status, "failed");
+          assert.deepEqual(stage?.tail, ["installed dependencies", "setup failed"]);
+          assert.isNull(finished.value?.setupScript);
+        }
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect("retries a remote setup failure in its recorded sandbox workspace", () => {
+  let executions = 0;
+  const harness = makeHarness({
+    serverSettings: {
+      defaultProjectScripts: [
+        {
+          id: "setup",
+          name: "Setup",
+          command: "install",
+          icon: "configure",
+          runOnWorktreeCreate: true,
+          async: false,
+        },
+      ],
+    },
+    workspaceRouting: {
+      enabled: true,
+      describeBoundThread: () =>
+        Effect.succeed({
+          workspaceId: "root",
+          virtualCwd: "/workspace/root/repo",
+          relativeCwd: "root/repo",
+        }),
+      prepareThread: () => Effect.succeed("/workspace/root/repo"),
+      call: () =>
+        Effect.sync(() => ({
+          stdout: "",
+          stderr: "",
+          code: executions++ === 0 ? 1 : 0,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        })),
+    },
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const result = yield* launches.launch(
+      launchInput({
+        command: "sandbox:retry",
+        thread: "sandbox:retry",
+        message: "Start",
+        workspace: { type: "worktree", baseRef: "main", branch: "feature" },
+      }),
+    );
+    yield* waitUntil(() =>
+      threads
+        .getThreadProjection(result.threadId)
+        .pipe(Effect.map((projection) => projection.runs[0]?.status === "failed")),
+    );
+    const projection = yield* threads.getThreadProjection(result.threadId);
+    const run = projection.runs[0];
+    assert.isDefined(run);
+    if (!run) return;
+    yield* launches.retryPreparation({
+      commandId: CommandId.make("sandbox:retry:again"),
+      threadId: result.threadId,
+      runId: run.id,
+    });
+    yield* tracker.stream(result.threadId).pipe(
+      Stream.filter((snapshot) => snapshot?.phase === "done"),
+      Stream.runHead,
+    );
+    assert.equal(executions, 2);
+    const retried = yield* threads.getThreadProjection(result.threadId);
+    assert.equal(retried.runs.length, 1);
+    assert.equal(retried.runs[0]?.status, "starting");
+    assert.equal(retried.thread.worktreePath, "/workspace/root/repo");
+  }).pipe(Effect.provide(harness.layer));
+});
 
 it.effect.each([
   { name: "is missing", baseRef: "t3/renamed", startFromOrigin: false, origin: true },

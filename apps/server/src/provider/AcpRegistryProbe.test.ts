@@ -397,9 +397,7 @@ describe("ACP Registry probe", () => {
         AcpRegistrySupport.AcpRegistryCatalog,
         AcpRegistrySupport.AcpRegistryCatalog.of({
           search: () => Effect.die("unused search"),
-          prepare: () => Effect.die("unused prepare"),
           inspect: () => Effect.die("unused inspect"),
-          uninstallManagedBinary: () => Effect.die("unused uninstall"),
           resolve: () =>
             Effect.succeed({
               agent: {
@@ -431,9 +429,7 @@ describe("ACP Registry probe", () => {
       const resolveStarted = yield* Deferred.make<void>();
       const catalog = AcpRegistrySupport.AcpRegistryCatalog.of({
         search: () => Effect.die("unused search"),
-        prepare: () => Effect.die("unused prepare"),
         inspect: () => Effect.die("unused inspect"),
-        uninstallManagedBinary: () => Effect.die("unused uninstall"),
         resolve: () =>
           Deferred.succeed(resolveStarted, undefined).pipe(Effect.andThen(Effect.never)),
       });
@@ -461,9 +457,7 @@ describe("ACP Registry probe", () => {
   it.effect("lists native sessions and logs out through generic ACP lifecycle methods", () => {
     const catalog = AcpRegistrySupport.AcpRegistryCatalog.of({
       search: () => Effect.die("unused search"),
-      prepare: () => Effect.die("unused prepare"),
       inspect: () => Effect.die("unused inspect"),
-      uninstallManagedBinary: () => Effect.die("unused uninstall"),
       resolve: () =>
         Effect.succeed({
           agent: {
@@ -517,9 +511,7 @@ describe("ACP Registry probe", () => {
   it.effect("preserves the ACP method error for unsupported session management", () => {
     const catalog = AcpRegistrySupport.AcpRegistryCatalog.of({
       search: () => Effect.die("unused search"),
-      prepare: () => Effect.die("unused prepare"),
       inspect: () => Effect.die("unused inspect"),
-      uninstallManagedBinary: () => Effect.die("unused uninstall"),
       resolve: () =>
         Effect.succeed({
           agent: {

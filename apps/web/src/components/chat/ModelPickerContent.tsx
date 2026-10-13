@@ -1,5 +1,4 @@
 import {
-  ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
   type EnvironmentId,
   type ProviderDriverKind,
@@ -7,8 +6,6 @@ import {
 } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { useAtomValue } from "@effect/atom-react";
-import { formatProviderUpdateRequiredNotice } from "@t3tools/client-runtime/providerUpdateRequiredModels";
-import { useNavigate } from "@tanstack/react-router";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { memo, useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { ChevronRightIcon } from "lucide-react";
@@ -75,15 +72,6 @@ export function resolveModelPickerSelectedModel(input: {
   model: string;
   options: ReadonlyArray<ModelEsque>;
 }) {
-  if (input.driverKind === "antigravity" && input.model === ANTIGRAVITY_DEFAULT_MODEL) {
-    const availableModels = input.options.filter(
-      (option) => option.slug !== ANTIGRAVITY_DEFAULT_MODEL && !option.isUnavailable,
-    );
-    return (
-      availableModels.find((option) => option.aliases?.includes(ANTIGRAVITY_DEFAULT_MODEL)) ??
-      availableModels.find((option) => option.isDefault)
-    );
-  }
   return input.options.find((option) => option.slug === input.model);
 }
 
@@ -93,13 +81,10 @@ export function shouldIncludeModelPickerOption(input: {
   readonly activeInstanceId: ProviderInstanceId;
   readonly activeModel: string;
 }): boolean {
-  if (input.entry.driverKind === "antigravity" && input.option.slug === ANTIGRAVITY_DEFAULT_MODEL) {
-    return false;
-  }
   if (isProviderInstancePickerReady(input.entry)) return true;
   return (
     input.entry.enabled &&
-    (input.entry.driverKind === "opencode" || input.entry.driverKind === "antigravity") &&
+    input.entry.driverKind === "opencode" &&
     input.entry.instanceId === input.activeInstanceId &&
     input.option.slug === input.activeModel &&
     input.option.isUnavailable === true
@@ -216,8 +201,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     model: props.model,
     options: modelOptionsByInstance.get(props.activeInstanceId) ?? [],
   });
-  const activeModelSlug =
-    activeModel?.slug ?? (props.model === ANTIGRAVITY_DEFAULT_MODEL ? "" : props.model);
+  const activeModelSlug = activeModel?.slug ?? props.model;
   const activeModelKey = activeModelSlug
     ? modelPickerModelKey(props.activeInstanceId, activeModelSlug)
     : null;
@@ -281,7 +265,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   );
   const serverKeybindings = useAtomValue(primaryServerKeybindingsAtom);
   const keybindings = providedKeybindings ?? serverKeybindings;
-  const navigate = useNavigate();
   const toggleFavorite = useToggleEnvironmentModelFavorite(props.environmentId);
 
   const focusSearchInput = useCallback(() => {
@@ -600,17 +583,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   // old to run. Without this, a new model just seems missing until the user
   // happens to update the CLI.
   // A search spans every instance, so it can explain gated matches from any of them.
-  const updateRequiredNotices = (
-    isSearching
-      ? instanceEntries.filter(matchesLockedProvider)
-      : selectedEntry
-        ? [selectedEntry]
-        : []
-  ).flatMap((entry) => {
-    const notice = formatProviderUpdateRequiredNotice(entry.snapshot, searchQuery);
-    return notice ? [{ instanceId: entry.instanceId, notice }] : [];
-  });
-
   const toggleLegacySection = useCallback((instanceId: ProviderInstanceId) => {
     setExpandedLegacyInstances((expanded) => {
       const next = new Set(expanded);
@@ -1085,22 +1057,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             ) : (
               <ComboboxEmpty className="empty:h-0">No models found</ComboboxEmpty>
             )}
-            {updateRequiredNotices.map(({ instanceId, notice }) => (
-              <p
-                key={instanceId}
-                className="shrink-0 border-t border-border/70 px-3 py-2 text-xs leading-snug text-muted-foreground"
-              >
-                {notice}{" "}
-                <InlineButton
-                  onClick={() => {
-                    props.onRequestClose?.();
-                    void navigate({ to: "/settings/providers" });
-                  }}
-                >
-                  Provider settings
-                </InlineButton>
-              </p>
-            ))}
           </div>
         </Combobox>
       </div>

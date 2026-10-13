@@ -89,6 +89,7 @@ function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolea
 }
 
 export interface EnvironmentThreadShell {
+  readonly executionPoolId?: OrchestrationV2ThreadShell["executionPoolId"];
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
   readonly projectId: ProjectId;
@@ -231,6 +232,7 @@ export function presentThreadShell(
   return {
     environmentId,
     id: thread.id,
+    ...(thread.executionPoolId ? { executionPoolId: thread.executionPoolId } : {}),
     projectId: thread.projectId,
     title:
       thread.lineage.relationshipToParent === "subagent"

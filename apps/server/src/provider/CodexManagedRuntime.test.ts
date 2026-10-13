@@ -49,7 +49,7 @@ it.effect("managed home defaults to the global Codex home and honors configured 
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 it.effect.each(
-  (["managed", "local"] as const).flatMap((source) =>
+  (["image", "custom"] as const).flatMap((source) =>
     (["primary", "additional"] as const).map((account) => ({ source, account })),
   ),
 )(
@@ -81,13 +81,12 @@ it.effect.each(
       let leases = 0;
       const executable = {
         executablePath:
-          source === "managed" ? "/isolated/tools/codex/0.156.1/bin/codex" : "/user/bin/codex",
-        managedVersionDirectory: source === "managed" ? "/isolated/tools/codex/0.156.1" : null,
-        source,
+          source === "image" ? "/isolated/tools/codex/0.156.1/bin/codex" : "/user/bin/codex",
+        managedVersionDirectory: null,
+        source: "local" as const,
         version: "0.156.1",
       };
       const layerInstaller = Layer.mock(CodexInstallation.CodexInstallation)({
-        managedDirectory: "/isolated/tools/codex",
         resolve: () => Effect.succeed(executable),
         acquire: () =>
           Effect.gen(function* () {

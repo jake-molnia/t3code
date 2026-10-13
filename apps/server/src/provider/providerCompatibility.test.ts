@@ -70,6 +70,25 @@ describe("provider compatibility", () => {
     }
   });
 
+  it("classifies the running build with its OpenCode 2 protocol policy", () => {
+    const opencode = ProviderDriverKind.make("opencode");
+    for (const [version, expected] of [
+      ["2.0.26", "supported"],
+      ["2.0.17", "unsupported"],
+      ["1.14.19", "graceful"],
+      ["1.14.18", "broken"],
+    ] as const) {
+      const snapshot = applyProviderCompatibility(
+        { ...provider, driver: opencode, version, status: "ready", message: undefined },
+        undefined,
+        ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+      );
+      assert.strictEqual(snapshot.compatibilityAdvisory?.status, expected);
+      assert.strictEqual(snapshot.compatibilityAdvisory?.recommendedRange, ">=2.0.18");
+      assert.isNull(snapshot.compatibilityAdvisory?.recommendedVersion);
+    }
+  });
+
   it("keeps releases before V2 on the OpenCode 1 policy they shipped with", () => {
     // Every installed build fetches main's manifest, and 0.0.45 and older run the
     // V1 orchestrator, which cannot drive OpenCode 2.
@@ -187,27 +206,6 @@ describe("provider compatibility", () => {
     }
   });
 
-  it("recognizes Antigravity semver release tags while keeping dated candidates unknown", () => {
-    const antigravity = ProviderDriverKind.make("antigravity");
-    const taggedPolicy = {
-      ...policy,
-      driver: antigravity,
-      ranges: [{ range: "=2.0.0", status: "supported" as const }],
-    };
-    for (const [version, expected] of [
-      ["agy_acp_server_2.0.0", "supported"],
-      ["2.0.0", "supported"],
-      ["agy_acp_server_2.0.1", "unknown"],
-      ["agy_acp_server_2.0.0-beta.1", "unknown"],
-      ["agy_acp_server_20260818_01_RC01", "unknown"],
-    ] as const) {
-      assert.strictEqual(
-        resolveProviderCompatibility([taggedPolicy], antigravity, version)?.status,
-        expected,
-      );
-    }
-  });
-
   it("classifies boundaries and treats unlisted versions and release tags as unknown", () => {
     for (const [version, expected] of [
       ["0.9.9", "broken"],
@@ -226,15 +224,7 @@ describe("provider compatibility", () => {
   });
 
   it("supports every driver without inventing policies for uncovered adapters", () => {
-    for (const kind of [
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "grok",
-      "opencode",
-      "antigravity",
-      "customDriver",
-    ]) {
+    for (const kind of ["codex", "claudeAgent", "cursor", "grok", "opencode", "customDriver"]) {
       const adapter = ProviderDriverKind.make(kind);
       assert.strictEqual(
         resolveProviderCompatibility([{ ...policy, driver: adapter }], adapter, "2.0.0")?.status,

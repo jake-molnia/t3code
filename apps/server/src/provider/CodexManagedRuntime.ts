@@ -1,3 +1,5 @@
+import * as CredentialSources from "../execution/credentialSources.ts";
+import * as Option from "effect/Option";
 import { resolveManagedCodexHomeLayout } from "./CodexManagedHome.ts";
 import { CodexSettings, ProviderSetupError, type ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -42,13 +44,46 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const auth = yield* makeCodexChatGptAuth({
+  const nativeAuth = yield* makeCodexChatGptAuth({
     instanceId: options.instanceId,
     defaultReturnUrl: new URL(
       "/welcome",
       config.devUrl ?? `http://localhost:${config.port}`,
     ).toString(),
   });
+  const sources = yield* Effect.serviceOption(CredentialSources.CredentialSources);
+  if (Option.isSome(sources))
+    sources.value.register(
+      options.instanceId,
+      nativeAuth.access.pipe(
+        Effect.map((value) => ({
+          clientId: value.clientId,
+          accessToken: value.accessToken,
+          refreshToken: null,
+          expiresAt: value.expiresAt,
+          earliestRefreshAt: null,
+          scopes: value.scopes,
+          subject: value.subject,
+          email: value.email,
+        })),
+      ),
+    );
+  const remoteAccess = Effect.suspend((): typeof nativeAuth.access => {
+    const remote = Option.isSome(sources)
+      ? sources.value.access(options.instanceId)
+      : Option.none();
+    return Option.isSome(remote) ? remote.value : nativeAuth.access;
+  });
+  const auth = {
+    ...nativeAuth,
+    access: remoteAccess,
+    read: Effect.suspend((): typeof nativeAuth.read => {
+      const remote = Option.isSome(sources)
+        ? sources.value.access(options.instanceId)
+        : Option.none();
+      return Option.isSome(remote) ? remote.value.pipe(Effect.map(Option.some)) : nativeAuth.read;
+    }),
+  };
   const homeLayout = yield* resolveManagedCodexHomeLayout(
     config.stateDir,
     options.instanceId,

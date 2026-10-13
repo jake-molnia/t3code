@@ -1,5 +1,7 @@
+import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcpSession";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  EnvironmentId,
   ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
@@ -332,11 +334,19 @@ describe("Grok launch permission mode", () => {
   // Opens a session through the adapter's own Grok runtime factory and returns
   // the argv it tried to launch. The spawn fails after recording, so no
   // process starts.
-  const launchArgs = (runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy) =>
+  const launchArgs = (
+    runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+    onEnvironment?: (environment: NodeJS.ProcessEnv | undefined) => void,
+    mcpConfig?: McpProviderSessionConfig,
+  ) =>
     Effect.gen(function* () {
       const launches: Array<ReadonlyArray<string>> = [];
+      if (mcpConfig) yield* (yield* McpProviderSessions.McpProviderSessions).set(mcpConfig);
       const childProcessSpawner = ChildProcessSpawner.make((command) => {
-        if (command._tag === "StandardCommand") launches.push(command.args);
+        if (command._tag === "StandardCommand") {
+          launches.push(command.args);
+          onEnvironment?.(command.options.env);
+        }
         return Effect.fail(
           PlatformError.systemError({
             _tag: "NotFound",
@@ -391,6 +401,30 @@ describe("Grok launch permission mode", () => {
     Effect.gen(function* () {
       assert.deepEqual(yield* launchArgs(policy(runtimeMode)), [args]);
     }),
+  );
+
+  it.effect("passes thread-scoped MCP credentials to the native Grok process", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-launch-test");
+      const mcpConfig: McpProviderSessionConfig = {
+        environmentId: EnvironmentId.make("grok-launch-environment"),
+        threadId,
+        providerSessionId: "grok-launch-mcp",
+        providerInstanceId: ProviderInstanceId.make("grok-launch-test"),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer scoped-test-credential",
+        browserToolsAvailable: false,
+      };
+      const environments: Array<NodeJS.ProcessEnv | undefined> = [];
+      yield* launchArgs(
+        policy("full-access"),
+        (environment) => environments.push(environment),
+        mcpConfig,
+      );
+      assert.equal(environments.length, 1);
+      assert.equal(environments[0]?.T3_ACP_MCP_ENDPOINT, "http://127.0.0.1:43123/mcp");
+      assert.equal(environments[0]?.T3_ACP_MCP_AUTHORIZATION, "Bearer scoped-test-credential");
+    }).pipe(Effect.scoped),
   );
 
   it.effect("launches a thread stored as Auto-accept edits asking", () =>

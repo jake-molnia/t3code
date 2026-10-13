@@ -1,10 +1,13 @@
+import { withWorkspaceActivity } from "../agentRuntime/WorkspaceActivity.ts";
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
+import * as RepositoryFiles from "./RepositoryFiles.ts";
+import { GitActionScope } from "../agentRuntime/RemoteGitDriver.ts";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
-import * as ByteSize from "effect/ByteSize";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -728,6 +731,7 @@ export const make = Effect.gen(function* () {
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const repositoryFiles = yield* RepositoryFiles.RepositoryFiles;
   const path = yield* Path.Path;
 
   const sourceControlProvider = (cwd: string) => sourceControlProviders.resolve({ cwd });
@@ -772,22 +776,7 @@ export const make = Effect.gen(function* () {
     return yield* gitCore.createWorktree(input, { worktreesDirectory, ...options, submodules });
   });
 
-  const readRepositoryInstructions = (cwd: string, fileName: string) =>
-    Effect.gen(function* () {
-      const root = yield* fileSystem.realPath(cwd);
-      const instructionPath = yield* fileSystem.realPath(path.join(root, fileName));
-      // A drive root such as `D:\` already ends with a separator, so compare
-      // with path.relative instead of a `${root}${sep}` prefix.
-      const relative = path.relative(root, instructionPath);
-      if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-        return "";
-      }
-      const info = yield* fileSystem.stat(instructionPath);
-      if (info.type !== "File" || info.size > ByteSize.bytes(20_000)) {
-        return "";
-      }
-      return (yield* fileSystem.readFileString(instructionPath)).trim();
-    }).pipe(Effect.orElseSucceed(() => ""));
+  const readRepositoryInstructions = repositoryFiles.readInstructions;
 
   const readRecentCommitSubjects = (cwd: string) =>
     gitCore
@@ -1079,8 +1068,7 @@ export const make = Effect.gen(function* () {
       ),
     );
   const tempDir = process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? "/tmp";
-  const canonicalizeExistingPath = (value: string) =>
-    fileSystem.realPath(value).pipe(Effect.orElseSucceed(() => value));
+  const canonicalizeExistingPath = repositoryFiles.canonicalizeExistingPath;
   const normalizeStatusCacheKey = canonicalizeExistingPath;
   const nonRepositoryStatusDetails: GitVcsDriver.GitStatusDetails = {
     isRepo: false,
@@ -3172,7 +3160,25 @@ export const make = Effect.gen(function* () {
         return result;
       });
 
-      return yield* runAction().pipe(
+      const routes = yield* Effect.serviceOption(WorkspaceRouting.WorkspaceRouting);
+      const action =
+        Option.isSome(routes) && routes.value.enabled
+          ? routes.value.describeCwd(input.cwd).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitCommandError({
+                    operation: "workspace-action",
+                    command: "git",
+                    cwd: input.cwd,
+                    detail: "Cannot resolve Git action workspace",
+                    cause,
+                  }),
+              ),
+              Effect.flatMap((route) => withWorkspaceActivity(route.workspaceId, runAction())),
+            )
+          : runAction();
+      return yield* action.pipe(
+        Effect.provideService(GitActionScope, { id: progress.actionId, counters: new Map() }),
         Effect.ensuring(invalidateStatus(input.cwd)),
         Effect.tapError((error) =>
           Effect.flatMap(Ref.get(currentPhase), (phase) =>

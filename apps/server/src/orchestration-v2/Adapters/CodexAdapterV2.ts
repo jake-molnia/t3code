@@ -1,3 +1,4 @@
+import { withCodexStartup } from "../../provider/CodexStartup.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
@@ -722,6 +723,7 @@ export function buildCodexTurnStartParams(input: {
   readonly hasT3Mcp?: boolean;
   readonly browserToolsAvailable?: boolean;
   readonly deviceToolsAvailable?: boolean;
+  readonly computerToolsAvailable?: boolean;
   /** ChatGPT token sharing does not accept service tiers. */
   readonly omitServiceTier?: boolean;
   /** What the thread's MCP Apps want the agent to know (`ui/update-model-context`). */
@@ -767,6 +769,7 @@ export function buildCodexTurnStartParams(input: {
             {
               browser: input.browserToolsAvailable ?? true,
               device: input.deviceToolsAvailable ?? false,
+              computer: input.computerToolsAvailable ?? false,
             },
           )
         : undefined;
@@ -1294,7 +1297,7 @@ export interface CodexAppServerClientFactoryShape {
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
   }) => Effect.Effect<
-    CodexClient.CodexAppServerClient["Service"],
+    CodexClient.CodexAppServerClient["Service"] & { readonly initializeResponseReceived?: true },
     ProviderAdapter.ProviderAdapterOpenSessionError,
     Scope.Scope
   >;
@@ -1331,6 +1334,12 @@ export function codexThreadRuntimeParams(input: {
         ? {}
         : {
             mcp_servers: {
+              ...Object.fromEntries(
+                Object.entries(mcpSession.additionalHttpServers ?? {}).map(([name, server]) => [
+                  name,
+                  { url: server.url, http_headers: server.headers },
+                ]),
+              ),
               "t3-code": {
                 url: mcpSession.endpoint,
                 http_headers: {
@@ -1562,10 +1571,31 @@ export const layerAppServerClientFactory: Layer.Layer<
                   logger: protocolLogger,
                 };
           const context = yield* Layer.build(CodexClient.layerChildProcess(handle, clientOptions));
-          return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+          const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
             Effect.provide(context),
           );
-        }),
+          yield* Effect.gen(function* () {
+            yield* client.request("initialize", {
+              clientInfo: buildCodexInitializeParams().clientInfo,
+              capabilities: CODEX_CLIENT_CAPABILITIES,
+            });
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CODEX_PROVIDER,
+                  providerSessionId: input.providerSessionId,
+                  cause,
+                }),
+            ),
+          );
+          return {
+            ...client,
+            initializeResponseReceived: true,
+          } satisfies CodexClient.CodexAppServerClient["Service"] & {
+            readonly initializeResponseReceived: true;
+          };
+        }).pipe((startup) => withCodexStartup(input.settings.homePath, input.environment, startup)),
     });
   }),
 );
@@ -1789,23 +1819,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return;
             }
 
-            yield* client
-              .request("initialize", {
-                // Codex uses the client name as the request originator, so sessions
-                // identify themselves exactly like the provider probe.
-                clientInfo: buildCodexInitializeParams().clientInfo,
-                capabilities: CODEX_CLIENT_CAPABILITIES,
-              })
-              .pipe(
-                Effect.catchTags({
-                  // A caller interrupted after its `initialize` reached Codex
-                  // leaves the app-server initialized but the flag unset.
-                  CodexAppServerRequestError: (error) =>
-                    error.code === -32600 && error.errorMessage === "Already initialized"
-                      ? Effect.void
-                      : Effect.fail(error),
-                }),
-              );
+            if (!client.initializeResponseReceived)
+              yield* client
+                .request("initialize", {
+                  // Codex uses the client name as the request originator, so sessions
+                  // identify themselves exactly like the provider probe.
+                  clientInfo: buildCodexInitializeParams().clientInfo,
+                  capabilities: CODEX_CLIENT_CAPABILITIES,
+                })
+                .pipe(
+                  Effect.catchTags({
+                    // A caller interrupted after its `initialize` reached Codex
+                    // leaves the app-server initialized but the flag unset.
+                    CodexAppServerRequestError: (error) =>
+                      error.code === -32600 && error.errorMessage === "Already initialized"
+                        ? Effect.void
+                        : Effect.fail(error),
+                  }),
+                );
             yield* client.notify("initialized", undefined);
             yield* Ref.set(initialized, true);
           }),
@@ -6206,6 +6237,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               hasT3Mcp: mcpSession !== undefined,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
+              computerToolsAvailable: mcpSession?.capabilities?.has("computer") ?? false,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });

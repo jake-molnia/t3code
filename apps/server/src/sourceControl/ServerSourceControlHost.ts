@@ -8,6 +8,7 @@ import * as SourceControlHost from "@t3tools/source-control-core/server/SourceCo
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -16,11 +17,13 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 export const layer = Layer.effect(
   SourceControlHost.SourceControlHost,
   Effect.gen(function* () {
+    const repositoryFiles = yield* RepositoryFiles.RepositoryFiles;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const process = yield* VcsProcess.VcsProcess;
     const git = yield* GitVcsDriver.GitVcsDriver;
     const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
     return SourceControlHost.SourceControlHost.of({
+      temporaryDirectory: repositoryFiles.temporaryDirectory,
       settings: { get: serverSettings.getSettings },
       process: { run: process.run },
       git: {

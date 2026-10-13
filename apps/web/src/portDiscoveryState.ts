@@ -46,21 +46,26 @@ export function boundConfiguredLocalServerUrls(
 function useDiscoveredPorts(
   environmentId: EnvironmentId | null,
   configuredUrls?: ReadonlyArray<string>,
+  threadId?: ThreadId | null,
 ): ReadonlyArray<DiscoveredLocalServer> {
-  return useDiscoveredPortsState(environmentId, configuredUrls).servers;
+  return useDiscoveredPortsState(environmentId, configuredUrls, threadId).servers;
 }
 
 export function useDiscoveredPortsState(
   environmentId: EnvironmentId | null,
   configuredUrls?: ReadonlyArray<string>,
+  threadId?: ThreadId | null,
 ): DiscoveredPortsState {
   const boundedConfiguredUrls = boundConfiguredLocalServerUrls(configuredUrls);
   const query = useEnvironmentQuery(
-    environmentId === null
+    environmentId === null || !threadId
       ? null
       : previewEnvironment.discoveredServers({
           environmentId,
-          input: boundedConfiguredUrls.length ? { configuredUrls: boundedConfiguredUrls } : {},
+          input: {
+            threadId,
+            ...(boundedConfiguredUrls.length ? { configuredUrls: boundedConfiguredUrls } : {}),
+          },
         }),
   );
   return useMemo(
@@ -76,7 +81,7 @@ export function useThreadDiscoveredPorts(input: {
   readonly environmentId: EnvironmentId | null;
   readonly threadId: ThreadId | null;
 }): ReadonlyArray<DiscoveredLocalServer> {
-  const ports = useDiscoveredPorts(input.environmentId);
+  const ports = useDiscoveredPorts(input.environmentId, undefined, input.threadId);
   return useMemo(
     () =>
       input.threadId

@@ -3390,6 +3390,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
       // T3's tools are an addition: a server that cannot add them still runs the turn.
       if (wanted !== undefined && state.mcp === undefined) {
+        for (const [server, extra] of Object.entries(mcpSession?.additionalHttpServers ?? {}))
+          yield* client.mcp
+            .add({
+              server,
+              location: { directory },
+              config: new Mcp.RemoteConfig({ type: "remote", ...extra, oauth: false }),
+            })
+            .pipe(Effect.timeout(INVENTORY_TIMEOUT));
         const added = yield* client.mcp
           .add({
             server: name,

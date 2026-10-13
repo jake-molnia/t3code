@@ -471,9 +471,9 @@ afterEach(() => {
   mockedCredential.mockImplementation(defaultCredential);
 });
 
-it.effect(
-  "keeps a verified credential through an auth switch and separates token fingerprints",
-  () =>
+it.effect.each([false, true])(
+  "keeps verified credentials pinned through auth switches (installation-token fallback: %s)",
+  (installation) =>
     Effect.gen(function* () {
       let activeToken = "broad-credential";
       const requests: Array<{ readonly url: string; readonly authorization: string | undefined }> =
@@ -496,9 +496,23 @@ it.effect(
         HttpClient.make((request) =>
           Effect.sync(() => {
             requests.push({ url: request.url, authorization: request.headers["authorization"] });
+            if (installation && request.url.endsWith("/user")) {
+              // Rotate while identity verification is in flight; GraphQL must keep the captured token.
+              activeToken = "restricted-credential";
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response(encodeJson({ message: "Resource not accessible by integration" }), {
+                  status: 403,
+                }),
+              );
+            }
+            const requestBody =
+              request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
             const body = request.url.endsWith("/user")
               ? { id: 123, login: "same-account" }
-              : { data: { repository: { pullRequest: { id: "PR_1" } }, addComment: {} } };
+              : requestBody.includes("T3RoutingIdentity")
+                ? { data: { viewer: { databaseId: 123, login: "same-account" } } }
+                : { data: { repository: { pullRequest: { id: "PR_1" } }, addComment: {} } };
             return HttpClientResponse.fromWeb(request, new Response(encodeJson(body)));
           }),
         ),
@@ -538,7 +552,16 @@ it.effect(
         requests
           .filter((request) => request.url.endsWith("/graphql"))
           .map((request) => request.authorization),
-      ).toEqual(["Bearer broad-credential", "Bearer broad-credential"]);
+      ).toEqual(
+        installation
+          ? [
+              "Bearer broad-credential",
+              "Bearer broad-credential",
+              "Bearer broad-credential",
+              "Bearer restricted-credential",
+            ]
+          : ["Bearer broad-credential", "Bearer broad-credential"],
+      );
       expect(
         requests
           .filter((request) => request.url.endsWith("/user"))
@@ -651,6 +674,56 @@ layer("GitHubPullRequestApi.layer", (it) => {
       expect(mockedExecute).toHaveBeenCalledTimes(1);
       expect(callAt(0)).toMatchObject({ kind: "graphql", host: "github.example" });
     }),
+  );
+
+  it.effect(
+    "does not fall back on invalid credentials or cache an unverified GraphQL identity",
+    () =>
+      Effect.gen(function* () {
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        mockedExecute.mockImplementation((call) =>
+          Effect.fail(
+            new GitHubApi.GitHubApiAuthenticationError({
+              host: call.host,
+              operation: call.operation,
+            }),
+          ),
+        );
+        const invalid = yield* cli
+          .getRoutingIdentity({ cwd: "/w", host: "invalid-auth.example" })
+          .pipe(Effect.flip);
+        expect(invalid._tag).toBe("GitHubApiAuthenticationError");
+        expect(mockedExecute).toHaveBeenCalledTimes(1);
+        mockedExecute.mockClear();
+        let valid = false;
+        mockedExecute.mockImplementation((call) =>
+          call.kind === "rest"
+            ? Effect.fail(
+                new GitHubApi.GitHubApiResponseError({
+                  host: call.host,
+                  operation: call.operation,
+                  status: 403,
+                }),
+              )
+            : Effect.succeed(
+                output(
+                  encodeJson({
+                    data: { viewer: { databaseId: valid ? 456 : null, login: "app-bot" } },
+                  }),
+                ),
+              ),
+        );
+        const input = { cwd: "/w", host: "unverified-app.example" };
+        expect((yield* cli.getRoutingIdentity(input).pipe(Effect.flip))._tag).toBe(
+          "GitHubViewerLoginUnavailableError",
+        );
+        valid = true;
+        expect(yield* cli.getRoutingIdentity(input)).toEqual({
+          accountId: "456",
+          viewer: "app-bot",
+        });
+        expect(mockedExecute).toHaveBeenCalledTimes(4);
+      }),
   );
 
   it.effect("coalesces concurrent identity verification for the same host and credential", () =>

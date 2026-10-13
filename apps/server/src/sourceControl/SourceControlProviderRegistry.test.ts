@@ -1,3 +1,4 @@
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -105,6 +106,7 @@ function makeRegistry(input: {
         layerRegistry,
         layerProcess,
         ServerSourceControlHost.layer.pipe(
+          Layer.provide(RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
           Layer.provide(
             Layer.mergeAll(
               layerProcess,

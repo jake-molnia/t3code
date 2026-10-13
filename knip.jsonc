@@ -19,7 +19,7 @@
     "scripts": {
       // Knip loads its preprocessor through a CLI option; native verification and
       // worktree setup (from t3.json) run directly.
-      "entry": ["knip-schemas.ts", "mobile-native-client.ts", "setup-worktree.ts"],
+      "entry": ["knip-schemas.ts", "setup-worktree.ts"],
     },
     "apps/server": {
       // Vite+ pack entries and the launcher used by installed background services.
@@ -40,27 +40,6 @@
       // CLI archive and desktop sidecar stage them from this manifest.
       "ignoreDependencies": ["@effect/platform-node-shared", "@t3tools/web", "@napi-rs/keyring"],
     },
-    "apps/desktop": {
-      // Electron loads these bundles by filename rather than importing them.
-      "entry": [
-        "gnome-extension/extension.js!",
-        "src/electron/WindowsForegroundFocusWorker.ts!",
-        "src/snapShot/GlobalShiftShortcutWorker.ts!",
-        "src/snapShot/RegionSnapShotWorker.ts!",
-        "src/snapShot/SnapShotAccessibilityWorker.ts!",
-        "src/boot.ts!",
-        "src/compileCache.ts!",
-        "src/main.ts!",
-        "src/preload.ts!",
-        "src/preview-pick-preload.ts!",
-        "src/preview-pip-preload.ts!",
-        "src/mac-permission-preload.ts!",
-        "src/preview/Annotation.css!",
-      ],
-      // The injected runtime resolves Playwright by string; release tooling runs
-      // electron-builder from this workspace, outside its package scripts.
-      "ignoreDependencies": ["playwright-core", "electron-builder"],
-    },
     "apps/web": {
       // Vitest loads this through the per-file @vitest-environment directive.
       "ignoreDependencies": ["jsdom"],
@@ -70,27 +49,6 @@
       // named subcomponents even before they have callers; the file audit still
       // reports an entire component module when nothing imports it.
       "ignoreIssues": { "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"] },
-    },
-    "apps/mobile": {
-      // Expo loads plugins and the fingerprint config by string; Metro embeds the browser entry in the native WebView.
-      "entry": [
-        "index.ts!",
-        "fingerprint.config.js",
-        "plugins/*.cjs",
-        "scripts/generate-device-stream.mts",
-        "src/features/devices/device-stream.browser.ts!",
-        "src/features/browser/preview-stream.browser.ts!",
-      ],
-      // Fonts are configured as asset paths; Expo autolinks the native packages.
-      "ignoreDependencies": [
-        "@expo-google-fonts/dm-sans",
-        "@t3tools/mobile-review-diff-native",
-        "@t3tools/mobile-terminal-native",
-      ],
-    },
-    "apps/mobile/modules/t3-source-text": {
-      // React Native codegen discovers component specifications by filename.
-      "entry": ["src/*NativeComponent.ts!"],
     },
     "infra/relay": {
       "entry": ["alchemy.run.ts!", "src/persistence/schema.ts!"],

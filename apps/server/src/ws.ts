@@ -1,3 +1,13 @@
+import * as ExecutionPools from "./agentRuntime/ExecutionPools.ts";
+import * as AgentRuntimeClient from "./agentRuntime/RuntimeClient.ts";
+import * as RuntimeContracts from "@t3tools/contracts";
+import * as WorkspaceRouting from "./agentRuntime/WorkspaceRouting.ts";
+import {
+  SourceControlRepositoryError,
+  ProjectId as RuntimeProjectId,
+  type SourceControlCloneRepositoryInput,
+} from "@t3tools/contracts";
+import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -6,14 +16,12 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Base64 from "effect/encoding/Base64";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
@@ -28,7 +36,6 @@ import {
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   AuthOrchestrationOperateScope,
-  type AuthEnvironmentScope,
   type ScheduledTaskListResult,
   AuthSessionId,
   ClientConnectionMethod,
@@ -36,7 +43,7 @@ import {
   ClientOs,
   ClientSurface,
   ClientWebDeployment,
-  type DiscoveredLocalServerList,
+  DiscoveredLocalServer,
   type EditorId,
   type FileManagerRevealKind,
   type OrchestrationClientOrigin,
@@ -77,8 +84,7 @@ import {
   ProviderSetupError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
-  type ServerSelfUpdateError,
-  type ServerSelfUpdateProgressEvent,
+  ServerSelfUpdateError,
   type ServerConfig as ClientServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
@@ -89,7 +95,6 @@ import {
   ChatAttachmentId,
   PersistChatAttachmentsError,
   RpcClientId,
-  EnvironmentAuthorizationError,
   type ProjectId,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -168,21 +173,18 @@ import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.t
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as ProviderMaintenance from "@t3tools/provider-core/server/maintenanceResolver";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
-import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
-import { makeProviderInstallation } from "./provider/providerInstallation.ts";
-import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
+import * as SandboxIde from "./agentRuntime/SandboxIde.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
-import * as DeviceService from "./device/DeviceService.ts";
-import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import {
@@ -192,7 +194,6 @@ import {
 } from "./attachmentStore.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
-import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
@@ -207,7 +208,6 @@ import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts
 import * as ProjectService from "./project/ProjectService.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import { projectMutationOperation } from "./project/ProjectMutation.ts";
-import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
@@ -217,7 +217,6 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as DefectReporter from "./observability/DefectReporter.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { RpcInstrumentation, rpcInstrumentationLayer } from "./observability/RpcInstrumentation.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -1219,6 +1218,7 @@ const layerWsRpc = (
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const projectService = yield* ProjectService.ProjectService;
+      const workspaceRoutes = yield* WorkspaceRouting.WorkspaceRouting;
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
 
@@ -1244,9 +1244,6 @@ const layerWsRpc = (
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
-      const deviceService = yield* DeviceService.DeviceService;
-      const deviceHostContext =
-        yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
       const crypto = yield* Crypto.Crypto;
       const serverCommandId = (tag: string) =>
@@ -1265,7 +1262,6 @@ const layerWsRpc = (
             );
       const usage = yield* UsageService.UsageService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
-      const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
       const repositoryIdentityResolver =
@@ -1276,6 +1272,7 @@ const layerWsRpc = (
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
+      const sandboxIde = yield* SandboxIde.SandboxIde;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const directEndpoints = yield* DirectEndpoints.DirectEndpoints;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -1284,7 +1281,7 @@ const layerWsRpc = (
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
-      const portDiscovery = yield* PortScanner.PortDiscovery;
+      const executionRuntime = yield* AgentRuntimeClient.RuntimeClient;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const modelManifest = yield* ModelManifest.ModelManifest;
       const providerLatestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
@@ -1292,10 +1289,7 @@ const layerWsRpc = (
       const acpRegistryCatalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
       const acpRegistryRuntimeCoordinator =
         yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
-      const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const providerAuth = yield* ProviderAuthService.ProviderAuthService;
-      const providerInstallation = yield* makeProviderInstallation();
-      const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
@@ -1340,6 +1334,7 @@ const layerWsRpc = (
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const hostResources = yield* HostResources.HostResources;
+      const executionPools = yield* ExecutionPools.ExecutionPools;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -1351,16 +1346,6 @@ const layerWsRpc = (
           : {
               tasks: result.tasks.map(({ webhook: _webhook, ...task }) => task),
             };
-      // RpcScopeAuthorization checks each RPC's declared scope before its handler
-      // runs. This covers the one RPC whose scope depends on its input.
-      const authorizeEffect = <A, E, R>(
-        requiredScope: AuthEnvironmentScope,
-        effect: Effect.Effect<A, E, R>,
-      ): Effect.Effect<A, E | EnvironmentAuthorizationError, R> =>
-        currentSession.scopes.includes(requiredScope)
-          ? effect
-          : Effect.fail(rpcAuthorizationError(requiredScope));
-
       const acpRegistryProject = Effect.fn("ws.acpRegistry.project")(function* (
         projectId: ProjectId,
       ) {
@@ -1832,6 +1817,84 @@ const layerWsRpc = (
         return result;
       });
 
+      const remoteClone = (
+        input: SourceControlCloneRepositoryInput & { projectId?: ProjectId; title?: string },
+      ) =>
+        Effect.gen(function* () {
+          const projectId = input.projectId ?? RuntimeProjectId.make(yield* randomUuidV4);
+          const remoteUrl =
+            input.remoteUrl ??
+            (input.provider === "github" &&
+            input.repository &&
+            /^[\w.-]+\/[\w.-]+$/.test(input.repository)
+              ? `https://github.com/${input.repository}.git`
+              : undefined);
+          if (!remoteUrl)
+            return yield* new SourceControlRepositoryError({
+              operation: "cloneRepository",
+              provider:
+                input.provider ?? RuntimeContracts.SourceControlProviderKind.make("unknown"),
+              detail: "Provide the repository clone URL for sandbox execution.",
+            });
+          const cwd = yield* workspaceRoutes.project(projectId, remoteUrl);
+          yield* projectService.create({
+            commandId: CommandId.make(`remote-project:${projectId}`),
+            projectId,
+            title: input.title ?? input.repository ?? remoteUrl.split("/").at(-1) ?? "Project",
+            workspaceRoot: cwd,
+          });
+          return { projectId, cwd, remoteUrl, repository: null };
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new SourceControlRepositoryError({
+                operation: "cloneRepository",
+                provider:
+                  input.provider ?? RuntimeContracts.SourceControlProviderKind.make("unknown"),
+                detail: "Sandbox repository import failed.",
+                cause,
+              }),
+          ),
+        );
+      const remoteEmptyProject = (name: string, existingId?: ProjectId) =>
+        Effect.gen(function* () {
+          const projectId = existingId ?? RuntimeProjectId.make(yield* randomUuidV4);
+          const workspaceRoot = yield* workspaceRoutes.project(projectId);
+          yield* projectService.create({
+            commandId: CommandId.make(`remote-project:${projectId}`),
+            projectId,
+            title: name,
+            workspaceRoot,
+          });
+          return { projectId, workspaceRoot };
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestrationDispatchCommandError({
+                message: "Could not create the sandbox project.",
+                cause,
+              }),
+          ),
+        );
+
+      const remoteVcs = <A, I>(
+        method: string,
+        input: { cwd: string } & Readonly<Record<string, unknown>>,
+        schema: Schema.Codec<A, I>,
+      ) =>
+        workspaceRoutes.call({ cwd: input.cwd, method, input }).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.toCodecJson(schema))),
+          Effect.mapError(
+            (cause) =>
+              new RuntimeContracts.GitCommandError({
+                operation: method,
+                command: "remote",
+                cwd: input.cwd,
+                detail: "Sandbox Git operation failed.",
+                cause,
+              }),
+          ),
+        );
       const handlers = ServerWsRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
@@ -1975,6 +2038,9 @@ const layerWsRpc = (
                 .enqueueCommand(
                   ThreadMessageIntake.launchThread({
                     commandId: input.commandId,
+                    ...(input.executionPoolId === undefined
+                      ? {}
+                      : { executionPoolId: input.executionPoolId }),
                     ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
                     ...(input.reuseExistingThread === undefined
                       ? {}
@@ -2105,22 +2171,6 @@ const layerWsRpc = (
           acpRegistryCatalog
             .search(input)
             .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError)),
-        [WS_METHODS.serverPrepareAcpRegistryAgent]: (input) =>
-          Effect.annotateCurrentSpan({ "acp_registry.agent_id": input.agentId }).pipe(
-            Effect.andThen(
-              acpRegistryCatalog
-                .prepare(input)
-                .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError)),
-            ),
-          ),
-        [WS_METHODS.serverUninstallAcpRegistryManagedBinary]: (input) =>
-          Effect.annotateCurrentSpan({ "acp_registry.agent_id": input.agentId }).pipe(
-            Effect.andThen(
-              acpRegistryCatalog
-                .uninstallManagedBinary(input)
-                .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError)),
-            ),
-          ),
         [WS_METHODS.serverAcceptAcpRegistryUrlAuth]: (input) =>
           Effect.annotateCurrentSpan({ "provider.instance_id": input.instanceId }).pipe(
             Effect.andThen(
@@ -2322,8 +2372,6 @@ const layerWsRpc = (
                   }),
             ),
           ),
-        [WS_METHODS.serverUpdateProvider]: (input) =>
-          providerMaintenanceRunner.updateProvider(input),
         [WS_METHODS.providerConsumeResetCredit]: (input) =>
           Effect.gen(function* () {
             if ("sourceId" in input) return yield* usageLimitSources.consumeResetCredit(input);
@@ -2372,36 +2420,18 @@ const layerWsRpc = (
         [WS_METHODS.providerAuthLogout]: (input) => providerAuth.logout(input),
         [WS_METHODS.providerAuthSubscribe]: (input) =>
           providerAuth.subscribe(input, currentSessionId),
-        [WS_METHODS.providerInstallStart]: (input) => providerInstallation.start(input),
-        [WS_METHODS.providerInstallCancel]: (input) => providerInstallation.cancel(input),
-        [WS_METHODS.providerInstallSubscribe]: (input) => providerInstallation.subscribe(input),
-        [WS_METHODS.providerInstallRemove]: (input) => providerInstallation.remove(input),
-        [WS_METHODS.serverUpdateServer]: (input) => serverSelfUpdate.update(input),
-        [WS_METHODS.serverUpdateServerWithProgress]: (input) =>
-          Stream.callback<ServerSelfUpdateProgressEvent, ServerSelfUpdateError>((queue) =>
-            serverSelfUpdate
-              .update(input, (stage) =>
-                Queue.offer(queue, {
-                  type: "progress",
-                  stage,
-                }).pipe(Effect.asVoid),
-              )
-              .pipe(
-                Effect.flatMap((result) =>
-                  Queue.offer(queue, {
-                    type: "complete",
-                    result,
-                  }),
-                ),
-                Effect.catchTags({
-                  ServerSelfUpdateError: (error) => Queue.fail(queue, error),
-                }),
-                Effect.andThen(Queue.end(queue)),
-                Effect.forkScoped,
-              ),
+        [WS_METHODS.serverUpdateServer]: () =>
+          Effect.fail(
+            new ServerSelfUpdateError({
+              reason: "Server updates are managed by the deployment image.",
+            }),
           ),
-        [WS_METHODS.serverCommitDesktopUpdate]: (input) =>
-          serverSelfUpdate.commitDesktopUpdate(input.requestId),
+        [WS_METHODS.serverUpdateServerWithProgress]: () =>
+          Stream.fail(
+            new ServerSelfUpdateError({
+              reason: "Server updates are managed by the deployment image.",
+            }),
+          ),
         [WS_METHODS.serverUpsertKeybinding]: (rule) =>
           Effect.gen(function* () {
             const keybindingsConfig = yield* keybindings.upsertKeybindingRule(rule);
@@ -2418,15 +2448,9 @@ const layerWsRpc = (
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
         [WS_METHODS.serverUpdateSettings]: ({ patch, providerInstanceMutation }) =>
           Effect.gen(function* () {
-            const deviceHosts = patch.deviceHosts
-              ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
-                  Effect.provide(deviceHostContext),
-                )
-              : undefined;
-            const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
             const settings = yield* providerInstanceMutation === undefined
-              ? serverSettings.updateSettings(nextPatch)
-              : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
+              ? serverSettings.updateSettings(patch)
+              : serverSettings.updateProviderInstance(providerInstanceMutation, patch);
             return ServerSettings.redactServerSettingsForClient(settings);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
@@ -2436,6 +2460,7 @@ const layerWsRpc = (
             maxFiles: config.traceMaxFiles,
           }),
         [WS_METHODS.serverGetProcessDiagnostics]: (_input) => processDiagnostics.read,
+        [WS_METHODS.serverExecutionPools]: () => executionPools.snapshot,
         [WS_METHODS.serverGetHostResources]: (_input) => hostResources.read,
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
@@ -2578,54 +2603,66 @@ const layerWsRpc = (
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           sourceControlRepositories.lookupRepository(input),
         [WS_METHODS.sourceControlCloneRepository]: (input) =>
-          sourceControlRepositories.cloneRepository(input),
+          workspaceRoutes.enabled
+            ? remoteClone(input)
+            : sourceControlRepositories.cloneRepository(input),
         [WS_METHODS.projectCloneStart]: (input) =>
-          projectCloneTracker.start(input, {
-            createProject: (project) =>
-              projectService
-                .create({
-                  commandId: CommandId.make(`project-clone-create:${project.projectId}`),
-                  projectId: project.projectId,
-                  title: project.title,
-                  workspaceRoot: project.workspaceRoot,
-                  createWorkspaceRootIfMissing: true,
-                })
+          workspaceRoutes.enabled
+            ? remoteClone(input)
+            : projectCloneTracker.start(input, {
+                createProject: (project) =>
+                  projectService
+                    .create({
+                      commandId: CommandId.make(`project-clone-create:${project.projectId}`),
+                      projectId: project.projectId,
+                      title: project.title,
+                      workspaceRoot: project.workspaceRoot,
+                      createWorkspaceRootIfMissing: true,
+                    })
+                    .pipe(
+                      Effect.asVoid,
+                      Effect.mapError(
+                        (cause) =>
+                          new OrchestrationDispatchCommandError({
+                            message: "Failed to create clone project.",
+                            cause,
+                          }),
+                      ),
+                    ),
+                onCloned: (project) =>
+                  repositoryIdentityResolver.resolve(project.workspaceRoot, { refresh: true }).pipe(
+                    Effect.andThen(
+                      projectService.update({
+                        commandId: CommandId.make(`project-clone-done:${project.projectId}`),
+                        projectId: project.projectId,
+                      }),
+                    ),
+                    Effect.andThen(refreshGitStatus(project.workspaceRoot)),
+                    Effect.ignoreCause({ log: true }),
+                  ),
+              }),
+        [WS_METHODS.projectsEnsureScratch]: () =>
+          workspaceRoutes.enabled
+            ? remoteEmptyProject("Scratch", RuntimeProjectId.make("agent-runtime-scratch")).pipe(
+                Effect.map(({ projectId }) => ({ projectId })),
+              )
+            : managedFolders.ensureScratchProject.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationDispatchCommandError({ message: cause.message, cause }),
+                ),
+              ),
+        [WS_METHODS.projectsCreateNew]: (input) =>
+          workspaceRoutes.enabled
+            ? remoteEmptyProject(input.name)
+            : managedFolders
+                .createNamedProject(input)
                 .pipe(
-                  Effect.asVoid,
                   Effect.mapError(
                     (cause) =>
-                      new OrchestrationDispatchCommandError({
-                        message: "Failed to create clone project.",
-                        cause,
-                      }),
+                      new OrchestrationDispatchCommandError({ message: cause.message, cause }),
                   ),
                 ),
-            onCloned: (project) =>
-              repositoryIdentityResolver.resolve(project.workspaceRoot, { refresh: true }).pipe(
-                Effect.andThen(
-                  projectService.update({
-                    commandId: CommandId.make(`project-clone-done:${project.projectId}`),
-                    projectId: project.projectId,
-                  }),
-                ),
-                Effect.andThen(refreshGitStatus(project.workspaceRoot)),
-                Effect.ignoreCause({ log: true }),
-              ),
-          }),
-        [WS_METHODS.projectsEnsureScratch]: () =>
-          managedFolders.ensureScratchProject.pipe(
-            Effect.mapError(
-              (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
-            ),
-          ),
-        [WS_METHODS.projectsCreateNew]: (input) =>
-          managedFolders
-            .createNamedProject(input)
-            .pipe(
-              Effect.mapError(
-                (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
-              ),
-            ),
         [WS_METHODS.projectCloneCancel]: (input) =>
           projectCloneTracker.cancel(input.projectId).pipe(Effect.map((applied) => ({ applied }))),
         [WS_METHODS.projectCloneRetry]: (input) =>
@@ -2714,6 +2751,7 @@ const layerWsRpc = (
             ),
           ),
         [WS_METHODS.shellOpenInEditor]: (input) => externalLauncher.launchEditor(input),
+        [WS_METHODS.sandboxIdeOpen]: (input) => sandboxIde.open(input),
         [WS_METHODS.filesystemGetMetadata]: (input) => workspaceFileSystem.getMetadata(input),
         [WS_METHODS.filesystemBrowse]: (input) =>
           workspaceEntries.browse(input).pipe(
@@ -2827,13 +2865,18 @@ const layerWsRpc = (
             .pipe(Effect.map((cancelled) => ({ cancelled }))),
         [WS_METHODS.vcsRefreshStatus]: (input) => vcsStatusBroadcaster.refreshStatus(input.cwd),
         [WS_METHODS.vcsPull]: (input) =>
-          gitWorkflow.pullCurrentBranch(input.cwd).pipe(
-            Effect.matchCauseEffect({
-              onFailure: (cause) => Effect.failCause(cause),
-              onSuccess: (result) =>
-                refreshGitStatus(input.cwd).pipe(Effect.ignore({ log: true }), Effect.as(result)),
-            }),
-          ),
+          workspaceRoutes.enabled
+            ? remoteVcs("git.pull", input, RuntimeContracts.VcsPullResult)
+            : gitWorkflow.pullCurrentBranch(input.cwd).pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cause) => Effect.failCause(cause),
+                  onSuccess: (result) =>
+                    refreshGitStatus(input.cwd).pipe(
+                      Effect.ignore({ log: true }),
+                      Effect.as(result),
+                    ),
+                }),
+              ),
         [WS_METHODS.gitRunStackedAction]: (input) =>
           Stream.callback<GitActionProgressEvent, GitManagerServiceError>((queue) =>
             gitWorkflow
@@ -2879,19 +2922,54 @@ const layerWsRpc = (
           gitWorkflow
             .preparePullRequestThread(input)
             .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
-        [WS_METHODS.vcsListRefs]: (input) => gitWorkflow.listRefs(input),
+        [WS_METHODS.vcsListRefs]: (input) =>
+          workspaceRoutes.enabled
+            ? remoteVcs("git.listRefs", input, RuntimeContracts.VcsListRefsResult)
+            : gitWorkflow.listRefs(input),
         [WS_METHODS.vcsCreateWorktree]: (input) =>
-          gitWorkflow.createWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+          workspaceRoutes.enabled
+            ? remoteVcs("git.createWorktree", input, RuntimeContracts.VcsCreateWorktreeResult)
+            : gitWorkflow.createWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
         [WS_METHODS.vcsRemoveWorktree]: (input) =>
-          gitWorkflow.removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+          workspaceRoutes.enabled
+            ? remoteVcs("git.removeWorktree", input, Schema.Null).pipe(Effect.asVoid)
+            : gitWorkflow.removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
         [WS_METHODS.vcsCreateRef]: (input) =>
-          gitWorkflow.createRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+          workspaceRoutes.enabled
+            ? remoteVcs("git.createRef", input, RuntimeContracts.VcsCreateRefResult)
+            : gitWorkflow.createRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
         [WS_METHODS.vcsSwitchRef]: (input) =>
-          gitWorkflow.switchRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+          workspaceRoutes.enabled
+            ? remoteVcs("git.switchRef", input, RuntimeContracts.VcsSwitchRefResult)
+            : gitWorkflow.switchRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
         [WS_METHODS.vcsInit]: (input) =>
-          vcsProvisioning.initRepository(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
-        [WS_METHODS.reviewGetDiffPreview]: (input) => review.getDiffPreview(input),
-        [WS_METHODS.reviewGetDiffFileContents]: (input) => review.getDiffFileContents(input),
+          workspaceRoutes.enabled
+            ? remoteVcs("git.init", input, Schema.Null).pipe(
+                Effect.asVoid,
+                Effect.mapError(
+                  (cause) =>
+                    new RuntimeContracts.VcsUnsupportedOperationError({
+                      operation: "init",
+                      kind: "git",
+                      detail: cause.message,
+                    }),
+                ),
+              )
+            : vcsProvisioning
+                .initRepository(input)
+                .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+        [WS_METHODS.reviewGetDiffPreview]: (input) =>
+          workspaceRoutes.enabled
+            ? remoteVcs("git.diff", input, RuntimeContracts.ReviewDiffPreviewResult)
+            : review.getDiffPreview(input),
+        [WS_METHODS.reviewGetDiffFileContents]: (input) =>
+          workspaceRoutes.enabled
+            ? remoteVcs(
+                "git.diffFileContents",
+                input,
+                RuntimeContracts.ReviewDiffFileContentsResult,
+              )
+            : review.getDiffFileContents(input),
         [WS_METHODS.terminalOpen]: (input) => terminalManager.open(input),
         [WS_METHODS.terminalAttach]: (input) =>
           Stream.callback<TerminalAttachStreamEvent, TerminalError>((queue) =>
@@ -2937,51 +3015,96 @@ const layerWsRpc = (
         [WS_METHODS.previewReportProfiles]: (input) => serverBrowser.reportProfiles(input),
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),
         [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
-        [WS_METHODS.deviceConfigure]: (input) => deviceService.configure(input),
-        [WS_METHODS.deviceTestHost]: (input) => deviceService.testHost(input),
-        [WS_METHODS.deviceList]: (input) =>
-          input.inspectOnly && !input.updateTool
-            ? deviceService.inspect
-            : authorizeEffect(
-                requiredScopeForDeviceList(input),
-                input.updateTool
-                  ? deviceService.updateTool(input.updateTool)
-                  : input.retryHostId
-                    ? deviceService.retryHost(input.retryHostId)
-                    : deviceService.list,
-              ),
-        [WS_METHODS.deviceOpen]: (input) => deviceService.open(input),
-        [WS_METHODS.deviceClose]: (input) => deviceService.close(input),
-        [WS_METHODS.deviceShutdown]: (input) => deviceService.shutdown(input),
-        [WS_METHODS.deviceDetail]: (input) => deviceService.detail(input),
-        [WS_METHODS.deviceAction]: (input) => deviceService.action(input),
-        [WS_METHODS.subscribeDeviceState]: (_input) => DeviceService.stateStream(deviceService),
-        [WS_METHODS.subscribeDiscoveredLocalServers]: (input) =>
-          Stream.callback<DiscoveredLocalServerList>((queue) =>
-            Effect.gen(function* () {
-              const configuredUrls = input.configuredUrls ?? [];
-              yield* portDiscovery.retain;
-              const initial = yield* portDiscovery.scan(configuredUrls);
-              const initialScannedAt = DateTime.formatIso(yield* DateTime.now);
-              yield* Queue.offer(queue, {
-                servers: initial,
-                scannedAt: initialScannedAt,
-                configuredUrlProbing: true,
-              });
-              yield* portDiscovery.subscribe(
-                { configuredUrls, initialSnapshot: initial },
-                (servers) =>
-                  Effect.gen(function* () {
-                    const scannedAt = DateTime.formatIso(yield* DateTime.now);
-                    yield* Queue.offer(queue, {
-                      servers,
-                      scannedAt,
-                      configuredUrlProbing: true,
-                    });
-                  }),
-              );
+        [WS_METHODS.deviceConfigure]: () =>
+          Effect.fail(
+            new RuntimeContracts.DeviceHostUnavailableError({
+              hostId: "local",
+              reason: "Native device control is unavailable in the web deployment.",
             }),
           ),
+        [WS_METHODS.deviceTestHost]: () =>
+          Effect.fail(
+            new RuntimeContracts.DeviceHostUnavailableError({
+              hostId: "local",
+              reason: "Native device control is unavailable in the web deployment.",
+            }),
+          ),
+        [WS_METHODS.deviceList]: () =>
+          Effect.fail(
+            new RuntimeContracts.DeviceHostUnavailableError({
+              hostId: "local",
+              reason: "Native device control is unavailable in the web deployment.",
+            }),
+          ),
+        [WS_METHODS.deviceOpen]: () =>
+          Effect.fail(
+            new RuntimeContracts.DeviceHostUnavailableError({
+              hostId: "local",
+              reason: "Native device control is unavailable in the web deployment.",
+            }),
+          ),
+        [WS_METHODS.deviceClose]: () =>
+          Effect.fail(
+            new RuntimeContracts.DeviceHostUnavailableError({
+              hostId: "local",
+              reason: "Native device control is unavailable in the web deployment.",
+            }),
+          ),
+        [WS_METHODS.deviceShutdown]: () =>
+          Effect.fail(
+            new RuntimeContracts.DeviceHostUnavailableError({
+              hostId: "local",
+              reason: "Native device control is unavailable in the web deployment.",
+            }),
+          ),
+        [WS_METHODS.deviceDetail]: () =>
+          Effect.fail(
+            new RuntimeContracts.DeviceHostUnavailableError({
+              hostId: "local",
+              reason: "Native device control is unavailable in the web deployment.",
+            }),
+          ),
+        [WS_METHODS.deviceAction]: () =>
+          Effect.fail(
+            new RuntimeContracts.DeviceHostUnavailableError({
+              hostId: "local",
+              reason: "Native device control is unavailable in the web deployment.",
+            }),
+          ),
+        [WS_METHODS.subscribeDeviceState]: () => Stream.empty,
+        [WS_METHODS.subscribeDiscoveredLocalServers]: (input) => {
+          let first = true;
+          return Stream.fromEffectRepeat(
+            Effect.gen(function* () {
+              if (!first) yield* Effect.sleep("2 seconds");
+              first = false;
+              const servers =
+                input.threadId === undefined
+                  ? []
+                  : yield* executionRuntime.observeThread(input.threadId).pipe(
+                      Effect.flatMap((current) =>
+                        current.kind === "stopped"
+                          ? Effect.succeed([])
+                          : Effect.tryPromise(() =>
+                              current.client.call("preview.discover", {
+                                configuredUrls: input.configuredUrls ?? [],
+                              }),
+                            ).pipe(
+                              Effect.flatMap(
+                                Schema.decodeUnknownEffect(Schema.Array(DiscoveredLocalServer)),
+                              ),
+                            ),
+                      ),
+                      Effect.orElseSucceed(() => []),
+                    );
+              return {
+                servers,
+                scannedAt: DateTime.formatIso(yield* DateTime.now),
+                configuredUrlProbing: true as const,
+              };
+            }),
+          );
+        },
         [WS_METHODS.subscribeServerConfig]: (input) =>
           Stream.unwrap(
             Effect.gen(function* () {
@@ -3165,7 +3288,6 @@ export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
-    const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
@@ -3229,8 +3351,6 @@ export const layer = Layer.unwrap(
               Layer.provide(DefectReporter.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
-              Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),

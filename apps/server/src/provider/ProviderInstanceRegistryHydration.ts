@@ -1,3 +1,4 @@
+import { makeRemoteDrivers } from "../execution/RemoteProviderDrivers.ts";
 /**
  * ProviderInstanceRegistryHydration — derive a `ProviderInstanceConfigMap`
  * from `ServerSettings` and keep `ProviderInstanceRegistry` in sync with it.
@@ -37,28 +38,9 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
 import * as Settings from "../serverSettings.ts";
-import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "./builtInDrivers.ts";
+import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
-import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
-import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
-import * as ProviderHostLive from "./ProviderHostLive.ts";
-import type * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
-import type * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import type * as ServerConfig from "../config.ts";
-
-type ProviderInstanceRegistryHydrationEnv =
-  | Exclude<
-      BuiltInDriversEnv,
-      | ProviderOrchestrationAdapterInfrastructure.ProviderOrchestrationAdapterInfrastructure
-      | AcpRegistrySupport.AcpRegistryCatalog
-      | ProviderHost.ProviderHost
-    >
-  | Settings.ServerSettingsService
-  // Requirements of the `ProviderHost.ProviderHost` the drivers receive.
-  | BackgroundPolicy.BackgroundPolicy
-  | ServerConfig.ServerConfig;
-
 /**
  * Explicit `providerInstances` entries plus an implicit default instance for
  * each built-in driver whose default slot is empty. Pure so the hydration
@@ -149,34 +131,21 @@ const layerSettingsWatcher = Layer.effectDiscard(
  * The mutator tag is technically also exposed; only this module imports
  * it, so the visibility leak is harmless in practice.
  */
-export const layer: Layer.Layer<
-  ProviderInstanceRegistry.ProviderInstanceRegistry,
-  never,
-  ProviderInstanceRegistryHydrationEnv
-> = Layer.unwrap(
+export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const serverSettings = yield* Settings.ServerSettingsService;
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
-    const initialConfigMap =
-      initialSettings === undefined
-        ? ({} as ProviderInstanceConfigMap)
-        : deriveProviderInstanceConfigMap(initialSettings);
+    const initialConfigMap: ProviderInstanceConfigMap =
+      initialSettings === undefined ? {} : deriveProviderInstanceConfigMap(initialSettings);
 
+    const drivers = yield* makeRemoteDrivers;
     const layerMutable = ProviderInstanceRegistry.layer({
-      drivers: BUILT_IN_DRIVERS,
+      drivers,
       configMap: initialConfigMap,
-    }).pipe(
-      Layer.provide(ProviderOrchestrationAdapterInfrastructure.layer),
-      Layer.provide(AcpRegistrySupport.layerFromHost),
-      Layer.provide(ProviderHostLive.layer),
-    );
+    });
 
     return layerSettingsWatcher.pipe(Layer.provideMerge(layerMutable));
   }),
-) as Layer.Layer<
-  ProviderInstanceRegistry.ProviderInstanceRegistry,
-  never,
-  ProviderInstanceRegistryHydrationEnv
->;
+);

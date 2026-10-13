@@ -1,3 +1,19 @@
+import * as RemoteUsageHistory from "./agentRuntime/UsageHistory.ts";
+import * as VcsProcess from "./vcs/VcsProcess.ts";
+import * as RemoteProjectMetadata from "./agentRuntime/RemoteProjectMetadata.ts";
+import * as RemoteAssets from "./agentRuntime/RemoteAssets.ts";
+import * as LifecyclePolicy from "./agentRuntime/LifecyclePolicy.ts";
+import * as AttachmentStaging from "./agentRuntime/AttachmentStaging.ts";
+import * as RemoteWorkspacePreview from "./agentRuntime/RemoteWorkspacePreview.ts";
+import * as SandboxComputer from "./computer/SandboxComputer.ts";
+import * as SandboxIde from "./agentRuntime/SandboxIde.ts";
+import * as SandboxIdeHttp from "./agentRuntime/sandboxIdeHttp.ts";
+import * as RemoteWorkspaceTerminals from "./agentRuntime/RemoteWorkspaceTerminals.ts";
+import * as RemoteWorkspaceGitStatus from "./agentRuntime/RemoteWorkspaceGitStatus.ts";
+import * as RemoteRestoreSafety from "./agentRuntime/RestoreSafety.ts";
+import * as WorkspaceRouting from "./agentRuntime/WorkspaceRouting.ts";
+import * as RemoteWorkspace from "./agentRuntime/RemoteWorkspaceServices.ts";
+import * as AgentRuntimeClient from "./agentRuntime/RuntimeClient.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Clock from "effect/Clock";
@@ -11,6 +27,7 @@ import * as NodeHttp from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -49,26 +66,15 @@ import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
-import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
 import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
-import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
-import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
-import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
-import * as DeviceService from "./device/DeviceService.ts";
-import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
-import * as PreviewManager from "./preview/Manager.ts";
-import * as PortScanner from "./preview/PortScanner.ts";
-import * as ServerBrowser from "./preview/ServerBrowser.ts";
-import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
@@ -81,25 +87,17 @@ import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
-import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
-import * as CodexInstallation from "./provider/CodexInstallation.ts";
-import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
-import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
-import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
-import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
-import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
-import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
-import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
+import * as RemoteGitDriver from "./agentRuntime/RemoteGitDriver.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
-import * as VcsProcess from "./vcs/VcsProcess.ts";
+import * as RemoteVcsProcess from "./agentRuntime/RemoteVcsProcess.ts";
+import * as CredentialBroker from "./execution/CredentialBroker.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
-import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
@@ -145,8 +143,6 @@ import {
 } from "./cloud/managedTunnelStartup.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
-import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
-import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -157,7 +153,6 @@ import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClien
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
-import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
 import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
@@ -248,25 +243,9 @@ const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
 
 // Reuses DesktopTelemetryReceiverLayerLive: a fresh receiver layer here
 // would open a second reader on the desktop telemetry fd.
-const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
-  Layer.provide(layerDesktopTelemetryReceiver),
-);
-
 const layerBackground = BackgroundPolicy.layer.pipe(
   Layer.provide(layerHostPowerMonitor),
   Layer.provideMerge(layerServerSettings),
-);
-
-const layerUsage = UsageService.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      AntigravityUsage.layer,
-      CursorUsageAccounts.layer.pipe(
-        Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
-      ),
-    ).pipe(Layer.provide(ProviderHostLive.layer.pipe(Layer.provide(ServerSecretStore.layer)))),
-  ),
-  Layer.provide(layerServerSettings),
 );
 
 const layerResourceDiagnostics = Layer.mergeAll(
@@ -304,12 +283,42 @@ const layerHttpServer = Layer.unwrap(
 const layerPlatformServices = NodeServices.layer;
 
 const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
+const layerUsageHistory = RemoteUsageHistory.layer.pipe(Layer.provide(layerPersistence));
+const layerUsage = UsageService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      CursorUsageAccounts.layer.pipe(
+        Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
+      ),
+    ).pipe(Layer.provide(ProviderHostLive.layer.pipe(Layer.provide(ServerSecretStore.layer)))),
+  ),
+  Layer.provide(RemoteUsageHistory.sourcesLayer.pipe(Layer.provide(layerUsageHistory))),
+  Layer.provide(layerServerSettings),
+);
 
-const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
+const layerAgentRuntime = AgentRuntimeClient.layer.pipe(Layer.provide(layerPersistence));
+const layerWorkspaceRouting = WorkspaceRouting.layer.pipe(
+  Layer.provide(layerAgentRuntime),
+  Layer.provide(layerPersistence),
+);
+const layerRemoteAssets = RemoteAssets.layer.pipe(
+  Layer.provide(layerWorkspaceRouting),
+  Layer.provide(layerAgentRuntime),
+);
+
+const layerRemoteGit = RemoteGitDriver.layer.pipe(Layer.provide(layerWorkspaceRouting));
+const layerVcsDriverRegistry = RemoteGitDriver.registryLayer.pipe(
+  Layer.provide(layerRemoteGit),
+  Layer.provide(layerWorkspaceRouting),
+);
+const layerRemoteVcsProcess = RemoteVcsProcess.layer.pipe(
+  Layer.provide(layerWorkspaceRouting),
+  Layer.provide(layerAgentRuntime),
+);
 
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
   Layer.provideMerge(SourceControlBuiltInDrivers.layer),
-  Layer.provideMerge(GitVcsDriver.layer),
+  Layer.provideMerge(layerRemoteGit),
   Layer.provideMerge(layerVcsDriverRegistry),
 );
 
@@ -352,14 +361,14 @@ const layerGitManager = GitManager.layer.pipe(
   Layer.provide(Layer.merge(ProjectionStoreV2.layer, ProjectStore.layer)),
   Layer.provideMerge(RuntimeLayer.layerProjectSetupScriptRunner),
   Layer.provideMerge(WorktreeSetupTracker.layer),
-  Layer.provideMerge(GitVcsDriver.layer),
+  Layer.provideMerge(layerRemoteGit),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(TextGeneration.layer.pipe(Layer.provide(layerSourceControlProviderRegistry))),
 );
 
 const layerGit = Layer.empty.pipe(
   Layer.provideMerge(layerGitManager),
-  Layer.provideMerge(GitVcsDriver.layer),
+  Layer.provideMerge(layerRemoteGit),
 );
 
 const layerGitWorkflow = GitWorkflowService.layer.pipe(
@@ -368,7 +377,7 @@ const layerGitWorkflow = GitWorkflowService.layer.pipe(
 );
 
 const layerSourceControlRepositoryService = SourceControlRepositoryService.layer.pipe(
-  Layer.provideMerge(GitVcsDriver.layer),
+  Layer.provideMerge(layerRemoteGit),
   Layer.provideMerge(layerSourceControlProviderRegistry),
 );
 
@@ -378,7 +387,7 @@ const layerProjectCloneTracker = ProjectCloneTracker.layer.pipe(
 
 const layerReview = ReviewService.layer.pipe(
   Layer.provide(ProjectStore.layer),
-  Layer.provideMerge(GitVcsDriver.layer),
+  Layer.provideMerge(layerRemoteGit),
   Layer.provideMerge(layerVcsDriverRegistry),
 );
 
@@ -390,46 +399,18 @@ const layerVcs = Layer.empty.pipe(
   Layer.provideMerge(layerReview),
   Layer.provideMerge(layerSourceControlRepositoryService),
   Layer.provideMerge(layerProjectCloneTracker),
-  Layer.provideMerge(
-    VcsStatusBroadcaster.layer.pipe(
-      Layer.provide(layerGitWorkflow),
-      // Auto-pull reads the project row. The orchestration runtime also
-      // consumes the broadcaster (run finalization), so the policy cannot read
-      // the store from the runtime's output.
-      Layer.provide(
-        VcsStatusBroadcaster.layerAutoPullPolicy.pipe(Layer.provide(ProjectStore.layer)),
-      ),
-    ),
-  ),
+  Layer.provideMerge(RemoteWorkspaceGitStatus.layer.pipe(Layer.provide(layerGitWorkflow))),
 );
 
-const layerCheckpointStore = CheckpointStore.layer.pipe(Layer.provide(layerVcsDriverRegistry));
+const layerCheckpointStore = RemoteWorkspace.checkpointLayer;
 
-const layerPortScanner = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
+const layerTerminal = RemoteWorkspaceTerminals.layer;
 
-const layerTerminal = TerminalManager.layer.pipe(
-  Layer.provide(layerPtyAdapter),
-  Layer.provide(layerPortScanner),
-  Layer.provide(layerNativeTelemetry),
-);
+const layerPreview = RemoteWorkspacePreview.managerLayer;
 
-const layerPreview = Layer.empty.pipe(
-  Layer.provideMerge(PreviewManager.layer),
-  Layer.provideMerge(layerPortScanner),
-);
+const layerWorkspaceEntries = RemoteWorkspace.entriesLayer;
 
-const layerDevice = DeviceService.layer.pipe(
-  Layer.provide(layerServerSettings),
-  Layer.provide(ProcessRunner.layer),
-  Layer.provide(NetService.layer),
-);
-
-const layerWorkspaceEntries = WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer));
-
-const layerWorkspaceFileSystem = WorkspaceFileSystem.layer.pipe(
-  Layer.provide(WorkspacePaths.layer),
-  Layer.provide(layerWorkspaceEntries),
-);
+const layerWorkspaceFileSystem = RemoteWorkspace.fileSystemLayer;
 
 const layerWorkspace = Layer.mergeAll(
   WorkspacePaths.layer,
@@ -437,9 +418,10 @@ const layerWorkspace = Layer.mergeAll(
   layerWorkspaceFileSystem,
 );
 
-const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
+const layerProjectFaviconResolver = RemoteProjectMetadata.faviconLayer.pipe(
+  Layer.provide(layerRemoteAssets),
   Layer.provide(WorkspacePaths.layer),
-  Layer.provide(T3ProjectFileLoader.layer),
+  Layer.provide(RemoteProjectMetadata.projectFileLayer),
 );
 
 const layerServerEnvironment = ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer));
@@ -509,43 +491,16 @@ const layerOrchestrationApplication = CheckpointDiffQuery.layer.pipe(
 // so every client sees the same shelf.
 const layerThreadSettlementWorker = Layer.effectDiscard(
   ThreadSettlementService.make.pipe(Effect.flatMap((service) => service.start())),
-).pipe(Layer.provide(layerPullRequestService), Layer.provide(ProjectionStoreV2.layer));
+).pipe(
+  Layer.provide(LifecyclePolicy.layer),
+  Layer.provide(layerPullRequestService),
+  Layer.provide(ProjectionStoreV2.layer),
+  Layer.provide(ProjectStore.layer),
+);
 
 const layerThreadPullRequestWorker = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerPullRequestService));
-
-const layerProviderInstallationRefresh = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const antigravity = yield* AntigravityInstallation.AntigravityInstallation;
-    const codex = yield* CodexInstallation.CodexInstallation;
-    const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
-    const providers = yield* ProviderRegistry.ProviderRegistry;
-    yield* Stream.merge(
-      antigravity.changes.pipe(
-        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
-        Stream.drop(1),
-      ),
-      codex.changes.pipe(
-        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
-        Stream.drop(1),
-      ),
-    ).pipe(
-      Stream.runForEach((state) =>
-        instances.listInstances.pipe(
-          Effect.flatMap((entries) =>
-            Effect.forEach(
-              entries.filter((instance) => instance.driverKind === state.driver),
-              (instance) => providers.refreshInstance(instance.instanceId),
-              { discard: true },
-            ),
-          ),
-        ),
-      ),
-      Effect.forkScoped,
-    );
-  }),
-);
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   AgentAwarenessRelay.layer,
@@ -577,7 +532,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   ProviderUsageLimitsIngestion.layer,
-  layerProviderInstallationRefresh,
   ReplayMarkers.layer,
   // Catches overrides left behind by a project deleted before this cleanup
   // existed, or by a cleanup write that failed. See ProjectService.delete
@@ -594,7 +548,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),
   Layer.provideMerge(layerVcs),
-  Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
+  Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview)),
   Layer.provideMerge(layerPersistence),
   // Both read a user-owned file out of the state directory and stream changes
   // to clients; neither depends on the other.
@@ -607,12 +561,10 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
   // hydration adds their default instances to `providerInstances` on boot.
   Layer.provideMerge(ProviderInstanceRegistryHydration.layer),
-  Layer.provideMerge(
-    Layer.mergeAll(
-      AntigravityInstallation.AntigravityInstallation.layer,
-      CodexInstallation.CodexInstallation.layer,
-    ),
-  ),
+  Layer.provideMerge(layerWorkspaceRouting),
+  Layer.provideMerge(RemoteRestoreSafety.layer),
+  Layer.provideMerge(AttachmentStaging.layer),
+  Layer.provideMerge(layerAgentRuntime),
 );
 
 const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
@@ -634,24 +586,8 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
       McpProviderSessions.layer,
     ),
   ),
-  // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
-  // `ProviderRegistry.layer` pulled `OpenCodeRuntimeLive` in for itself, but
-  // the rewritten registry reads snapshots off the instance registry and
-  // no longer transitively provides it. Exposing it at the runtime level
-  // keeps a single Live for all opencode consumers.
-  Layer.provideMerge(
-    OpenCodeRuntime.layer.pipe(
-      Layer.provide(
-        Layer.unwrap(
-          Effect.gen(function* () {
-            const config = yield* ServerConfig.ServerConfig;
-            return OpenCodeServerLedger.layer({ stateDir: config.stateDir });
-          }),
-        ),
-      ),
-    ),
-  ),
   Layer.provideMerge(layerWorkspace),
+  Layer.provideMerge(layerWorkspaceRouting),
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(layerRepositoryIdentityResolver),
@@ -674,14 +610,21 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   // Usage reads provider history through the ProviderHost, which needs the
   // background policy below it.
   Layer.provideMerge(layerUsage),
+  Layer.provideMerge(layerUsageHistory),
   Layer.provideMerge(layerBackground),
   Layer.provideMerge(layerResourceDiagnostics),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
+  Layer.provideMerge(SandboxIde.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
+  Layer.provideMerge(layerRemoteAssets),
+  Layer.provideMerge(AttachmentStaging.layer),
+  Layer.provideMerge(layerWorkspaceRouting),
+  Layer.provideMerge(layerAgentRuntime),
+  Layer.provideMerge(layerPersistence),
   Layer.provide(NetService.layer),
 );
 
@@ -694,6 +637,7 @@ const layerCommandReadiness = HttpRouter.middleware(
 );
 
 const layerMakeRoutes = Layer.mergeAll(
+  CredentialBroker.layer,
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
       Layer.provide(AuthHttp.layer),
@@ -709,8 +653,8 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
-    DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
+    SandboxIdeHttp.layer.pipe(Layer.provide(NodeSocket.layerWebSocketConstructorWS)),
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
   ),
@@ -720,6 +664,7 @@ const layerMakeRoutes = Layer.mergeAll(
   // orchestrator uses, so MCP capability reporting can never drift from
   // what dispatch can actually serve.
   McpHttpServer.layer.pipe(
+    Layer.provide(SandboxComputer.layer),
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
   ),
@@ -733,11 +678,10 @@ const layerMakeRoutes = Layer.mergeAll(
   // after the guide service so it reaches that too.
   Layer.provide(layerPullRequestService),
   // The stream route and the WebSocket RPCs share one browser.
-  Layer.provide(ServerBrowser.layer.pipe(Layer.provide(DesktopBrowserChannel.layer))),
+  Layer.provide(RemoteWorkspacePreview.browserLayer),
   // Server browser tabs and HTML render previews install and run the same headless browser.
   Layer.provide(PreviewBrowser.layer),
-  Layer.provide(PreviewAutomationBroker.layer),
-  Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
+  Layer.provide(RemoteWorkspacePreview.brokerLayer),
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),
   Layer.provide(ServerHttp.layerHttpCompression),
@@ -1102,6 +1046,9 @@ const layerMakeServer = Layer.unwrap(
       // The connect routes and the startup/shutdown link work share one instance.
       Layer.provide(CloudLink.layer),
       Layer.provideMerge(layerRuntimeServices),
+      Layer.provideMerge(layerWorkspaceRouting),
+      Layer.provideMerge(layerAgentRuntime),
+      Layer.provideMerge(layerPersistence),
       Layer.provideMerge(
         McpSessionRegistry.layer.pipe(
           Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),
@@ -1111,6 +1058,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),
       Layer.provide(layerApplicationObservability),
+      Layer.provide(layerRemoteVcsProcess),
       Layer.provideMerge(FetchHttpClient.layer),
       // PR reads, Git operations, and WebSocket discovery share one process limiter.
       Layer.provide(VcsProcess.layer),

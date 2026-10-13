@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": [
+    "./WorkspaceRouting*.ts",
+    "./RemoteWorkspace*.ts",
+    "./RemoteAssets*.ts",
+    "./AttachmentStaging*.ts",
+    "./worker/*.ts",
+    "../orchestration-v2/ThreadLaunchService.ts",
+    "../orchestration-v2/ThreadMessageIntake.ts",
+    "../project/ProjectService.ts",
+    "../provider/userInputAttachments.ts",
+    "../ws.ts"
+  ]
+}

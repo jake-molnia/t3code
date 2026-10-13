@@ -1,3 +1,5 @@
+import type { SandboxComputerScreenshot } from "../../../../packages/contracts/src/sandboxComputer.ts";
+import * as SandboxComputer from "../computer/SandboxComputer.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { expect, it } from "@effect/vitest";
@@ -1094,4 +1096,46 @@ it.effect("admits provider and OAuth client credentials and points only clients 
       expect(deadProvider.headers["www-authenticate"]).toBe('Bearer error="invalid_token"');
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("emits sandbox screenshots as MCP image content without base64 in metadata", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server.callTool({ name: "computer_screenshot", arguments: {} }).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, {
+        ...invocation,
+        capabilities: new Set<McpInvocationContext.McpCapability>(["computer"]),
+      }),
+      Effect.provideService(McpSchema.McpServerClient, client),
+    );
+    expect(result.isError).toBe(false);
+    expect(result.structuredContent).toEqual({
+      screenshot: { mimeType: "image/png", width: 10, height: 5 },
+    });
+    expect(result.content).toEqual([
+      { type: "text", text: JSON.stringify(result.structuredContent) },
+      { type: "image", mimeType: "image/png", data: new Uint8Array(Buffer.from("png")) },
+    ]);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerComputerToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+        Layer.provide(
+          Layer.succeed(SandboxComputer.SandboxComputer, {
+            status: Effect.die("unused status"),
+            action: () => Effect.die("unused action"),
+            screenshot: Effect.succeed({
+              screenshot: {
+                mimeType: "image/png",
+                data: Buffer.from("png").toString("base64"),
+                width: 10,
+                height: 5,
+              },
+            } satisfies SandboxComputerScreenshot),
+          }),
+        ),
+      ),
+    ),
+  ),
 );

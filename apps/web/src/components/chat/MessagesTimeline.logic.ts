@@ -512,6 +512,8 @@ export type TimelineLatestRun = Pick<
   "runId" | "status" | "startedAt" | "completedAt"
 >;
 
+export type TimelineRunTiming = Pick<TimelineLatestRun, "runId" | "startedAt" | "completedAt">;
+
 const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
 
 export type MessagesTimelineRow = MessagesTimelineRowContent & {
@@ -1017,6 +1019,7 @@ function deriveTurnFolds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   terminalAssistantMessageIds: ReadonlySet<string>;
   latestRun: TimelineLatestRun | null;
+  runTimings?: ReadonlyArray<TimelineRunTiming> | undefined;
   unfoldedRunIds: ReadonlySet<RunId>;
   /** Keeps the latest runless response open; V2 work must not reopen imported turns. */
   runlessWorkActive: boolean;
@@ -1105,6 +1108,7 @@ function deriveTurnFolds(input: {
     }
   }
 
+  const timingByRunId = new Map(input.runTimings?.map((run) => [run.runId, run]));
   const foldsByAnchorEntryId = new Map<string, TurnFold>();
   for (const [runId, group] of groupsByRunId) {
     if (
@@ -1173,9 +1177,11 @@ function deriveTurnFolds(input: {
     // terminal message — take whichever ended last.
     const lastEntryEnd =
       lastEntry.kind === "message" ? lastEntry.message.updatedAt : lastEntry.createdAt;
+    const timing =
+      timingByRunId.get(runId) ?? (input.latestRun?.runId === runId ? input.latestRun : null);
     const elapsedMs =
-      input.latestRun?.runId === runId && input.latestRun.startedAt && input.latestRun.completedAt
-        ? computeElapsedMs(input.latestRun.startedAt, input.latestRun.completedAt)
+      timing?.startedAt && timing.completedAt
+        ? computeElapsedMs(timing.startedAt, timing.completedAt)
         : computeElapsedMs(
             group.startBoundary ?? firstEntry.createdAt,
             maxIsoTimestamp(group.terminalEntry?.message.updatedAt ?? null, lastEntryEnd) ??
@@ -1360,7 +1366,12 @@ function timelineRowEntries(entries: ReadonlyArray<TimelineEntry>) {
 function deriveTimelineTurnFolds(
   input: Pick<
     MessagesTimelineRowsInput,
-    "timelineEntries" | "latestRun" | "isWorking" | "runlessWorkActive" | "runningRunId"
+    | "timelineEntries"
+    | "latestRun"
+    | "runTimings"
+    | "isWorking"
+    | "runlessWorkActive"
+    | "runningRunId"
   >,
 ) {
   const timelineEntries = timelineRowEntries(input.timelineEntries);
@@ -1375,6 +1386,7 @@ function deriveTimelineTurnFolds(
     timelineEntries,
     terminalAssistantMessageIds: deriveTerminalAssistantMessageIds(timelineEntries),
     latestRun: input.latestRun ?? null,
+    runTimings: input.runTimings,
     unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
     runlessWorkActive: input.isWorking && input.runlessWorkActive === true,
     liveSubagentEntryIds: liveSubagentCardEntryIds(timelineEntries),
@@ -1385,6 +1397,7 @@ function deriveTimelineTurnFolds(
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestRun?: TimelineLatestRun | null;
+  runTimings?: ReadonlyArray<TimelineRunTiming> | undefined;
   runningRunId?: RunId | null;
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
@@ -1441,6 +1454,7 @@ export function deriveMessagesTimelineRows(input: {
     timelineEntries: timelineEntries,
     terminalAssistantMessageIds,
     latestRun: input.latestRun ?? null,
+    runTimings: input.runTimings,
     unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
     runlessWorkActive,
     liveSubagentEntryIds,
@@ -2083,7 +2097,12 @@ export interface MessagesTimelineRowsProjection {
 export function timelineEntryTurnFoldRunId(
   input: Pick<
     MessagesTimelineRowsInput,
-    "timelineEntries" | "latestRun" | "isWorking" | "runlessWorkActive" | "runningRunId"
+    | "timelineEntries"
+    | "latestRun"
+    | "runTimings"
+    | "isWorking"
+    | "runlessWorkActive"
+    | "runningRunId"
   >,
   entryId: string,
 ): RunId | null {
@@ -2094,7 +2113,12 @@ export function timelineEntryTurnFoldRunId(
 export function timelineTurnFoldRunIdsByEntryId(
   input: Pick<
     MessagesTimelineRowsInput,
-    "timelineEntries" | "latestRun" | "isWorking" | "runlessWorkActive" | "runningRunId"
+    | "timelineEntries"
+    | "latestRun"
+    | "runTimings"
+    | "isWorking"
+    | "runlessWorkActive"
+    | "runningRunId"
   >,
 ): ReadonlyMap<string, RunId> {
   const byEntryId = new Map<string, RunId>();
@@ -2123,6 +2147,7 @@ function replaceStreamingMessageRows(
   const {
     timelineEntries: previousEntries,
     latestRun: previousRun,
+    runTimings: previousTimings,
     turnDiffSummaries: previousCheckpoints,
     expandedRunIds: previousExpandedRuns,
     expandedAttemptIds: previousExpandedAttempts,
@@ -2132,6 +2157,7 @@ function replaceStreamingMessageRows(
   const {
     timelineEntries,
     latestRun,
+    runTimings,
     turnDiffSummaries,
     expandedRunIds,
     expandedAttemptIds,
@@ -2144,6 +2170,8 @@ function replaceStreamingMessageRows(
     timelineEntries.length !== previousEntries.length ||
     !shallow(previousContext, context) ||
     !shallow(previousRun, latestRun) ||
+    (previousTimings?.length ?? 0) !== (runTimings?.length ?? 0) ||
+    (previousTimings?.some((run, index) => !shallow(run, runTimings?.[index])) ?? false) ||
     !shallow(previousExpandedRuns, expandedRunIds) ||
     !shallow(previousExpandedAttempts, expandedAttemptIds) ||
     !shallow(previousExpandedGroups, expandedWorkGroupIds) ||

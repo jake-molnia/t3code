@@ -5391,3 +5391,81 @@ describe("shouldCollapseUserMessage", () => {
     expect(shouldCollapseUserMessage(text)).toBe(false);
   });
 });
+
+it("keeps completed run duration stable after follow-ups and reload, excluding startup gaps", () => {
+  const runId = RunId.make("timed-run");
+  const message = (
+    id: string,
+    role: "user" | "assistant",
+    at: string,
+  ): Extract<TimelineEntry, { kind: "message" }> => ({
+    id,
+    kind: "message",
+    createdAt: at,
+    message: {
+      id: MessageId.make(id),
+      role,
+      text: id,
+      runId,
+      createdAt: at,
+      updatedAt: at,
+      streaming: false,
+    },
+  });
+  const timelineEntries: TimelineEntry[] = [
+    message("queued-prompt", "user", "2026-01-01T00:00:00Z"),
+    message("commentary", "assistant", "2026-01-01T00:09:10Z"),
+    message("finished", "assistant", "2026-01-01T00:09:28Z"),
+  ];
+  const completed = {
+    runId,
+    status: "completed" as const,
+    startedAt: "2026-01-01T00:09:06Z",
+    completedAt: "2026-01-01T00:09:28Z",
+  };
+  const input = {
+    timelineEntries,
+    latestRun: completed,
+    runTimings: [completed],
+    isWorking: false,
+    turnDiffSummaries: [],
+    supportsConversationRollback: false,
+  };
+  const first = deriveMessagesTimelineRowsWithState(input);
+  expect(first.rows.find((row) => row.kind === "turn-fold")?.label).toBe("Worked for 22s");
+  const followup = {
+    ...input,
+    timelineEntries: [
+      ...timelineEntries,
+      {
+        ...message("follow-up", "user", "2026-01-01T00:20:00Z"),
+        message: {
+          id: MessageId.make("follow-up"),
+          role: "user" as const,
+          text: "continue",
+          runId: RunId.make("next-run"),
+          createdAt: "2026-01-01T00:20:00Z",
+          updatedAt: "2026-01-01T00:20:00Z",
+          streaming: false,
+        },
+      },
+    ],
+    latestRun: {
+      ...completed,
+      runId: RunId.make("next-run"),
+      status: "running" as const,
+      completedAt: null,
+    },
+    isWorking: true,
+  };
+  const next = deriveMessagesTimelineRowsWithState(followup, first);
+  const reloaded = deriveMessagesTimelineRowsWithState(followup);
+  for (const projection of [next, reloaded]) {
+    expect(projection.rows.find((row) => row.kind === "turn-fold")?.label).toBe("Worked for 22s");
+  }
+  const refreshed = deriveMessagesTimelineRowsWithState(
+    { ...followup, runTimings: [{ ...completed, completedAt: "2026-01-01T00:09:30Z" }] },
+    next,
+  );
+  expect(refreshed.rows.find((row) => row.kind === "turn-fold")?.label).toBe("Worked for 24s");
+});

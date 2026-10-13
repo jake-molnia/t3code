@@ -1,9 +1,12 @@
+import { useAtomValue } from "@effect/atom-react";
+import { useSandboxIde } from "../../useSandboxIde";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import {
   AuthOrchestrationOperateScope,
   buildRemoteOpenUrl,
   EditorId,
   type EnvironmentId,
+  type ThreadId,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
@@ -32,7 +35,6 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import {
-  AntigravityIcon,
   CursorIcon,
   FileExplorerIcon,
   FinderIcon,
@@ -119,11 +121,6 @@ export const resolveOpenInOptions = (
       kind: "brand",
     },
     {
-      Icon: AntigravityIcon,
-      value: "antigravity",
-      kind: "brand",
-    },
-    {
       Icon: IntelliJIdeaIcon,
       value: "idea",
       kind: "brand",
@@ -205,6 +202,7 @@ function getOpenInIconClass(kind: OpenInOption["kind"]) {
 
 export const OpenInPicker = memo(function OpenInPicker({
   environmentId,
+  threadId,
   keybindings,
   availableEditors,
   openInCwd,
@@ -214,6 +212,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   displayMode = "toolbar",
 }: {
   environmentId: EnvironmentId;
+  threadId: ThreadId;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   openInCwd: string | null;
@@ -226,18 +225,33 @@ export const OpenInPicker = memo(function OpenInPicker({
   const ActionGroup = isPanel ? "div" : Group;
   const panelAnchorRef = useRef<HTMLDivElement | null>(null);
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
+  const openSandboxIde = useSandboxIde(environmentId, threadId, openInCwd);
   const remote = useRemoteOpenState(environmentId);
   const canOperateHost = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
-  const isHostEditorDenied = remote.mode === "local-exec" && !canOperateHost;
-  const canOpenEditor = remote.mode !== "remote-unavailable" && !isHostEditorDenied;
-  const [menuOpen, setMenuOpen] = useComposerMenuState(isHostEditorDenied);
+  const canOpenSandboxIde = useAtomValue(
+    shellEnvironment.openSandboxIde.permissionAtom(environmentId),
+  );
   const remoteCapableEditors = useRemoteCapableEditors();
   const [remoteHintSeen, markRemoteHintSeen] = useRemoteOpenHint();
   const environmentLabel = useEnvironment(environmentId)?.label ?? "this machine";
-  // Remote mode ignores the server's PATH probe: what matters is what runs on
-  // the viewing machine, which only the desktop app can probe.
-  const effectiveEditors = remote.mode === "local-exec" ? availableEditors : remoteCapableEditors;
+  // The sandbox supplies VS Code independently of locally installed editors.
+  const effectiveEditors = useMemo<readonly EditorId[]>(
+    () => [
+      "vscode",
+      ...(remote.mode === "local-exec" ? availableEditors : remoteCapableEditors).filter(
+        (editor) => editor !== "vscode",
+      ),
+    ],
+    [availableEditors, remote.mode, remoteCapableEditors],
+  );
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(effectiveEditors);
+  const sandboxEditor = preferredEditor === "vscode";
+  const isHostEditorDenied = sandboxEditor
+    ? !canOpenSandboxIde
+    : remote.mode === "local-exec" && !canOperateHost;
+  const canOpenEditor =
+    (sandboxEditor || remote.mode !== "remote-unavailable") && !isHostEditorDenied;
+  const [menuOpen, setMenuOpen] = useComposerMenuState(isHostEditorDenied);
   const options = useMemo(
     () => resolveOpenInOptions(navigator.platform, effectiveEditors),
     [effectiveEditors],
@@ -249,6 +263,12 @@ export const OpenInPicker = memo(function OpenInPicker({
       if (!openInCwd) return;
       const editor = editorId ?? preferredEditor;
       if (!editor) return;
+      if (editor === "vscode") {
+        if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
+        openSandboxIde();
+        setPreferredEditor(editor);
+        return;
+      }
       if (remote.mode === "remote-unavailable") return;
       if (remote.mode === "remote-links") {
         const url = buildRemoteOpenUrl({
@@ -282,6 +302,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       markRemoteHintSeen,
       openInCwd,
       openInEditorMutation,
+      openSandboxIde,
       preferredEditor,
       remote,
       setPreferredEditor,
@@ -300,7 +321,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       if (!openInCwd) return;
       if (!preferredEditor) return;
       if (
-        remote.mode === "local-exec" &&
+        (sandboxEditor || remote.mode === "local-exec") &&
         !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
       )
         return;
@@ -319,12 +340,13 @@ export const OpenInPicker = memo(function OpenInPicker({
     openInEditor,
     preferredEditor,
     remote.mode,
+    sandboxEditor,
   ]);
   const primaryLabel = isPanel ? `Open in ${primaryOption?.label ?? "editor"}` : "Open";
 
   const editorItems = (
     <>
-      {remote.mode === "remote-unavailable" ? (
+      {remote.mode === "remote-unavailable" && !sandboxEditor ? (
         <MenuItem density={presentation === "menu" ? "touch" : "default"} disabled>
           No SSH route to {environmentLabel}
         </MenuItem>
@@ -355,7 +377,7 @@ export const OpenInPicker = memo(function OpenInPicker({
               )}
             </MenuItem>
           ))}
-          {remote.mode === "remote-links" && !remoteHintSeen && (
+          {remote.mode === "remote-links" && !sandboxEditor && !remoteHintSeen && (
             <MenuItem density={presentation === "menu" ? "touch" : "default"} disabled>
               Opens over SSH. Needs your key on {environmentLabel}
             </MenuItem>

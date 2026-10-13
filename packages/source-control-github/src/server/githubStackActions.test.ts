@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import * as FileSystem from "effect/FileSystem";
 import * as Redacted from "effect/Redacted";
 import { ChildProcessSpawner } from "effect/process";
 import * as GitHubApi from "./GitHubApi.ts";
@@ -25,6 +24,7 @@ type Send = (
 let gitCalls: Array<ReadonlyArray<string>> = [];
 const fakeGit = Layer.mergeAll(
   TestSourceControlHost.layer({
+    temporaryDirectory: Effect.succeed("/tmp/scratch"),
     process: {
       run: (input) =>
         Effect.sync(() => {
@@ -41,7 +41,6 @@ const fakeGit = Layer.mergeAll(
         }),
     },
   }),
-  FileSystem.layerNoop({ makeTempDirectoryScoped: () => Effect.succeed("/tmp/scratch") }),
 );
 
 const runGitHubStackAction = (send: Send, input: Parameters<typeof runStackAction>[0]) =>

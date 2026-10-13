@@ -41,6 +41,7 @@ import {
   checkOpenCodeProviderStatus,
   loadOpenCode2Workspace,
   makeOpenCode2ModelLoader,
+  openCode2ModelsAfterConfiguration,
   makePendingOpenCodeProvider,
   openCode2CommandsToServerProviderSlashCommands,
   openCode2SkillsToServerProviderSkills,
@@ -312,7 +313,15 @@ export const OpenCodeDriver: ProviderDriver<
       });
       const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
         openCode2Server.withConnection(({ client }) =>
-          loadOpenCode2Catalog(client, host.paths.cwd),
+          Effect.all({
+            models: loadOpenCode2Catalog(client, host.paths.cwd),
+            entries: client.config.get({ location: { directory: host.paths.cwd } }),
+          }, { concurrency: "unbounded" }).pipe(
+            Effect.map(({ models, entries }) => openCode2ModelsAfterConfiguration(models, entries)),
+            Effect.mapError((cause) => new OpenCodeRuntime.OpenCodeRuntimeError({
+              operation: "model.list", detail: "The OpenCode server could not list its configured models.", cause,
+            })),
+          ),
         ),
       );
       // A 2.x server lists skills and commands per directory, so one server

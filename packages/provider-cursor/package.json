@@ -42,6 +42,10 @@
     "./server/CursorSdk": {
       "types": "./src/server/CursorSdk.ts",
       "import": "./src/server/CursorSdk.ts"
+    },
+    "./server/credentialStore": {
+      "types": "./src/server/credentialStore.ts",
+      "import": "./src/server/credentialStore.ts"
     }
   },
   "scripts": {

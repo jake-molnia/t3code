@@ -1,3 +1,6 @@
+import * as RemoteProjectMetadata from "../agentRuntime/RemoteProjectMetadata.ts";
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
+import * as AgentRuntime from "../agentRuntime/RuntimeClient.ts";
 import {
   AuthAdministrativeScopes,
   CommandId,
@@ -200,16 +203,19 @@ const projectCommandUuid = Crypto.Crypto.pipe(
 
 const layerProjectCliRuntime = RuntimeLayer.layerProjectService.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
-  Layer.provideMerge(RepositoryIdentityResolver.layer),
+  Layer.provideMerge(RemoteProjectMetadata.repositoryLayer),
   Layer.provideMerge(
-    ProjectFaviconResolver.layer.pipe(
+    RemoteProjectMetadata.faviconLayer.pipe(
       Layer.provide(WorkspacePaths.layer),
-      Layer.provide(T3ProjectFileLoader.layer),
+      Layer.provide(RemoteProjectMetadata.projectFileLayer),
     ),
   ),
   Layer.provideMerge(WorkspacePaths.layer),
   Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+  Layer.provideMerge(WorkspaceRouting.layer),
+  Layer.provideMerge(AgentRuntime.layer),
   Layer.provideMerge(SqlitePersistence.layerConfig),
+  Layer.provideMerge(FetchHttpClient.layer),
 );
 
 const PROJECT_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(1);

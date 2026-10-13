@@ -1,3 +1,6 @@
+import { SessionPlacement } from "../../execution/SessionPlacement.ts";
+import * as AgentRuntime from "../../agentRuntime/RuntimeClient.ts";
+import * as RemoteRecovery from "../../execution/RemoteSessionRecovery.ts";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -128,7 +131,6 @@ export function makeReplayServerConfig(
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
       desktopBootstrapToken: undefined,
-      autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
       stateDir,
       dbPath: path.join(stateDir, "state.sqlite"),
@@ -196,6 +198,7 @@ export function runOrchestratorV2ProviderReplayScenario<
     // Reconcile a previous runtime's state before the effect worker starts,
     // as server startup does after a crash or restart.
     readonly recoverOnStartup?: boolean;
+    readonly remoteRuntime?: AgentRuntime.RuntimeClient["Service"];
     readonly continueThreadsAfterServerUpdate?: boolean;
   } = {},
 ): Effect.Effect<
@@ -238,6 +241,7 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
     // Reconcile a previous runtime's state before the effect worker starts,
     // as server startup does after a crash or restart.
     readonly recoverOnStartup?: boolean;
+    readonly remoteRuntime?: AgentRuntime.RuntimeClient["Service"];
     readonly continueThreadsAfterServerUpdate?: boolean;
     readonly replayGate?: ProviderReplayGate;
   } = {},
@@ -274,6 +278,7 @@ export function layerWithRegistry<Error>(
     // Reconcile a previous runtime's state before the effect worker starts,
     // as server startup does after a crash or restart.
     readonly recoverOnStartup?: boolean;
+    readonly remoteRuntime?: AgentRuntime.RuntimeClient["Service"];
     readonly continueThreadsAfterServerUpdate?: boolean;
   } = {},
 ): Layer.Layer<
@@ -497,13 +502,23 @@ export function layerWithRegistry<Error>(
   const layerEffectWorkerProvided = EffectWorker.layer.pipe(
     Layer.provide(Layer.merge(layerStores, layerEffectExecutorProvided)),
   );
+  const layerRemote = options.remoteRuntime
+    ? Layer.merge(
+        Layer.succeed(AgentRuntime.RuntimeClient, options.remoteRuntime),
+        Layer.succeed(SessionPlacement, "per-thread"),
+      )
+    : Layer.empty;
   const layerReplayRuntime = Layer.mergeAll(
     layerOrchestratorProvided,
     layerProviderSessionManagerProvided,
     layerEffectWorkerProvided,
     layerEventSinkProvided,
     layerContinuationWorkerProvided,
-  ).pipe(Layer.provide(ProviderTurnStartServiceTestkit.layer), Layer.provide(NodeServices.layer));
+  ).pipe(
+    Layer.provide(layerRemote),
+    Layer.provide(ProviderTurnStartServiceTestkit.layer),
+    Layer.provide(NodeServices.layer),
+  );
 
   // Build the daemon from the exact worker instance exposed alongside the
   // orchestrator. Keeping this acquisition in the replay layer makes the
@@ -515,7 +530,7 @@ export function layerWithRegistry<Error>(
   // the effect worker claims anything, as in serverRuntimeStartup.
   const layerStartupRecovery: Layer.Layer<
     never,
-    MigrationError | PlatformError.PlatformError | SqlError
+    Error | MigrationError | PlatformError.PlatformError | SqlError
   > =
     options.recoverOnStartup === true
       ? Layer.effectDiscard(
@@ -523,7 +538,28 @@ export function layerWithRegistry<Error>(
             (recovery) => recovery.recover,
           ).pipe(Effect.orDie),
         ).pipe(
-          Layer.provide(ProviderRuntimeRecoveryService.layer),
+          Layer.provide(
+            ProviderRuntimeRecoveryService.layer.pipe(
+              Layer.provide(
+                options.remoteRuntime
+                  ? RemoteRecovery.layer.pipe(
+                      Layer.provide(
+                        Layer.mergeAll(
+                          layerProviderSessionManagerProvided,
+                          layerRunExecutionServiceProvided,
+                          layerRuntime,
+                          layerStores,
+                        ),
+                      ),
+                      Layer.provide(
+                        Layer.succeed(AgentRuntime.RuntimeClient, options.remoteRuntime),
+                      ),
+                      Layer.provide(NodeServices.layer),
+                    )
+                  : Layer.empty,
+              ),
+            ),
+          ),
           Layer.provide(
             Layer.mergeAll(
               layerStores,

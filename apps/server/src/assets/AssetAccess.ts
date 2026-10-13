@@ -1,3 +1,4 @@
+import * as RemoteAssets from "../agentRuntime/RemoteAssets.ts";
 import type { AssetResource } from "@t3tools/contracts";
 import {
   AssetAttachmentNotFoundError,
@@ -295,6 +296,9 @@ const resolveCanonicalFile = Effect.fn("AssetAccess.resolveCanonicalFile")(funct
 
 const resolveCanonicalWorkspaceFile = Effect.fn("AssetAccess.resolveCanonicalWorkspaceFile")(
   function* (input: { readonly workspaceRoot: string; readonly relativePath: string }) {
+    const remoteAssets = yield* Effect.serviceOption(RemoteAssets.RemoteAssets);
+    if (Option.isSome(remoteAssets) && remoteAssets.value.enabled)
+      yield* remoteAssets.value.populate(input.workspaceRoot, input.relativePath);
     const fileSystem = yield* FileSystem.FileSystem;
     const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
     const resolved = yield* workspacePaths.resolveRelativePathWithinRoot(input).pipe(
@@ -506,7 +510,17 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   readonly projectFaviconPath?: string;
   /** The project's clone has not landed, so its icon is reported missing without a lookup. */
   readonly projectCheckoutPending?: boolean;
+  readonly projectFaviconResolved?: boolean;
 }) {
+  const remoteAssets = yield* Effect.serviceOption(RemoteAssets.RemoteAssets);
+  if (Option.isSome(remoteAssets) && remoteAssets.value.enabled)
+    input = yield* remoteAssets.value
+      .prepare(input)
+      .pipe(
+        Effect.mapError(
+          (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+        ),
+      );
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
@@ -666,17 +680,19 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       // A lookup in a half-cloned checkout would cache a miss that outlives the clone.
       const faviconPath = input.projectCheckoutPending
         ? null
-        : yield* faviconResolver
-            .resolvePath(workspaceRoot, input.projectFaviconPath ?? undefined)
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new AssetProjectFaviconResolutionError({
-                    resource: input.resource,
-                    cause,
-                  }),
-              ),
-            );
+        : input.projectFaviconResolved
+          ? (input.projectFaviconPath ?? null)
+          : yield* faviconResolver
+              .resolvePath(workspaceRoot, input.projectFaviconPath ?? undefined)
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AssetProjectFaviconResolutionError({
+                      resource: input.resource,
+                      cause,
+                    }),
+                ),
+              );
       const isExternalOverride =
         faviconPath !== null &&
         input.projectFaviconPath !== undefined &&

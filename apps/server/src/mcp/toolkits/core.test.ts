@@ -36,6 +36,7 @@ import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
+import * as HtmlRender from "../../htmlRender/HtmlRender.ts";
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
@@ -57,7 +58,6 @@ import { AttachmentToolkit } from "./attachment/tools.ts";
 import * as AttachmentHandlers from "./attachment/handlers.ts";
 import { ThreadToolkit } from "./thread/tools.ts";
 import { WorktreeToolkit } from "./worktree/tools.ts";
-import { DeviceToolkit } from "./device/tools.ts";
 
 // Effect returns a declared tool failure as `isError` with its encoded payload
 // as JSON text, never as `structuredContent`.
@@ -94,7 +94,6 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     ProjectToolkit,
     EnvironmentToolkit,
     PreviewControlsToolkit,
-    DeviceToolkit,
     PullRequestsToolkit,
     HtmlToolkit,
   ]) {
@@ -285,6 +284,7 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
   }).pipe(
     Effect.provide(
       McpHttpServer.layerHtmlToolkit.pipe(
+        Layer.provide(HtmlRender.layer),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(PreviewBrowser.layer),
         Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-html-render-" })),

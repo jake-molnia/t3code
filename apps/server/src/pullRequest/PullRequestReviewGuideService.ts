@@ -17,7 +17,6 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -91,7 +90,6 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const git = yield* GitVcsDriver.GitVcsDriver;
-  const fileSystem = yield* FileSystem.FileSystem;
   const config = yield* ServerConfig.ServerConfig;
   // Runs outlive the request that started them and end with the server.
   const serviceScope = yield* Effect.scope;
@@ -306,22 +304,21 @@ const make = Effect.gen(function* () {
       },
       { concurrency: 4 },
     );
-    const directory = yield* fileSystem.makeTempDirectoryScoped({
-      directory: config.worktreesDir,
-      prefix: "review-guide-",
-    });
-    const path = `${directory}/checkout`;
-    yield* git.execute({
-      operation: "PullRequestReviewGuideService.addWorktree",
-      cwd: workspaceRoot,
-      args: ["worktree", "add", "--detach", "--quiet", path, resolvedHead.commitSha],
-      timeoutMs: 5 * 60_000,
-    });
-    yield* Effect.addFinalizer(() =>
-      git
-        .removeWorktree({ cwd: workspaceRoot, path, force: true })
-        .pipe(Effect.ignore({ log: true })),
+    const checkout = yield* Effect.acquireRelease(
+      git.createWorktree(
+        { cwd: workspaceRoot, refName: resolvedHead.commitSha, path: null },
+        {
+          detached: true,
+          worktreesDirectory: `${config.worktreesDir}/review-guide-${runId}`,
+          submodules: "none",
+        },
+      ),
+      ({ worktree }) =>
+        git
+          .removeWorktree({ cwd: workspaceRoot, path: worktree.path, force: true })
+          .pipe(Effect.ignore({ log: true })),
     );
+    const path = checkout.worktree.path;
     // Measured from where the head left the base, so a stacked change is briefed alone rather
     // than with everything below it that the base has not taken yet.
     const mergeBase = yield* git.execute({

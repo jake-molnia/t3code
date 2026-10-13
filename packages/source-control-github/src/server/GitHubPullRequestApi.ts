@@ -6,7 +6,6 @@ import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -1106,7 +1105,6 @@ const SIMPLE_ACTION_MUTATIONS = {
 export const make = Effect.gen(function* () {
   const api = yield* GitHubApi.GitHubApi;
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
-  const fileSystem = yield* FileSystem.FileSystem;
   const revalidateChecks = yield* makeChecksRevalidator;
   const routingIdentities = new Map<
     string,
@@ -1121,6 +1119,15 @@ export const make = Effect.gen(function* () {
       Schema.Struct({
         id: PositiveInt,
         login: TrimmedNonEmptyString,
+      }),
+    ),
+  );
+  const decodeGraphqlRoutingIdentity = Schema.decodeUnknownEffect(
+    Schema.fromJsonString(
+      Schema.Struct({
+        data: Schema.Struct({
+          viewer: Schema.Struct({ databaseId: PositiveInt, login: TrimmedNonEmptyString }),
+        }),
       }),
     ),
   );
@@ -1148,15 +1155,38 @@ export const make = Effect.gen(function* () {
               if (cached !== undefined && now - cached.at < 10 * 60_000)
                 return { ...credential, ...cached.value };
               // Pin this read so an auth switch cannot poison its cache entry.
-              const response = yield* api
+              const identity = yield* api
                 .rest({ host, operation: "getRoutingIdentity", path: "user", allowReserve: true })
                 .pipe(
+                  Effect.flatMap((response) =>
+                    decodeRoutingIdentity(response.body).pipe(Effect.mapError(unavailable)),
+                  ),
+                  Effect.catchTags({
+                    GitHubApiResponseError: (error) =>
+                      error.status === 403
+                        ? api
+                            .graphql({
+                              host,
+                              operation: "getRoutingIdentity",
+                              query: "query T3RoutingIdentity { viewer { databaseId login } }",
+                              allowReserve: true,
+                            })
+                            .pipe(
+                              Effect.flatMap((body) =>
+                                decodeGraphqlRoutingIdentity(body).pipe(
+                                  Effect.mapError(unavailable),
+                                ),
+                              ),
+                              Effect.map(({ data }) => ({
+                                id: data.viewer.databaseId,
+                                login: data.viewer.login,
+                              })),
+                            )
+                        : Effect.fail(error),
+                  }),
                   Effect.provideService(GitHubApi.PinnedGitHubCredential, credential),
                   Effect.provideService(SourceControlRateLimit.CredentialScope, key),
                 );
-              const identity = yield* decodeRoutingIdentity(response.body).pipe(
-                Effect.mapError(unavailable),
-              );
               const value = { accountId: String(identity.id), viewer: identity.login };
               if (routingIdentities.size >= 128)
                 routingIdentities.delete(routingIdentities.keys().next().value!);
@@ -2498,7 +2528,6 @@ export const make = Effect.gen(function* () {
         return runGitHubStackAction({ ...input, stackNumber: input.stackNumber }).pipe(
           Effect.provideService(GitHubApi.GitHubApi, api),
           Effect.provideService(SourceControlHost.SourceControlHost, sourceControlHost),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
         );
       if (input.action === "revert") {
         return pullRequestNodeId({ ...input, operation: "revertPullRequest" }).pipe(

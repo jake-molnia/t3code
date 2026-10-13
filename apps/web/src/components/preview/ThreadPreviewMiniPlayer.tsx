@@ -3,26 +3,24 @@
 import { FILL_PREVIEW_VIEWPORT, type ScopedThreadRef } from "@t3tools/contracts";
 import { PanelRightIcon, PictureInPicture2, XIcon } from "lucide-react";
 import {
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  useCallback,
+  type PointerEvent as ReactPointerEvent,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
 } from "react";
 
-import { useChatCanvas } from "../chat/ChatCanvasContext";
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
+import { type ServerBrowserHandle, ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
 import {
   findActiveBrowserRecordingRuntimeTabId,
   useActiveBrowserRecordingTabIds,
 } from "~/browser/browserRecording";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 import type { BrowserViewportResizeDirection } from "~/browser/browserViewportLayout";
-import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { useRendersServerTabNatively } from "~/browser/previewRuntime";
-import { type ServerBrowserHandle, ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
+import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import {
   closeServerPictureInPicture,
   openServerPictureInPicture,
@@ -34,31 +32,26 @@ import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
-import { useThreadPreviewState } from "~/previewStateStore";
 import {
   type PreviewMiniPlayerSize,
-  type PreviewMiniPlayerSource,
   type PreviewMiniPlayerState,
   previewMiniPlayerSourceKey,
   usePreviewMiniPlayerStore,
 } from "~/previewMiniPlayerStore";
+import { useThreadPreviewState } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
-import { useDeviceState } from "~/state/device";
+import { useChatCanvas } from "../chat/ChatCanvasContext";
 
-import { DeviceStreamView } from "../device/DeviceStreamView";
-import type { DeviceScreenSize } from "@t3tools/client-runtime/device/stream";
 import type { PreviewStreamViewport } from "@t3tools/client-runtime/preview/server-browser-stream";
 import { previewBridge } from "./previewBridge";
 import { showPreviewPopup } from "./showPreviewPopup";
 import {
-  clampPreviewMiniPlayerPosition,
   NO_PREVIEW_MINI_PLAYER_OBSTACLES,
   PREVIEW_MINI_PLAYER_CORNER_RADIUS,
   PREVIEW_MINI_PLAYER_WEBVIEW_Z_INDEX,
   type PreviewMiniPlayerFrame,
+  clampPreviewMiniPlayerPosition,
   resizePreviewMiniPlayer,
-  resolveDeviceMiniPlayerCornerRadius,
-  resolveDeviceMiniPlayerSourceSize,
   resolvePreviewMiniPlayerSourceSize,
 } from "./previewMiniPlayerLayout";
 
@@ -107,14 +100,7 @@ export function ThreadPreviewMiniPlayer({ threadRef, miniPlayer }: Props) {
       tabId={source.tabId}
       miniPlayer={miniPlayer}
     />
-  ) : (
-    <DeviceMiniPlayer
-      key={previewMiniPlayerSourceKey(source)}
-      threadRef={threadRef}
-      source={source}
-      miniPlayer={miniPlayer}
-    />
-  );
+  ) : null;
 }
 
 function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly tabId: string }) {
@@ -250,65 +236,6 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
           </>
         )
       }
-    </MiniPlayerShell>
-  );
-}
-
-function DeviceMiniPlayer({
-  threadRef,
-  source,
-  miniPlayer,
-}: Props & { readonly source: Extract<PreviewMiniPlayerSource, { kind: "device" }> }) {
-  const { state: deviceState } = useDeviceState(threadRef.environmentId);
-  const [screen, setScreen] = useState<DeviceScreenSize | null>(null);
-  const sourceSize = resolveDeviceMiniPlayerSourceSize(source.platform, screen);
-  const device = deviceState.devices.find(
-    (entry) => entry.hostId === source.hostId && entry.id === source.deviceId,
-  );
-  const hostLabel =
-    deviceState.hosts.find((host) => host.id === source.hostId)?.label ?? "Device host";
-  const cornerRadius = useCallback(
-    (player: PreviewMiniPlayerSize) => resolveDeviceMiniPlayerCornerRadius(source.platform, player),
-    [source.platform],
-  );
-
-  const openInPanel = () => {
-    usePreviewMiniPlayerStore.getState().close(threadRef);
-    useRightPanelStore.getState().openDevice(threadRef, {
-      hostId: source.hostId,
-      deviceId: source.deviceId,
-      platform: source.platform,
-      name: source.name,
-    });
-  };
-
-  return (
-    <MiniPlayerShell
-      threadRef={threadRef}
-      miniPlayer={miniPlayer}
-      sourceSize={sourceSize}
-      label="Floating device preview"
-      onOpenInPanel={openInPanel}
-      cornerRadius={cornerRadius}
-    >
-      {() => (
-        // The stream is DOM, so it takes the band the browser's native webview would.
-        <div
-          className="pointer-events-auto absolute inset-0 overflow-hidden rounded-[inherit]"
-          style={{ zIndex: PREVIEW_MINI_PLAYER_WEBVIEW_Z_INDEX }}
-        >
-          <DeviceStreamView
-            environmentId={threadRef.environmentId}
-            platform={source.platform}
-            deviceId={source.deviceId}
-            hostId={source.hostId}
-            deviceName={device?.name ?? source.name}
-            deviceDescription={`${hostLabel} · ${device?.version ?? source.platform}`}
-            visible
-            onScreen={setScreen}
-          />
-        </div>
-      )}
     </MiniPlayerShell>
   );
 }

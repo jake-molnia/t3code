@@ -1,3 +1,4 @@
+import * as Routing from "../agentRuntime/WorkspaceRouting.ts";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -61,11 +62,14 @@ function processOutput(): GitVcsDriver.ExecuteGitResult {
 }
 
 function layer(input: {
+  readonly routing?: Partial<Routing.WorkspaceRouting["Service"]> &
+    Pick<Routing.WorkspaceRouting["Service"], "enabled">;
   readonly provider?: SourceControlProvider.SourceControlProvider["Service"];
   readonly git?: Partial<GitVcsDriver.GitVcsDriver["Service"]>;
   readonly fileSystem?: FileSystem.FileSystem;
 }) {
   const layerService = SourceControlRepositoryService.layer.pipe(
+    Layer.provide(Layer.mock(Routing.WorkspaceRouting)(input.routing ?? { enabled: false })),
     Layer.provide(
       Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
         resolveLink: () => undefined,
@@ -703,3 +707,112 @@ it.effect("publish succeeds with status remote_added when the local repo has no 
     ),
   );
 });
+
+it.effect(
+  "clone preparation and discard use registered worker paths without central filesystem access",
+  () =>
+    Effect.gen(function* () {
+      const cwd = "/workspace/registered/clone";
+      const operations: string[] = [];
+      let cloneCwd = "";
+      let cloneDestination = "";
+      const routes: Partial<Routing.WorkspaceRouting["Service"]> &
+        Pick<Routing.WorkspaceRouting["Service"], "enabled"> = {
+        enabled: true,
+        validate: (value) =>
+          value === cwd
+            ? Effect.succeed(value)
+            : Effect.fail(
+                new Routing.WorkspaceRoutingError({ operation: "validate", cause: "unregistered" }),
+              ),
+        call: (input) =>
+          Effect.sync(() => {
+            operations.push(input.method);
+            return null;
+          }),
+      };
+      const service = yield* SourceControlRepositoryService.SourceControlRepositoryService.pipe(
+        Effect.provide(
+          layer({
+            routing: routes,
+            git: {
+              execute: (input) =>
+                Effect.sync(() => {
+                  cloneCwd = input.cwd;
+                  cloneDestination = input.args.at(-1) ?? "";
+                  return processOutput();
+                }),
+            },
+            fileSystem: FileSystem.makeNoop({
+              exists: () => Effect.die("Central filesystem must not inspect a worker path"),
+              makeDirectory: (path) =>
+                path.startsWith("/workspace/")
+                  ? Effect.die("Central filesystem must not create a worker directory")
+                  : Effect.void,
+              readDirectory: () =>
+                Effect.die("Central filesystem must not read a worker directory"),
+              remove: () => Effect.die("Central filesystem must not delete a worker directory"),
+            }),
+          }),
+        ),
+      );
+      const result = yield* service.cloneRepository({
+        destinationPath: cwd,
+        remoteUrl: "https://example.test/repository.git",
+      });
+      assert.strictEqual(result.cwd, cwd);
+      assert.strictEqual(cloneCwd, cwd);
+      assert.strictEqual(cloneDestination, ".");
+      yield* service.discardClone(cwd);
+      assert.deepStrictEqual(operations, ["workspace.prepareClone", "workspace.discardClone"]);
+      const rejected = yield* service
+        .prepareClone({
+          destinationPath: "/central/not-registered",
+          remoteUrl: "https://example.test/repository.git",
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(rejected._tag, "SourceControlRepositoryError");
+      assert.strictEqual(operations.length, 2);
+    }),
+);
+
+it.effect("worker unavailability fails clone and discard without local fallback", () =>
+  Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const input = {
+      destinationPath: "/workspace/registered/repo",
+      remoteUrl: "https://example.test/repository.git",
+    };
+    for (const operation of [
+      service.prepareClone(input),
+      service.cloneRepository(input),
+      service.discardClone(input.destinationPath),
+    ]) {
+      const failure = yield* operation.pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "SourceControlRepositoryError");
+    }
+  }).pipe(
+    Effect.provide(
+      layer({
+        routing: {
+          enabled: true,
+          validate: Effect.succeed,
+          call: () =>
+            Effect.fail(
+              new Routing.WorkspaceRoutingError({ operation: "call", cause: "worker unavailable" }),
+            ),
+        },
+        git: { execute: () => Effect.die("Git must not run after failed worker preparation") },
+        fileSystem: FileSystem.makeNoop({
+          makeDirectory: (value) =>
+            value.startsWith("/workspace/")
+              ? Effect.die("Central filesystem must not create a worker directory")
+              : Effect.void,
+          exists: () => Effect.die("Central filesystem must not inspect a worker path"),
+          readDirectory: () => Effect.die("Central filesystem must not inspect a worker path"),
+          remove: () => Effect.die("Central filesystem must not delete a worker path"),
+        }),
+      }),
+    ),
+  ),
+);

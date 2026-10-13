@@ -8,14 +8,14 @@ import type {
 
 import type { DraftId } from "../../composerDraftStore";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
-import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
+import { type EnvMode } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import BaseGitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
-import { memo, type ComponentProps } from "react";
+import { memo, type ComponentProps, type ReactNode } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
@@ -41,10 +41,7 @@ export interface ThreadDetailsPanelProps extends Pick<
   gitCwd: string | null;
   isGitRepo: boolean;
   envLocked: boolean;
-  availableEnvironments: readonly EnvironmentOption[];
-  autoEnvironmentLabel?: string | undefined;
-  onAutoEnvironment?: (() => void) | undefined;
-  onEnvironmentChange: (environmentId: EnvironmentId) => void;
+  executionPoolControl?: ReactNode;
   onEnvModeChange: (mode: EnvMode) => void;
   /** The thread's env mode as ChatView resolves it. */
   envMode: EnvMode;
@@ -113,16 +110,15 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 <BranchToolbar
                   layout="panel"
                   panelSection="workspace"
-                  availableEnvironments={props.availableEnvironments}
-                  onEnvironmentChange={props.onEnvironmentChange}
-                  autoEnvironmentLabel={props.autoEnvironmentLabel}
-                  onAutoEnvironment={props.onAutoEnvironment}
+                  executionPoolControl={props.executionPoolControl}
                   {...branchToolbarProps}
                 />
               ) : null}
 
               {density !== "essential" && props.showOpenInPicker ? (
                 <OpenInPicker
+                  threadId={props.threadId}
+                  enableShortcut={false}
                   keybindings={props.keybindings}
                   environmentId={props.environmentId}
                   availableEditors={props.availableEditors}

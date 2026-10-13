@@ -461,22 +461,23 @@ export function createPreviewFramePainter(
   };
 }
 
-/** A malformed reason still stops the viewer and offers the usual command. */
+/** Unknown close reasons still stop retries until the operator checks the deployment. */
 const decodeHostSetup = (reason: string): PreviewStreamHostSetup => {
   try {
-    const value = JSON.parse(reason) as Partial<PreviewStreamHostSetup>;
+    const value: unknown = JSON.parse(reason);
     if (
-      (value.need === "sandbox" || value.need === "libraries") &&
-      typeof value.command === "string"
+      typeof value === "object" &&
+      value !== null &&
+      "need" in value &&
+      (value.need === "sandbox" || value.need === "libraries")
     ) {
-      return { need: value.need, command: value.command };
+      return { need: value.need };
     }
   } catch {}
-  return { need: "sandbox", command: "sudo npx t3 browser setup" };
+  return { need: "sandbox" };
 };
 
-/** What a viewer tells the person; `command` is shown beside it, ready to copy. */
 export const previewStreamHostSetupMessage = (setup: PreviewStreamHostSetup) =>
   setup.need === "sandbox"
-    ? "This server's host blocks the sandbox its browser runs in. Run this once on the host, then try again:"
-    : "This server's host is missing libraries its browser needs. Run this once on the host, then try again:";
+    ? "The browser could not start. Ask the deployment operator to check the worker pod security settings."
+    : "The worker image is missing browser libraries. Ask the deployment operator to rebuild it with the required dependencies.";

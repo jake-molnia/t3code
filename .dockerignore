@@ -1,0 +1,10 @@
+.git
+**/node_modules
+**/dist
+**/dist-exe
+.t3
+.env
+.env.*
+.repos
+.vite-plus
+**/coverage

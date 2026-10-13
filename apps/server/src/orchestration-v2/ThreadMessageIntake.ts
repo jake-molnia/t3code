@@ -1,3 +1,5 @@
+import * as Option from "effect/Option";
+import * as AttachmentStaging from "../agentRuntime/AttachmentStaging.ts";
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import { appendUserInputAttachmentPaths } from "../provider/userInputAttachments.ts";
 import type { ChatAttachment, OrchestrationV2Command } from "@t3tools/contracts";
@@ -78,10 +80,22 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
           enumerable: true,
         });
       }
+      const staging = yield* Effect.serviceOption(AttachmentStaging.AttachmentStaging);
+      const stagedPaths =
+        Option.isSome(staging) && staging.value.enabled
+          ? yield* staging.value
+              .stage(command.threadId, Object.values(attachmentsByQuestionId).flat())
+              .pipe(
+                Effect.mapError(
+                  (cause) => new AttachmentClaims.AttachmentClaimError({ message: cause.message }),
+                ),
+              )
+          : undefined;
       const answers = yield* appendUserInputAttachmentPaths({
         answers: command.answers ?? {},
         attachmentsByQuestionId,
         attachmentsDir: config.attachmentsDir,
+        ...(stagedPaths ? { stagedPaths } : {}),
       }).pipe(
         Effect.mapError(
           (cause) => new AttachmentClaims.AttachmentClaimError({ message: cause.issue }),

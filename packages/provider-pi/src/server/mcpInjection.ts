@@ -298,6 +298,7 @@ export function buildPiRpcLaunch(input: {
     args,
     env: {
       ...environment,
+      T3_ADDITIONAL_MCP_SERVERS: JSON.stringify(input.mcpSession?.additionalHttpServers ?? {}),
       ...(hasT3Extension && input.extensionPath !== undefined
         ? { [T3_PI_MCP_EXTENSION_PATH_ENV]: input.extensionPath }
         : {}),

@@ -1,3 +1,10 @@
+import * as ForkWorkspace from "../execution/ForkWorkspaceService.ts";
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
+import { SessionPlacement } from "../execution/SessionPlacement.ts";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as AgentRuntime from "../agentRuntime/RuntimeClient.ts";
+import * as RemoteSessionRecovery from "../execution/RemoteSessionRecovery.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Layer from "effect/Layer";
@@ -298,6 +305,20 @@ const layerThreadTitleRegenerationProvided = ThreadTitleRegenerationService.laye
 );
 const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
   Layer.provide(
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const runtime = yield* Effect.serviceOption(AgentRuntime.RuntimeClient);
+        const routes = yield* Effect.serviceOption(WorkspaceRouting.WorkspaceRouting);
+        if (Option.isNone(runtime) || Option.isNone(routes)) return Layer.empty;
+        return ForkWorkspace.layer.pipe(
+          Layer.provide(Layer.succeed(AgentRuntime.RuntimeClient, runtime.value)),
+          Layer.provide(Layer.succeed(WorkspaceRouting.WorkspaceRouting, routes.value)),
+          Layer.provide(ProjectionStore.layer),
+        );
+      }),
+    ),
+  ),
+  Layer.provide(
     Layer.mergeAll(
       layerRunFinalizationServiceProvided,
       layerCheckpointRollbackServiceProvided,
@@ -314,6 +335,25 @@ const layerEffectWorkerProvided = EffectWorker.layer.pipe(
   Layer.provide(Layer.merge(layerStores, layerEffectExecutorProvided)),
 );
 const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.layer.pipe(
+  Layer.provide(
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const runtime = yield* Effect.serviceOption(AgentRuntime.RuntimeClient);
+        if (Option.isNone(runtime)) return Layer.empty;
+        return RemoteSessionRecovery.layer.pipe(
+          Layer.provide(Layer.succeed(AgentRuntime.RuntimeClient, runtime.value)),
+          Layer.provide(
+            Layer.mergeAll(
+              layerProviderSessionManagerProvided,
+              layerRunExecutionServiceProvided,
+              layerRuntimePolicyProvided,
+              ProjectionStore.layer,
+            ),
+          ),
+        );
+      }),
+    ),
+  ),
   Layer.provide(
     Layer.mergeAll(
       layerEffectWorkerProvided,
@@ -348,7 +388,7 @@ export const layer = Layer.mergeAll(
   layerLegacyV1ThreadImporterProvided,
 );
 
-export const layerProduction = Layer.mergeAll(
+const layerProductionBase = Layer.mergeAll(
   layer.pipe(Layer.provide(layerProjectService)),
   layerProjectService,
   layerManagedProjectFoldersProvided,
@@ -363,3 +403,7 @@ export const layerProduction = Layer.mergeAll(
   layerAgentSessionImporterProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
 ).pipe(Layer.provide(Scheduler.layer), Layer.provideMerge(layerEventInfrastructure));
+
+export const layerProduction = layerProductionBase.pipe(
+  Layer.provide(Layer.succeed(SessionPlacement, "per-thread")),
+);

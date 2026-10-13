@@ -1753,6 +1753,7 @@ describe("CodexAdapterV2 session initialize", () => {
   const openReplaySession = (
     transcript: CodexReplay.CodexAppServerReplayTranscript,
     beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
+    initializeInFactory = false,
   ) =>
     Effect.gen(function* () {
       const driver = yield* CodexReplay.makeReplayDriver(
@@ -1774,11 +1775,34 @@ describe("CodexAdapterV2 session initialize", () => {
                 (client) =>
                   ({
                     ...client,
+                    ...(initializeInFactory ? { initializeResponseReceived: true as const } : {}),
                     request: (method, params) =>
                       Effect.sync(() => {
                         if (method === "initialize") initializeRequests++;
                       }).pipe(Effect.andThen(client.request(method, params))),
-                  }) satisfies CodexClient.CodexAppServerClient["Service"],
+                  }) satisfies CodexClient.CodexAppServerClient["Service"] & {
+                    readonly initializeResponseReceived?: true;
+                  },
+              ),
+              Effect.tap((client) =>
+                initializeInFactory
+                  ? client.request("initialize", {
+                      clientInfo: {
+                        name: "T3 Code",
+                        title: "T3 Code",
+                        version: packageJson.version,
+                      },
+                      capabilities: {
+                        experimentalApi: true,
+                        optOutNotificationMethods: ["turn/diff/updated"],
+                        extensions: {
+                          "io.modelcontextprotocol/ui": {
+                            mimeTypes: ["text/html;profile=mcp-app"],
+                          },
+                        },
+                      },
+                    })
+                  : Effect.void,
               ),
               Effect.mapError(
                 (cause) =>
@@ -1855,6 +1879,28 @@ describe("CodexAdapterV2 session initialize", () => {
         providerThreads.map((providerThread) => providerThread.nativeThreadRef?.nativeId),
         ["concurrent-first", "concurrent-second"],
       );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("uses the factory handshake and sends initialized after opening the session", () =>
+    Effect.gen(function* () {
+      const session = yield* openReplaySession(
+        makeCodexReplayTranscript({
+          scenario: "factory-initialize",
+          entries: replayPreamble("factory-initialize").slice(0, 5),
+        }),
+        undefined,
+        true,
+      );
+      assert.equal(session.initializeRequests(), 1);
+      const thread = yield* session.ensureThread("factory-initialize");
+      assert.equal(thread.nativeThreadRef?.nativeId, "factory-initialize");
+      assert.equal(session.initializeRequests(), 1);
     }).pipe(
       Effect.scoped,
       Effect.provide(

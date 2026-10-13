@@ -30,6 +30,11 @@ import { forkParked } from "../serverActivation.ts";
 
 export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
+    type: Schema.Literal("workspace.fork.prepare"),
+    sourceThreadId: ThreadId,
+    sourceRunId: RunId,
+  }),
+  Schema.Struct({
     type: Schema.Literal("provider-runtime.continue"),
     sourceRunId: RunId,
   }),
@@ -120,7 +125,13 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
 ]);
 export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
 
+export const PreservedRemoteThreads = Context.Reference<ReadonlySet<ThreadId>>(
+  "t3/orchestration-v2/EffectOutbox/PreservedRemoteThreads",
+  { defaultValue: () => new Set() },
+);
+
 export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
+  "workspace.fork.prepare",
   "provider-runtime.continue",
   "provider-session.detach",
   "provider-thread.rollback",
@@ -488,6 +499,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
           cancellationSignals.delete(effectId);
         }),
       reconcileAfterProcessLoss: Effect.gen(function* () {
+        const preserved = [...(yield* PreservedRemoteThreads)];
         const now = DateTime.formatIso(yield* DateTime.now);
         const cancelledRows = yield* sql<{ readonly effect_id: string }>`
           UPDATE orchestration_v2_effect_outbox
@@ -500,6 +512,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             last_error = 'Cancelled because the server process ended before the effect completed.'
           WHERE status IN ('pending', 'running')
             AND effect_type IN ${sql.in(PROCESS_BOUND_EFFECT_TYPES)}
+            AND ${preserved.length ? sql`thread_id NOT IN ${sql.in(preserved)}` : sql`1 = 1`}
           RETURNING effect_id
         `;
         const requeuedRows = yield* sql<{ readonly effect_id: string }>`
@@ -512,7 +525,8 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             updated_at = ${now},
             last_error = 'Requeued after the previous server process ended.'
           WHERE status = 'running'
-            AND effect_type IN ${sql.in(REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS)}
+            AND (effect_type IN ${sql.in(REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS)}
+              OR ${preserved.length ? sql`thread_id IN ${sql.in(preserved)}` : sql`0 = 1`})
           RETURNING effect_id
         `;
         if (requeuedRows.length > 0) yield* notifyAvailable(requeuedRows.length);

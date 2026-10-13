@@ -50,8 +50,6 @@ const catalog: AcpRegistrySupport.AcpRegistryCatalog["Service"] = {
     }),
   resolve: () => Effect.succeed(resolved),
   search: () => Effect.die("unused"),
-  prepare: () => Effect.die("unused"),
-  uninstallManagedBinary: () => Effect.die("unused"),
 };
 
 const makeHarness = (

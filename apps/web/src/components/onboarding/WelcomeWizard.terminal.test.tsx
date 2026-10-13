@@ -173,21 +173,21 @@ const remoteEnvironment = {
     }),
   },
 } as const;
-const missingClaude: ServerProvider = {
+const signedOutClaude: ServerProvider = {
   instanceId: ProviderInstanceId.make("claude-work"),
   driver: ProviderDriverKind.make("claudeAgent"),
   enabled: true,
-  installed: false,
+  installed: true,
   version: null,
   status: "error",
-  auth: { status: "unknown" },
+  auth: { status: "unauthenticated" },
   checkedAt: "2026-09-05T00:00:00.000Z",
   models: [],
   slashCommands: [],
   skills: [],
 };
 const signedOutCodex: ServerProvider = {
-  ...missingClaude,
+  ...signedOutClaude,
   instanceId: ProviderInstanceId.make("codex-work"),
   driver: ProviderDriverKind.make("codex"),
   installed: true,
@@ -221,7 +221,9 @@ function text(node: ReactTestInstance | string): string {
 }
 let renderer: ReactTestRenderer | undefined;
 function button(label: string) {
-  return renderer!.root.findAllByType("button").find((node) => text(node) === label)!;
+  return renderer!.root
+    .findAllByType("button")
+    .find((node) => node.props["aria-label"] === label || text(node) === label)!;
 }
 async function click(label: string) {
   const node = button(label);
@@ -257,7 +259,7 @@ beforeEach(() => {
     );
     state.providers.set(
       id,
-      Atom.make<ReadonlyArray<ServerProvider>>([missingClaude, signedOutCodex]).pipe(
+      Atom.make<ReadonlyArray<ServerProvider>>([signedOutClaude, signedOutCodex]).pipe(
         Atom.keepAlive,
       ),
     );
@@ -302,11 +304,11 @@ describe("welcome agent terminal setup", () => {
   it("disables both setup actions for the paired read-only connection and preserves local completion", async () => {
     setAccess(remoteId, false);
     await enterRemoteAgents();
-    expect(button("Install").props.disabled).toBe(true);
+    expect(button("Sign in to Claude Code").props.disabled).toBe(true);
     expect(button("Sign in").props.disabled).toBe(true);
     expect(text(renderer!.root)).toContain("This connection cannot control terminals.");
     await act(async () => {
-      button("Install").props.onClick();
+      button("Sign in to Claude Code").props.onClick();
       button("Sign in").props.onClick();
     });
     expect(state.open).not.toHaveBeenCalled();
@@ -318,26 +320,26 @@ describe("welcome agent terminal setup", () => {
     expect(state.done).toHaveBeenCalledExactlyOnceWith(undefined);
   });
 
-  it("rejects a retained install action after revocation and allows a terminal-only regrant", async () => {
+  it("rejects a retained sign-in action after revocation and allows a terminal-only regrant", async () => {
     setAccess(primaryId, false);
     await enterRemoteAgents();
-    const install = button("Install").props.onClick;
+    const signIn = button("Sign in to Claude Code").props.onClick;
     await act(async () => {
       setAccess(remoteId, false);
-      install();
+      signIn();
     });
     expect(state.open).not.toHaveBeenCalled();
-    expect(button("Install").props.disabled).toBe(true);
+    expect(button("Sign in to Claude Code").props.disabled).toBe(true);
     await act(async () => setAccess(remoteId, true));
-    expect(button("Install").props.disabled).toBe(false);
-    await act(async () => install());
+    expect(button("Sign in to Claude Code").props.disabled).toBe(false);
+    await act(async () => signIn());
     expect(state.open).toHaveBeenCalledExactlyOnceWith({
       environmentId: remoteId,
       input: {
         threadId: "onboarding-agent-setup",
         terminalId: expect.any(String),
         cwd: "/fixtures/paired-remote",
-        providerInstanceId: missingClaude.instanceId,
+        providerInstanceId: signedOutClaude.instanceId,
       },
     });
     expect(state.write).toHaveBeenCalledExactlyOnceWith({
@@ -345,7 +347,7 @@ describe("welcome agent terminal setup", () => {
       input: {
         threadId: "onboarding-agent-setup",
         terminalId: state.open.mock.calls[0]![0].input.terminalId,
-        data: "curl -fsSL https://claude.ai/install.sh | bash",
+        data: "claude auth login",
       },
     });
     expect(hasViewport()).toBe(true);
@@ -387,7 +389,7 @@ describe("welcome agent terminal setup", () => {
   it("checks access when a queued retry starts and recovers after regrant", async () => {
     state.open.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("Could not open"))));
     await enterRemoteAgents();
-    await click("Install");
+    await click("Sign in to Claude Code");
     const closing = deferred<CommandResult>();
     state.close.mockReturnValueOnce(closing.promise);
     await click("Retry");
@@ -411,7 +413,7 @@ describe("welcome agent terminal setup", () => {
     const opening = deferred<CommandResult>();
     state.open.mockReturnValueOnce(opening.promise);
     await enterRemoteAgents();
-    await click("Install");
+    await click("Sign in to Claude Code");
     await act(async () => {
       setAccess(remoteId, false);
       opening.resolve(AsyncResult.success(undefined));
@@ -423,9 +425,7 @@ describe("welcome agent terminal setup", () => {
     await act(async () => setAccess(remoteId, true));
     expect(state.open).toHaveBeenCalledOnce();
     expect(state.write).not.toHaveBeenCalled();
-    expect(text(renderer!.root)).toContain(
-      "Run curl -fsSL https://claude.ai/install.sh | bash in this",
-    );
+    expect(text(renderer!.root)).toContain("Run claude auth login in this");
     await act(async () => setAccess(remoteId, false));
     await click("Close");
     expect(hasViewport()).toBe(false);
@@ -459,7 +459,7 @@ describe("welcome agent terminal setup", () => {
     const writing = deferred<CommandResult>();
     state.write.mockReturnValueOnce(writing.promise);
     await enterRemoteAgents();
-    await click("Install");
+    await click("Sign in to Claude Code");
     await click("Back");
     expect(state.close).not.toHaveBeenCalled();
     await act(async () => {

@@ -1,3 +1,4 @@
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -20,6 +21,7 @@ const layer = Layer.mergeAll(
   }),
   // The cascade runs real git through the server's host; the git driver itself is never asked.
   ServerSourceControlHost.layer.pipe(
+    Layer.provide(RepositoryFiles.layer),
     Layer.provide(ServerSettings.layerTest()),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
     Layer.provide(Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({})),

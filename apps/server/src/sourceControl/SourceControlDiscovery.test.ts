@@ -1,3 +1,4 @@
+import * as RepositoryFiles from "../git/RepositoryFiles.ts";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -63,6 +64,7 @@ const layerSourceControlProviderRegistryTest = (input: {
         Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({}),
         Layer.mock(VcsProcess.VcsProcess)(input.process),
         ServerSourceControlHost.layer.pipe(
+          Layer.provide(RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
           Layer.provide(
             Layer.mergeAll(
               Layer.mock(VcsProcess.VcsProcess)(input.process),
@@ -426,6 +428,7 @@ it.effect(
         Effect.provideService(
           SourceControlHost.SourceControlHost,
           SourceControlHost.SourceControlHost.of({
+            temporaryDirectory: host.temporaryDirectory,
             settings: host.settings,
             git: host.git,
             process: {
@@ -564,6 +567,7 @@ it.effect(
       Effect.scoped,
       Effect.provide(
         ServerSourceControlHost.layer.pipe(
+          Layer.provide(RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
           Layer.provideMerge(VcsProcess.layer),
           Layer.provideMerge(ServerSettings.ServerSettingsService.layerTest()),
           Layer.provideMerge(Layer.mock(GitVcsDriver.GitVcsDriver)({})),

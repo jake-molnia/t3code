@@ -26,6 +26,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
+import { ackRemoteEvent, remoteEventEnvelope } from "../execution/RemoteProviderAdapter.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
@@ -733,8 +734,10 @@ export const layer: Layer.Layer<
       normalize,
       ingestNormalized: (input) =>
         Effect.gen(function* () {
+          const delivery =
+            input.event.type === "turn.terminal" ? undefined : remoteEventEnvelope(input.event);
           const events = yield* normalize(input);
-          if (events.length === 0) {
+          if (events.length === 0 && !delivery) {
             return [];
           }
           const mapWriteError = (cause: unknown) =>
@@ -747,6 +750,7 @@ export const layer: Layer.Layer<
             const ownerResult = yield* eventSink
               .writeIfProviderThreadOwner({
                 guardPendingUserInputCancellations: true,
+                ...(delivery ? { executionDelivery: delivery } : {}),
                 ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
                 ...input.writeIfProviderThreadOwner,
                 events,
@@ -758,6 +762,7 @@ export const layer: Layer.Layer<
             return yield* eventSink
               .write({
                 guardPendingUserInputCancellations: true,
+                ...(delivery ? { executionDelivery: delivery } : {}),
                 ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
                 events,
               })
@@ -766,6 +771,7 @@ export const layer: Layer.Layer<
           const result = yield* eventSink
             .writeIfRunCurrent({
               guardPendingUserInputCancellations: true,
+              ...(delivery ? { executionDelivery: delivery } : {}),
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
               threadId: input.threadId,
               ...input.writeIfRunCurrent,
@@ -788,6 +794,9 @@ export const layer: Layer.Layer<
                       }),
                   ),
                 ),
+          ),
+          Effect.tap(() =>
+            input.event.type === "turn.terminal" ? Effect.void : ackRemoteEvent(input.event),
           ),
           Effect.tap((storedEvents) =>
             Effect.gen(function* () {

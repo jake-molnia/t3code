@@ -36,10 +36,8 @@ function catalogWithInspection(
 ): AcpRegistrySupport.AcpRegistryCatalog["Service"] {
   return {
     search: () => Effect.die("unused search"),
-    prepare: () => Effect.die("unused prepare"),
     inspect: () => Effect.succeed(inspection),
     resolve: () => Effect.die("unused resolve"),
-    uninstallManagedBinary: () => Effect.die("unused uninstall"),
   };
 }
 

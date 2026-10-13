@@ -141,20 +141,6 @@ export const updateOutdatedHost = Effect.fn("clientRuntime.connection.updateOutd
                 ),
               );
 
-        if (
-          updateResult.method === "desktop-app" &&
-          updateResult.desktopUpdateToken !== undefined
-        ) {
-          // The commit relaunches the desktop app, so a dropped socket is success.
-          yield* client[WS_METHODS.serverCommitDesktopUpdate]({
-            requestId: updateResult.desktopUpdateToken,
-          }).pipe(
-            Effect.catchCauseIf(
-              (cause) => isLegacyUpdateHandoffLoss(cause),
-              () => Effect.void,
-            ),
-          );
-        }
         return updateResult;
       }),
     );

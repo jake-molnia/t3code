@@ -1328,6 +1328,35 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("serves a materialized worker favicon without resolving its worker path again", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "cached-worker-icon-" });
+      const mirror = path.join(root, "mirror");
+      yield* fs.makeDirectory(mirror);
+      const icon = path.join(root, "icon.svg");
+      const bytes = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h4v4z"/></svg>';
+      yield* fs.writeFileString(icon, bytes);
+      const result = yield* issueAssetUrl({
+        resource: { _tag: "project-favicon", cwd: mirror },
+        workspaceRoot: mirror,
+        projectFaviconPath: icon,
+        projectFaviconResolved: true,
+      }).pipe(
+        Effect.provideService(ProjectFaviconResolver.ProjectFaviconResolver, {
+          resolvePath: () => Effect.die("must not look up a central cache path in a worker"),
+        }),
+      );
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separator = suffix.indexOf("/");
+      const asset = yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+      expect(asset?.kind).toBe("file");
+      if (asset?.kind !== "file") return yield* Effect.die("expected cached asset file");
+      expect(yield* fs.readFileString(asset.path)).toBe(bytes);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("serves a native macOS app icon as its embedded PNG", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

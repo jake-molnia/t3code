@@ -1,11 +1,6 @@
 import { AuthProvidersManageScope } from "@t3tools/contracts";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
 import type {
-  AcpRegistryPrepareResult,
   AcpRegistrySearchAgent,
   EnvironmentId,
   ProviderInstanceConfig,
@@ -15,7 +10,6 @@ import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "re
 
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
@@ -25,12 +19,6 @@ import { isConfiguredAcpRegistryAgent } from "./AddProviderInstanceDialog.logic"
 import { ProviderDriverKind } from "@t3tools/contracts";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : "The ACP could not be prepared.";
-}
-
 interface AcpRegistrySearchStepProps {
   readonly environmentId: EnvironmentId;
   readonly providerInstances: Readonly<Record<string, ProviderInstanceConfig>>;
@@ -39,18 +27,6 @@ interface AcpRegistrySearchStepProps {
   readonly onLocalConfiguration?: () => void;
   readonly onLoadingChange?: (loading: boolean) => void;
   readonly onPreparingChange?: (preparing: boolean) => void;
-}
-
-function applyAcpRegistryPrepareResult(
-  agent: AcpRegistrySearchAgent,
-  prepared: AcpRegistryPrepareResult,
-): AcpRegistrySearchAgent {
-  return {
-    ...agent,
-    id: prepared.agentId,
-    version: prepared.version,
-    distribution: prepared.distribution,
-  };
 }
 
 export function AcpRegistrySearchStep({
@@ -77,10 +53,6 @@ export function AcpRegistrySearchStep({
       input: { query: submittedQuery },
     }),
   );
-  const prepareAgent = useAtomCommand(serverEnvironment.prepareAcpRegistryAgent, {
-    reportFailure: false,
-  });
-
   useEffect(
     () => () => {
       prepareGeneration.current += 1;
@@ -113,17 +85,9 @@ export function AcpRegistrySearchStep({
     setPrepareError(null);
     setPreparingId(agent.id);
     onPreparingChange?.(true);
-    const result = await prepareAgent({ environmentId, input: { agentId: agent.id } });
-    if (prepareGeneration.current !== generation) return;
     setPreparingId(null);
     onPreparingChange?.(false);
-    if (result._tag === "Success") {
-      onPrepared(applyAcpRegistryPrepareResult(agent, result.value));
-      return;
-    }
-    if (!isAtomCommandInterrupted(result)) {
-      setPrepareError(errorMessage(squashAtomCommandFailure(result)));
-    }
+    onPrepared(agent);
   };
 
   const results = search.data?.agents ?? null;

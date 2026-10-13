@@ -17,12 +17,12 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
 
-export const layer = Layer.effect(
-  ProviderHost.ProviderHost,
+const make = (
+  shouldRunBackgroundWork: ProviderHost.ProviderHost["Service"]["shouldRunBackgroundWork"],
+) =>
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
-    const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     const crypto = yield* Crypto.Crypto;
     return ProviderHost.ProviderHost.of({
@@ -39,7 +39,7 @@ export const layer = Layer.effect(
         changes: serverSettings.streamChanges,
         subscribe: serverSettings.subscribeChanges,
       },
-      shouldRunBackgroundWork: backgroundPolicy.shouldRunScopeWork,
+      shouldRunBackgroundWork,
       resolveAttachmentPath: (attachment) =>
         resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment }),
       credentials: (namespace, bindingId) =>
@@ -67,5 +67,18 @@ export const layer = Layer.effect(
           Effect.provideService(Crypto.Crypto, crypto),
         ),
     });
+  });
+
+export const layer = Layer.effect(
+  ProviderHost.ProviderHost,
+  Effect.gen(function* () {
+    const policy = yield* BackgroundPolicy.BackgroundPolicy;
+    return yield* make(policy.shouldRunScopeWork);
   }),
+);
+
+/** Sandbox lifecycle controls idleness; provider reads remain available while allocated. */
+export const layerWorker = Layer.effect(
+  ProviderHost.ProviderHost,
+  make(() => Effect.succeed(true)),
 );

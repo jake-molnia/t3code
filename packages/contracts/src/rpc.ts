@@ -1,3 +1,5 @@
+import { ExecutionPoolsSnapshot } from "./executionPools.ts";
+import { SandboxIdeOpenInput, SandboxIdeOpenResult, SandboxIdeError } from "./sandboxIde.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -25,7 +27,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, TrimmedNonEmptyString, ThreadId } from "./baseSchemas.ts";
 import {
   CodexAuthCallbackInput,
   CodexAuthCallbackState,
@@ -34,8 +36,6 @@ import {
   ProviderAuthState,
   ProviderAuthStartInput,
   ProviderAuthRespondInput,
-  ProviderInstallCancelInput,
-  ProviderInstallState,
   ProviderSetupError,
   ProviderSetupInput,
 } from "./providerSetup.ts";
@@ -55,11 +55,7 @@ import {
   AcpRegistryListProvidersResult,
   AcpRegistryLogoutInput,
   AcpRegistryLogoutResult,
-  AcpRegistryManagedBinaryUninstallInput,
-  AcpRegistryManagedBinaryUninstallResult,
   AcpRegistryOperationError,
-  AcpRegistryPrepareInput,
-  AcpRegistryPrepareResult,
   AcpRegistrySearchInput,
   AcpRegistrySearchResult,
   AcpRegistrySetProviderInput,
@@ -288,12 +284,9 @@ import {
 import {} from "./previewAutomation.ts";
 import {
   ServerConfigStreamEvent,
-  DesktopUpdateCommitInput,
   OtlpEndpointCheckInput,
   OtlpEndpointCheckResult,
   ServerConfig,
-  ServerProviderUpdateError,
-  ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
@@ -385,6 +378,7 @@ export const WS_METHODS = {
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
+  sandboxIdeOpen: "sandbox.ide.open",
 
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
@@ -415,10 +409,6 @@ export const WS_METHODS = {
   providerAuthCancel: "provider.auth.cancel",
   providerAuthLogout: "provider.auth.logout",
   providerAuthSubscribe: "provider.auth.subscribe",
-  providerInstallStart: "provider.install.start",
-  providerInstallCancel: "provider.install.cancel",
-  providerInstallSubscribe: "provider.install.subscribe",
-  providerInstallRemove: "provider.install.remove",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -474,11 +464,10 @@ export const WS_METHODS = {
   // Server meta
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
+  serverExecutionPools: "server.executionPools",
   serverRefreshProviders: "server.refreshProviders",
-  serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
-  serverCommitDesktopUpdate: "server.commitDesktopUpdate",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
@@ -487,8 +476,6 @@ export const WS_METHODS = {
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverSearchAcpRegistry: "server.searchAcpRegistry",
-  serverPrepareAcpRegistryAgent: "server.prepareAcpRegistryAgent",
-  serverUninstallAcpRegistryManagedBinary: "server.uninstallAcpRegistryManagedBinary",
   serverAcceptAcpRegistryUrlAuth: "server.acceptAcpRegistryUrlAuth",
   serverListAcpRegistrySessions: "server.listAcpRegistrySessions",
   serverImportAcpRegistrySession: "server.importAcpRegistrySession",
@@ -604,6 +591,12 @@ const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsServerExecutionPoolsRpc = Rpc.make(WS_METHODS.serverExecutionPools, {
+  payload: Schema.Struct({}),
+  success: ExecutionPoolsSnapshot,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
@@ -629,12 +622,6 @@ const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, 
   }),
   success: ServerProviderUpdatedPayload,
   error: Schema.Union([EnvironmentAuthorizationError, ProviderSetupError]),
-});
-
-const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
-  payload: ServerProviderUpdateInput,
-  success: ServerProviderUpdatedPayload,
-  error: Schema.Union([ServerProviderUpdateError, EnvironmentAuthorizationError]),
 });
 
 const ProviderSetupRpcError = Schema.Union([ProviderSetupError, EnvironmentAuthorizationError]);
@@ -705,31 +692,6 @@ const WsProviderAuthSubscribeRpc = Rpc.make(WS_METHODS.providerAuthSubscribe, {
   stream: true,
 });
 
-const WsProviderInstallStartRpc = Rpc.make(WS_METHODS.providerInstallStart, {
-  payload: ProviderSetupInput,
-  success: ProviderInstallState,
-  error: ProviderSetupRpcError,
-});
-
-const WsProviderInstallCancelRpc = Rpc.make(WS_METHODS.providerInstallCancel, {
-  payload: ProviderInstallCancelInput,
-  success: ProviderInstallState,
-  error: ProviderSetupRpcError,
-});
-
-const WsProviderInstallSubscribeRpc = Rpc.make(WS_METHODS.providerInstallSubscribe, {
-  payload: ProviderSetupInput,
-  success: ProviderInstallState,
-  error: ProviderSetupRpcError,
-  stream: true,
-});
-
-const WsProviderInstallRemoveRpc = Rpc.make(WS_METHODS.providerInstallRemove, {
-  payload: ProviderSetupInput,
-  success: ProviderInstallState,
-  error: ProviderSetupRpcError,
-});
-
 const WsServerUpdateServerRpc = Rpc.make(WS_METHODS.serverUpdateServer, {
   payload: ServerSelfUpdateInput,
   success: ServerSelfUpdateResult,
@@ -741,12 +703,6 @@ const WsServerUpdateServerWithProgressRpc = Rpc.make(WS_METHODS.serverUpdateServ
   success: ServerSelfUpdateProgressEvent,
   error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
   stream: true,
-});
-
-const WsServerCommitDesktopUpdateRpc = Rpc.make(WS_METHODS.serverCommitDesktopUpdate, {
-  payload: DesktopUpdateCommitInput,
-  success: ServerSelfUpdateResult,
-  error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
 });
 
 const WsServerRunStorageCleanupRpc = Rpc.make(WS_METHODS.serverRunStorageCleanup, {
@@ -787,21 +743,6 @@ const WsServerSearchAcpRegistryRpc = Rpc.make(WS_METHODS.serverSearchAcpRegistry
   success: AcpRegistrySearchResult,
   error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
 });
-
-const WsServerPrepareAcpRegistryAgentRpc = Rpc.make(WS_METHODS.serverPrepareAcpRegistryAgent, {
-  payload: AcpRegistryPrepareInput,
-  success: AcpRegistryPrepareResult,
-  error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
-});
-
-const WsServerUninstallAcpRegistryManagedBinaryRpc = Rpc.make(
-  WS_METHODS.serverUninstallAcpRegistryManagedBinary,
-  {
-    payload: AcpRegistryManagedBinaryUninstallInput,
-    success: AcpRegistryManagedBinaryUninstallResult,
-    error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
-  },
-);
 
 const WsServerAcceptAcpRegistryUrlAuthRpc = Rpc.make(WS_METHODS.serverAcceptAcpRegistryUrlAuth, {
   payload: AcpRegistryAcceptUrlAuthInput,
@@ -1259,6 +1200,12 @@ const WsProjectsCreateNewRpc = Rpc.make(WS_METHODS.projectsCreateNew, {
   error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
 });
 
+const WsSandboxIdeOpenRpc = Rpc.make(WS_METHODS.sandboxIdeOpen, {
+  payload: SandboxIdeOpenInput,
+  success: SandboxIdeOpenResult,
+  error: Schema.Union([SandboxIdeError, EnvironmentAuthorizationError]),
+});
+
 const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: LaunchEditorInput,
   error: Schema.Union([ExternalLauncherError, EnvironmentAuthorizationError]),
@@ -1557,6 +1504,7 @@ const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, 
 
 const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(WS_METHODS.subscribeDiscoveredLocalServers, {
   payload: Schema.Struct({
+    threadId: Schema.optional(ThreadId),
     configuredUrls: Schema.optional(ConfiguredLocalServerUrls),
   }),
   success: DiscoveredLocalServerList,
@@ -1878,8 +1826,8 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
+  WsServerExecutionPoolsRpc,
   WsServerRefreshProvidersRpc,
-  WsServerUpdateProviderRpc,
   WsProviderConsumeResetCreditRpc,
   WsProviderAuthStartRpc,
   WsProviderAuthCompleteRpc,
@@ -1891,13 +1839,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderAuthCancelRpc,
   WsProviderAuthLogoutRpc,
   WsProviderAuthSubscribeRpc,
-  WsProviderInstallStartRpc,
-  WsProviderInstallCancelRpc,
-  WsProviderInstallSubscribeRpc,
-  WsProviderInstallRemoveRpc,
   WsServerUpdateServerRpc,
   WsServerUpdateServerWithProgressRpc,
-  WsServerCommitDesktopUpdateRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,
@@ -1906,8 +1849,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateSettingsRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerSearchAcpRegistryRpc,
-  WsServerPrepareAcpRegistryAgentRpc,
-  WsServerUninstallAcpRegistryManagedBinaryRpc,
   WsServerAcceptAcpRegistryUrlAuthRpc,
   WsServerListAcpRegistrySessionsRpc,
   WsServerImportAcpRegistrySessionRpc,
@@ -1989,6 +1930,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsWriteFileRpc,
   WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,
+  WsSandboxIdeOpenRpc,
   WsFilesystemBrowseRpc,
   WsFilesystemGetMetadataRpc,
   WsAgentSessionsScanRpc,

@@ -85,13 +85,13 @@ vi.mock("../../localApi", () => ({
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 
 const environmentId = EnvironmentId.make("remote-device");
-const instanceId = ProviderInstanceId.make("acpRegistry_antigravity");
-const projectId = ProjectId.make("project-antigravity");
+const instanceId = ProviderInstanceId.make("acpRegistry_example");
+const projectId = ProjectId.make("project-example");
 const session = {
   sessionId: "native-session-1",
-  cwd: "/workspace/antigravity",
+  cwd: "/workspace/example",
   additionalDirectories: [],
-  title: "Native Antigravity session",
+  title: "Native Registry agent session",
   updatedAt: "2026-08-23T00:00:00Z",
   importedThreadId: null,
 } as const;
@@ -117,7 +117,7 @@ function render(readOnly = false): ReactElement<Record<string, unknown>> {
     environmentId,
     instanceId,
     provider,
-    projects: [{ id: projectId, title: "Antigravity", workspaceRoot: session.cwd }],
+    projects: [{ id: projectId, title: "Registry agent", workspaceRoot: session.cwd }],
     readOnly,
   }) as ReactElement<Record<string, unknown>>;
 }

@@ -113,3 +113,15 @@ function toolInstructions(
 ) {
   return buildCodexAdditionalContext(runtime, available).t3_code_tools?.value ?? "";
 }
+
+it("describes the sandbox computer only when the turn credential grants it", () => {
+  for (const computer of [true, false]) {
+    const instructions =
+      buildCodexAdditionalContext(
+        { model: "gpt-5", reasoningEffort: "medium" },
+        { browser: false, device: false, computer },
+      ).t3_code_tools?.value ?? "";
+    NodeAssert.equal(instructions.includes("computer_screenshot"), computer);
+    NodeAssert.equal(instructions.includes("Descendant threads share this desktop"), computer);
+  }
+});

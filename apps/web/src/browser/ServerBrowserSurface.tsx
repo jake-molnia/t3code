@@ -1,20 +1,20 @@
 "use client";
 
 import {
-  createPreviewFramePainter,
-  createPreviewStreamClient,
-  previewStreamControlLabel,
-  previewStreamModifiers,
   type PreviewStreamClient,
   type PreviewStreamControl,
   type PreviewStreamDownload,
   type PreviewStreamFileChooser,
-  uploadPreviewStreamFiles,
   type PreviewStreamInput,
   type PreviewStreamMouseButton,
   type PreviewStreamPointer,
   type PreviewStreamViewport,
+  createPreviewFramePainter,
+  createPreviewStreamClient,
+  previewStreamControlLabel,
   previewStreamHostSetupMessage,
+  previewStreamModifiers,
+  uploadPreviewStreamFiles,
 } from "@t3tools/client-runtime/preview/server-browser-stream";
 import type {
   EnvironmentId,
@@ -35,7 +35,6 @@ import {
 } from "react";
 
 import { AgentCursorMark } from "~/components/preview/AgentBrowserCursor";
-import { CommandBlock } from "~/components/CommandBlock";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
@@ -892,7 +891,6 @@ export function ServerBrowserSurface(props: {
           <p role="alert" className="max-w-sm text-sm text-muted-foreground">
             {previewStreamHostSetupMessage(hostSetup)}
           </p>
-          <CommandBlock command={hostSetup.command} className="w-full max-w-md text-left" />
           <Button variant="outline" size="sm" onClick={() => setHostSetup(null)}>
             Try again
           </Button>

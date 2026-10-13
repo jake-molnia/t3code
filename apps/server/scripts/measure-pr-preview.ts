@@ -2,6 +2,7 @@
 // Numbers form a session with shared repository-permission caches. Browser and
 // service caches are excluded. Uses real GitHub reads, without a server or database.
 // Each GraphQL read asks for `rateLimit` here, so its cost is read off its own answer.
+import * as RepositoryFiles from "../src/git/RepositoryFiles.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Console from "effect/Console";
@@ -96,6 +97,7 @@ const measuredApi = Layer.effect(
 );
 
 const services = GitHubPullRequestApi.layer.pipe(
+  Layer.provide(RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
   Layer.provideMerge(measuredApi),
   Layer.provideMerge(sourceControlHost),
 );

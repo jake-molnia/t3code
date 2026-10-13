@@ -23,6 +23,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 /** One CLI invocation. The server bounds concurrency, output, and time for every run. */
@@ -68,6 +69,8 @@ export interface SourceControlGitRemoteBranch {
 export class SourceControlHost extends Context.Service<
   SourceControlHost,
   {
+    /** A scoped scratch directory in the same execution environment as process.run. */
+    readonly temporaryDirectory: Effect.Effect<string, GitCommandError, Scope.Scope>;
     readonly settings: {
       /** Read fresh on each call, so a credential saved in Settings applies without a restart. */
       readonly get: Effect.Effect<ServerSettings, ServerSettingsError>;

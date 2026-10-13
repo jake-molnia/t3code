@@ -6,11 +6,11 @@ import {
   PreviewStreamHostSetup,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import {
   HttpPlatform,
   HttpRouter,
@@ -200,12 +200,12 @@ const makeHandler = (browser: ServerBrowser.ServerBrowser["Service"]) =>
     );
   });
 
-/** Which host setup a launch failure is missing, and the command that fixes it. */
+/** Which deployment prerequisite prevented the browser from launching. */
 const hostSetup = (cause: unknown): PreviewStreamHostSetup | undefined =>
   isSandboxError(cause)
-    ? { need: "sandbox", command: cause.setupCommand }
+    ? { need: "sandbox" }
     : isLibrariesError(cause)
-      ? { need: "libraries", command: cause.setupCommand }
+      ? { need: "libraries" }
       : undefined;
 const isSandboxError = Schema.is(PreviewBrowserHost.PreviewBrowserSandboxError);
 const isLibrariesError = Schema.is(PreviewBrowserHost.PreviewBrowserLibrariesError);

@@ -21,6 +21,7 @@ import * as Ref from "effect/Ref";
 
 export interface TestSourceControlHostOptions {
   readonly settings?: ServerSettings;
+  readonly temporaryDirectory?: SourceControlHost.SourceControlHost["Service"]["temporaryDirectory"];
   readonly process?: Partial<SourceControlHost.SourceControlHost["Service"]["process"]>;
   readonly git?: Partial<SourceControlHost.SourceControlHost["Service"]["git"]>;
 }
@@ -57,6 +58,9 @@ export const layer = (
     Effect.gen(function* () {
       const settings = yield* Ref.make(options.settings ?? DEFAULT_SERVER_SETTINGS);
       const host = SourceControlHost.SourceControlHost.of({
+        temporaryDirectory:
+          options.temporaryDirectory ??
+          Effect.die("Unexpected temporary directory in a test that supplied none."),
         settings: { get: Ref.get(settings) },
         process: {
           run:

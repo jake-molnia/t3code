@@ -66,14 +66,6 @@ export const EDITORS = [
     remoteScheme: "zed",
   },
   {
-    id: "antigravity",
-    label: "Antigravity",
-    // `agy` is the standalone Antigravity CLI, not the IDE. The IDE bundle
-    // ships `antigravity-ide`, so it comes first for install-folder lookups.
-    commands: ["antigravity-ide", "agy-ide"],
-    launchStyle: "goto",
-  },
-  {
     id: "idea",
     label: "IntelliJ IDEA",
     commands: ["idea"],

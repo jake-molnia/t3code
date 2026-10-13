@@ -1,3 +1,5 @@
+import * as RemoteWorkspaceGitStatus from "../agentRuntime/RemoteWorkspaceGitStatus.ts";
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
@@ -12,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as RepositoryFiles from "./RepositoryFiles.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -864,7 +867,9 @@ function makeManager(input?: {
       yield* input.seed.pipe(Effect.provideContext(stores), Effect.orDie);
     }
     const manager = yield* GitManager.make.pipe(
-      Effect.provide(layerManager),
+      Effect.provide(
+        Layer.merge(layerManager, RepositoryFiles.layer.pipe(Layer.provide(NodeServices.layer))),
+      ),
       Effect.provideContext(stores),
     );
     return { manager, ghCalls };
@@ -880,6 +885,82 @@ const layerGitManagerTest = GitVcsDriver.layer.pipe(
 );
 
 it.layer(layerGitManagerTest)("GitManager", (it) => {
+  it.effect(
+    "sandbox status composes real untracked totals and PR metadata and retains them asleep",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const cwd = yield* makeTempDir("sandbox-status-");
+        yield* initRepo(cwd);
+        const remote = yield* createBareRemote();
+        yield* runGit(cwd, ["remote", "add", "origin", remote]);
+        yield* runGit(cwd, ["push", "-u", "origin", "main"]);
+        yield* runGit(cwd, ["checkout", "-b", "feature/status"]);
+        yield* runGit(cwd, ["push", "-u", "origin", "feature/status"]);
+        yield* fs.writeFileString(NodePath.join(cwd, "untracked.txt"), "one\ntwo\n");
+        const { manager } = yield* makeManager({
+          ghScenario: {
+            prListSequence: [
+              JSON.stringify([
+                {
+                  number: 42,
+                  title: "Status metadata",
+                  url: "https://github.com/example/repo/pull/42",
+                  baseRefName: "main",
+                  headRefName: "feature/status",
+                  state: "OPEN",
+                },
+              ]),
+            ],
+          },
+        });
+        let awake = true;
+        const service = yield* VcsStatusBroadcaster.VcsStatusBroadcaster.pipe(
+          Effect.provide(
+            RemoteWorkspaceGitStatus.layer.pipe(
+              Layer.provide(
+                Layer.mock(WorkspaceRouting.WorkspaceRouting)({
+                  enabled: true,
+                  observe: (_cwd, effect) =>
+                    Effect.suspend(() => (awake ? effect : Effect.succeed(null))),
+                }),
+              ),
+              Layer.provide(
+                GitWorkflowService.layer.pipe(
+                  Layer.provide(Layer.succeed(GitManager.GitManager, manager)),
+                  Layer.provide(
+                    VcsDriverRegistry.layer.pipe(
+                      Layer.provide(VcsProjectConfig.layer),
+                      Layer.provide(VcsProcess.layer),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        const status = yield* service.refreshStatus(cwd);
+        expect(status.branchChanges).toMatchObject({ insertions: 2, deletions: 0 });
+        expect(status.pr).toMatchObject({ number: 42, title: "Status metadata", state: "open" });
+        yield* fs.writeFileString(NodePath.join(cwd, "untracked.txt"), "one\ntwo\nthree\n");
+        const warm = yield* service.streamStatus({ cwd }).pipe(Stream.take(1), Stream.runCollect);
+        expect(warm[0]).toMatchObject({
+          _tag: "snapshot",
+          local: { branchChanges: { insertions: 3 } },
+          remote: { pr: { number: 42 } },
+        });
+        awake = false;
+        yield* fs.writeFileString(
+          NodePath.join(cwd, "untracked.txt"),
+          "not observed while asleep\n",
+        );
+        const sleeping = yield* service
+          .streamStatus({ cwd })
+          .pipe(Stream.take(1), Stream.runCollect);
+        expect(sleeping).toEqual(warm);
+      }),
+  );
+
   it.effect("passive worktree status streams do not start remote refreshes", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-passive-vcs-");

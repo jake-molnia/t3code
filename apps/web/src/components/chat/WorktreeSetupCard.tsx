@@ -104,17 +104,20 @@ function ShimmerOverlay({ children }: { children: ReactNode }) {
 }
 
 function headerLabel(snapshot: WorktreeSetupSnapshot): string {
+  const workspace = snapshot.stages.some((stage) => stage.id === "sandbox")
+    ? "Workspace"
+    : "Worktree";
   switch (snapshot.phase) {
     case "running":
-      return "Setting up worktree…";
+      return `Setting up ${workspace.toLowerCase()}…`;
     case "done":
       return snapshot.stages.some((stage) => stage.status === "failed")
-        ? "Worktree ready, setup script failed"
-        : "Worktree ready";
+        ? `${workspace} ready, setup script failed`
+        : `${workspace} ready`;
     case "failed":
-      return "Worktree setup failed";
+      return `${workspace} setup failed`;
     case "cancelled":
-      return "Worktree setup cancelled";
+      return `${workspace} setup cancelled`;
   }
 }
 
@@ -372,7 +375,14 @@ export function WorktreeSetupCard({
       (setupStage.status === "running" && setupStage.tail.length > 0));
 
   return (
-    <section aria-label="Worktree setup" data-worktree-setup-phase={snapshot.phase}>
+    <section
+      aria-label={
+        snapshot.stages.some((stage) => stage.id === "sandbox")
+          ? "Workspace setup"
+          : "Worktree setup"
+      }
+      data-worktree-setup-phase={snapshot.phase}
+    >
       {showHeader ? <SetupHeaderRow snapshot={snapshot} totalElapsed={totalElapsed} /> : null}
       {collapsed ? (
         <CollapsedSummaryRow snapshot={snapshot} totalElapsed={totalElapsed} />

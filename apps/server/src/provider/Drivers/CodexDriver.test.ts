@@ -52,11 +52,7 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
       open: () => Effect.die("Maintenance resolution must not open a Codex session"),
     }),
   ),
-  Layer.provideMerge(
-    Layer.mock(CodexInstallation.CodexInstallation)({
-      managedDirectory: "unused-managed-installation",
-    }),
-  ),
+  Layer.provideMerge(Layer.mock(CodexInstallation.CodexInstallation)({})),
   Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
   Layer.provideMerge(
     Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
@@ -173,7 +169,6 @@ it.layer(layerTest)("CodexDriver", (it) => {
             CodexInstallation.CodexInstallation,
             CodexInstallation.CodexInstallation.of({
               ...installation,
-              managedDirectory: "unused-managed-installation",
               resolve: () => Effect.succeed(executable),
               acquire,
             }),

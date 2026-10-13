@@ -79,7 +79,7 @@ const defaultSessionLoadTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
 const defaultCancelTimeout = Duration.seconds(15);
 const maxStartupMetadataUpdates = 32;
-// Antigravity can emit an accepted 16 KiB Google authorization URL on stderr.
+// Preserve complete authorization URLs emitted on stderr.
 const maxStderrChunkLength = 32_768;
 
 export interface AcpSpawnInput {
@@ -123,8 +123,7 @@ export interface AcpSessionRuntimeOptions {
   readonly authMethodId?: string;
   /**
    * Call `authenticate` right after `initialize` instead of waiting for an
-   * auth-required error. Antigravity selects its credential source (Google
-   * account vs API key) from the method, so the session must not open first.
+   * auth-required error when the provider requires credentials before opening a session.
    */
   readonly authenticateEagerly?: boolean;
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
@@ -2350,8 +2349,7 @@ export const make = (
       });
 
       if (options.authenticateEagerly === true) {
-        // The configured method is authoritative here: Antigravity accepts
-        // methods (API key, Vertex) it does not list in `initialize`.
+        // The explicitly configured method takes precedence over discovery.
         const authenticatePayload = {
           methodId: options.authMethodId ?? "",
         } satisfies EffectAcpSchema.AuthenticateRequest;

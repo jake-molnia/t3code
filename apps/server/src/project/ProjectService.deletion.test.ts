@@ -1,3 +1,4 @@
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -50,6 +51,7 @@ const layerServices = Layer.mergeAll(
       Effect.succeed({ absolutePath: `${workspaceRoot}/${relativePath}`, relativePath }),
   }),
 ).pipe(
+  Layer.provideMerge(Layer.mock(WorkspaceRouting.WorkspaceRouting)({ enabled: false })),
   Layer.provideMerge(
     ProjectEnrichmentService.layer.pipe(
       Layer.provide(

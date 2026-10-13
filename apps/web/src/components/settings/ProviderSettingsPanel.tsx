@@ -1,10 +1,6 @@
 import { SettingsGroup } from "./SettingsGroup";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import {
-  AuthSettingsWriteScope,
-  AuthProvidersManageScope,
-  AuthOrchestrationReadScope,
-} from "@t3tools/contracts";
+import { AuthSettingsWriteScope, AuthOrchestrationReadScope } from "@t3tools/contracts";
 import { useEnvironmentScope, readEnvironmentScope } from "../../state/session";
 import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
@@ -17,7 +13,6 @@ import {
   defaultInstanceIdForDriver,
   type EnvironmentId,
   type AcpRegistryUrlAuthAction,
-  PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProjectId,
   type ProviderInstanceConfig,
@@ -33,7 +28,6 @@ import {
 } from "@t3tools/shared/backgroundActivitySettings";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
-import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
 import { PlusIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -64,12 +58,6 @@ import {
   connectionPhaseDotClassName,
   connectionPhasePingClassName,
 } from "../ConnectionStatusDot";
-import {
-  isProviderSettingsUpdateCandidate,
-  isProviderUpdateActive,
-  type ProviderSettingsUpdateCandidate,
-} from "../ProviderUpdateLaunchNotification.logic";
-import { ProviderUpdatesAction } from "../ProviderUpdatesAction";
 import { Button } from "../ui/button";
 import {
   Empty,
@@ -89,12 +77,11 @@ import {
 import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { stackedThreadToast, toastManager } from "../ui/toast";
+import { toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ExpandableText } from "./ExpandableText";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { UsageProviderSettings } from "./UsageProviderSettings";
-import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
 import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
@@ -135,21 +122,10 @@ function modelListChanges(current: ReadonlyArray<string>, next: ReadonlyArray<st
     .map((model) => ({ model, selected: nextSet.has(model) }));
 }
 
-function providerConfigString(config: unknown, key: string): string | null {
-  if (config === null || typeof config !== "object") return null;
-  const value = (config as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
 const PROVIDER_SETTINGS = providerClients.definitions.map((definition) => ({
   provider: definition.driverKind,
   hasDefaultInstance: definition.hasDefaultInstance !== false,
 }));
-
-function configuredBinaryPath(config: unknown): string {
-  if (config === null || typeof config !== "object" || !("binaryPath" in config)) return "";
-  return typeof config.binaryPath === "string" ? config.binaryPath.trim() : "";
-}
 
 function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }) {
   useRelativeTimeTick();
@@ -594,13 +570,6 @@ export function EnvironmentProviderSettings({
   const refreshServerProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
-  const updateProvider = useAtomCommand(serverEnvironment.updateProvider, {
-    reportFailure: false,
-  });
-  const uninstallAcpRegistryManagedBinary = useAtomCommand(
-    serverEnvironment.uninstallAcpRegistryManagedBinary,
-    { reportFailure: false },
-  );
   const acceptAcpRegistryUrlAuth = useAtomCommand(serverEnvironment.acceptAcpRegistryUrlAuth, {
     reportFailure: false,
   });
@@ -609,11 +578,7 @@ export function EnvironmentProviderSettings({
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(
     targetInstanceId ?? null,
   );
-  const [updatingProviderInstanceIds, setUpdatingProviderInstanceIds] = useState<
-    ReadonlySet<ProviderInstanceId>
-  >(() => new Set());
   const refreshingRef = useRef(false);
-  const updatingInstanceIdsRef = useRef<Set<ProviderInstanceId>>(new Set());
 
   const acceptUrlAuthentication = useCallback(
     (instanceId: ProviderInstanceId, action: AcpRegistryUrlAuthAction) => {
@@ -643,15 +608,6 @@ export function EnvironmentProviderSettings({
     [acceptAcpRegistryUrlAuth, environmentId],
   );
 
-  const providerUpdateCandidateByInstanceId = useMemo(
-    () =>
-      new Map(
-        serverProviders
-          .filter(isProviderSettingsUpdateCandidate)
-          .map((candidate) => [candidate.instanceId, candidate]),
-      ),
-    [serverProviders],
-  );
   const visibleProviderSettings = PROVIDER_SETTINGS.filter(
     (providerSettings) =>
       providerSettings.provider !== "cursor" ||
@@ -699,54 +655,6 @@ export function EnvironmentProviderSettings({
       }
     })();
   }, [environmentId, refreshServerProviders]);
-
-  const runProviderUpdate = useCallback(
-    async (
-      candidate: Pick<ProviderSettingsUpdateCandidate, "driver" | "instanceId">,
-      targetVersion?: string,
-    ) => {
-      if (!readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
-      // Ref-based re-entry guard, mirroring refreshProviders: a state updater
-      // may run after this function returns, so it cannot gate the dispatch.
-      if (updatingInstanceIdsRef.current.has(candidate.instanceId)) {
-        return;
-      }
-      updatingInstanceIdsRef.current.add(candidate.instanceId);
-      setUpdatingProviderInstanceIds((previous) => new Set(previous).add(candidate.instanceId));
-
-      const result = await updateProvider({
-        environmentId,
-        input: {
-          provider: candidate.driver,
-          instanceId: candidate.instanceId,
-          ...(targetVersion ? { targetVersion } : {}),
-        },
-      });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: `Could not update ${PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver}`,
-            description:
-              error instanceof Error
-                ? error.message
-                : "The provider update command could not be started.",
-          }),
-        );
-      }
-      updatingInstanceIdsRef.current.delete(candidate.instanceId);
-      setUpdatingProviderInstanceIds((previous) => {
-        if (!previous.has(candidate.instanceId)) {
-          return previous;
-        }
-        const next = new Set(previous);
-        next.delete(candidate.instanceId);
-        return next;
-      });
-    },
-    [environmentId, updateProvider],
-  );
 
   interface InstanceRow {
     readonly instanceId: ProviderInstanceId;
@@ -871,27 +779,6 @@ export function EnvironmentProviderSettings({
       });
       return;
     }
-
-    if (row.driver !== ProviderDriverKind.make("acpRegistry")) return;
-    if (providerConfigString(row.instance.config, "source") === "local") return;
-    const agentId = providerConfigString(row.instance.config, "agentId");
-    if (agentId === null) return;
-
-    // The server decides from its latest settings whether this was the last
-    // instance using the managed agent. A client-side snapshot check can race
-    // two removals and make both callers skip cleanup.
-    const uninstallResult = await uninstallAcpRegistryManagedBinary({
-      environmentId,
-      input: { agentId },
-    });
-    if (uninstallResult._tag === "Failure" && !isAtomCommandInterrupted(uninstallResult)) {
-      const error = squashAtomCommandFailure(uninstallResult);
-      toastManager.add({
-        type: "warning",
-        title: "Provider deleted, but managed files remain",
-        description: error instanceof Error ? error.message : "Managed binary cleanup failed.",
-      });
-    }
   };
 
   const resetDefaultInstance = async (driverKind: ProviderDriverKind) => {
@@ -914,12 +801,6 @@ export function EnvironmentProviderSettings({
     const liveProvider = serverProviders.find(
       (candidate) => candidate.instanceId === row.instanceId,
     );
-    const updateCandidate = providerUpdateCandidateByInstanceId.get(row.instanceId);
-    const isInstanceUpdateRunning =
-      updatingProviderInstanceIds.has(row.instanceId) ||
-      (liveProvider !== undefined && isProviderUpdateActive(liveProvider));
-    const showInlineUpdateButton = updateCandidate !== undefined;
-    const canRunInlineUpdate = updateCandidate !== undefined && !isInstanceUpdateRunning;
     const modelPreferences = settings.providerModelPreferences?.[row.instanceId] ?? {
       hiddenModels: [],
       modelOrder: [],
@@ -986,21 +867,9 @@ export function EnvironmentProviderSettings({
         }
         canWriteSettings={canWriteSettings}
         setup={
-          mode === "editor" && row.driver === "antigravity" ? (
-            <ProviderSetupSection
-              environmentId={environmentId}
-              environmentLabel={environmentLabel}
-              instanceId={row.instanceId}
-              provider={liveProvider}
-              binaryPath={configuredBinaryPath(row.instance.config)}
-              authMethod={readAntigravityAuthMethod(row.instance.config)}
-              enabled={resolveProviderInstanceEnabled(row.instance)}
-              readOnly={readOnly}
-              onEnable={() => updateProviderInstance(row, { ...row.instance, enabled: true })}
-            />
-          ) : mode === "editor" &&
-            row.driver === "codex" &&
-            readCodexSetupMode(row.instance.config) === "managed" ? (
+          mode === "editor" &&
+          row.driver === "codex" &&
+          readCodexSetupMode(row.instance.config) === "managed" ? (
             <CodexSetupSection
               environmentId={environmentId}
               instanceId={row.instanceId}
@@ -1105,27 +974,6 @@ export function EnvironmentProviderSettings({
             setProviderModelOrder: { provider: row.instanceId, modelOrder },
           });
         }}
-        onInstallRecommended={
-          !readOnly &&
-          liveProvider?.compatibilityAdvisory?.message &&
-          liveProvider.compatibilityAdvisory.recommendedVersion &&
-          liveProvider.versionAdvisory?.canInstallVersion
-            ? () => {
-                void runProviderUpdate(
-                  liveProvider,
-                  liveProvider.compatibilityAdvisory?.recommendedVersion ?? undefined,
-                );
-              }
-            : undefined
-        }
-        onRunUpdate={
-          !readOnly && showInlineUpdateButton && updateCandidate
-            ? () => {
-                if (canRunInlineUpdate) void runProviderUpdate(updateCandidate);
-              }
-            : undefined
-        }
-        isUpdating={isInstanceUpdateRunning}
       />
     );
   };
@@ -1156,7 +1004,6 @@ export function EnvironmentProviderSettings({
         }
         headerAction={
           <div className="flex min-w-0 items-center gap-2">
-            <ProviderUpdatesAction />
             <Tooltip>
               <TooltipTrigger
                 render={

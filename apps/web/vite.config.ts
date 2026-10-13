@@ -94,14 +94,13 @@ function resolveDevProxyTarget(
 ): string | undefined {
   // Browser dev is single-origin: the backend port is proxied through this
   // server so the app works from any origin (localhost, tailnet, LAN, phone).
-  // T3CODE_PORT is set by scripts/dev-runner.ts for every non-desktop mode.
+  // T3CODE_PORT is set by scripts/dev-runner.ts.
   const port = Number(backendPort?.trim());
   if (Number.isInteger(port) && port > 0) {
     return `http://localhost:${port}/`;
   }
 
-  // dev:desktop still points the renderer straight at the backend, so fall
-  // back to deriving the target from the explicit websocket URL.
+  // An explicit websocket URL can also identify the backend proxy target.
   if (!wsUrl) {
     return undefined;
   }
@@ -167,7 +166,6 @@ export default defineConfig(() => {
         packageManifests: [
           { bundle: "web", path: new URL("./package.json", import.meta.url) },
           { bundle: "server", path: new URL("../server/package.json", import.meta.url) },
-          { bundle: "desktop", path: new URL("../desktop/package.json", import.meta.url) },
         ],
       }),
       // Route components load as split chunks so settings, pull-request, and

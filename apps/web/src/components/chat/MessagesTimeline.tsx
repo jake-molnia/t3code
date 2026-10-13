@@ -1,3 +1,4 @@
+import type { OrchestrationV2Run } from "@t3tools/contracts";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 import { MarkdownFindContext, useFindRevealRef } from "./markdownFindContext";
@@ -514,7 +515,7 @@ interface MessagesTimelineProps {
   workspaceRoot: string | undefined;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   providerStatuses: ReadonlyArray<ServerProvider>;
-  runs: ReadonlyArray<HandoffTimelineRun>;
+  runs: ReadonlyArray<HandoffTimelineRun & Pick<OrchestrationV2Run, "startedAt" | "completedAt">>;
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
@@ -903,6 +904,15 @@ const ConversationTimeline = memo(function ConversationTimeline({
     [activeFindAttemptId, paintedExpandedAttemptIds],
   );
 
+  const runTimings = useMemo(
+    () =>
+      runsProp.map((run) => ({
+        runId: run.id,
+        startedAt: run.startedAt === null ? null : DateTime.formatIso(run.startedAt),
+        completedAt: run.completedAt === null ? null : DateTime.formatIso(run.completedAt),
+      })),
+    [runsProp],
+  );
   const rowsProjectionRef = useRef<{
     readonly threadKey: string;
     readonly workspaceRoot: string | undefined;
@@ -914,6 +924,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       {
         timelineEntries,
         latestRun,
+        runTimings,
         runningRunId,
         expandedRunIds: visibleExpandedRunIds,
         expandedAttemptIds: visibleExpandedAttemptIds,
@@ -937,6 +948,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     workspaceRoot,
     timelineEntries,
     latestRun,
+    runTimings,
     runningRunId,
     visibleExpandedRunIds,
     visibleExpandedAttemptIds,
@@ -3792,7 +3804,7 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   // place instead of remounting the row.
   const shimmer = isPreparingWorktree || isCompacting;
   const label = isPreparingWorktree ? (
-    "Setting up worktree…"
+    "Setting up workspace…"
   ) : isCompacting ? (
     <CompactingLabel />
   ) : row.createdAt ? (

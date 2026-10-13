@@ -63,7 +63,6 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverProbe]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,
-  [WS_METHODS.serverUpdateProvider]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthStart]: AuthProvidersManageScope,
   [WS_METHODS.providerConsumeResetCredit]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthComplete]: AuthProvidersManageScope,
@@ -75,21 +74,14 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.providerAuthCancel]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthLogout]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthSubscribe]: AuthProvidersManageScope,
-  [WS_METHODS.providerInstallStart]: AuthProvidersManageScope,
-  [WS_METHODS.providerInstallCancel]: AuthProvidersManageScope,
-  [WS_METHODS.providerInstallSubscribe]: AuthOrchestrationReadScope,
-  [WS_METHODS.providerInstallRemove]: AuthProvidersManageScope,
   [WS_METHODS.serverUpdateServer]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverUpdateServerWithProgress]: AuthEnvironmentMaintainScope,
-  [WS_METHODS.serverCommitDesktopUpdate]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverUpsertKeybinding]: AuthSettingsWriteScope,
   [WS_METHODS.serverRemoveKeybinding]: AuthSettingsWriteScope,
   [WS_METHODS.serverGetStorageCleanupReport]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetSettings]: AuthOrchestrationReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,
   [WS_METHODS.serverSearchAcpRegistry]: AuthOrchestrationReadScope,
-  [WS_METHODS.serverPrepareAcpRegistryAgent]: AuthProvidersManageScope,
-  [WS_METHODS.serverUninstallAcpRegistryManagedBinary]: AuthProvidersManageScope,
   [WS_METHODS.serverAcceptAcpRegistryUrlAuth]: AuthProvidersManageScope,
   [WS_METHODS.serverListAcpRegistrySessions]: AuthOrchestrationReadScope,
   [WS_METHODS.serverImportAcpRegistrySession]: AuthOrchestrationOperateScope,
@@ -103,6 +95,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverGetProcessDiagnostics]: AuthDiagnosticsReadScope,
   // Load-balancing new threads reads host load; that is part of operating
   // threads, not of inspecting diagnostics.
+  [WS_METHODS.serverExecutionPools]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetHostResources]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetProcessResourceHistory]: AuthDiagnosticsReadScope,
   [WS_METHODS.serverGetResourceTelemetryHistory]: AuthDiagnosticsReadScope,
@@ -236,9 +229,10 @@ const SettingsUpdate = Schema.Struct({
   patch: ServerSettingsPatch,
   providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
 });
+const validateSettingsUpdate = Schema.decodeUnknownSync(Schema.toType(SettingsUpdate));
 
 const requiredScopesForSettingsUpdate = (payload: unknown) => {
-  const input = Schema.decodeUnknownSync(SettingsUpdate)(payload);
+  const input = validateSettingsUpdate(payload);
   const scopes = requiredScopesForServerSettingsPatch(input.patch);
   if (input.providerInstanceMutation === undefined) return scopes;
   // An atomic provider mutation carries an empty patch unless it also changes settings.

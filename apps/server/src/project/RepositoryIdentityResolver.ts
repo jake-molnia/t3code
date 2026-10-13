@@ -85,7 +85,7 @@ function buildRepositoryOrigin(
   return { canonicalKey: originKey, ...(displayName ? { displayName } : {}) };
 }
 
-function buildRepositoryIdentity(input: {
+export function buildRepositoryIdentity(input: {
   readonly remoteName: string;
   readonly remoteUrl: string;
   readonly originUrl: string | undefined;

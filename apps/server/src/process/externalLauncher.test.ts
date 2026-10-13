@@ -928,18 +928,6 @@ it.effect("discovers editors through the service API", () =>
 for (const { platform, installPath, editor, args } of [
   {
     platform: "darwin",
-    installPath: "Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
-    editor: "antigravity",
-    args: ["--goto", "/workspace with spaces/file.ts:12:4"],
-  },
-  {
-    platform: "linux",
-    installPath: ".local/bin/antigravity-ide",
-    editor: "antigravity",
-    args: ["--goto", "/workspace with spaces/file.ts:12:4"],
-  },
-  {
-    platform: "darwin",
     installPath: "Applications/Cursor.app/Contents/Resources/app/bin/code",
     editor: "cursor",
     args: ["--classic", "--goto", "/workspace with spaces/file.ts:12:4"],
@@ -1221,36 +1209,6 @@ for (const { platform, installPath, onPath } of [
   { platform: "linux", installPath: ".local/bin/agy", onPath: false },
   { platform: "win32", installPath: "agy/bin/agy.cmd", onPath: true },
 ] as const) {
-  it.effect.skipIf(windowsHost && platform !== "win32")(
-    `does not report the agy CLI as the Antigravity IDE on ${platform}`,
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-cli-" });
-        const executable = path.join(home, installPath);
-        yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
-        yield* fs.writeFileString(executable, "#!/bin/sh\n");
-        yield* fs.chmod(executable, 0o755);
-        const editors = yield* Effect.gen(function* () {
-          const launcher = yield* ExternalLauncher.ExternalLauncher;
-          return yield* launcher.resolveAvailableEditors();
-        }).pipe(
-          Effect.provide(
-            layerTest({
-              platform,
-              env: {
-                HOME: home,
-                LOCALAPPDATA: home,
-                PATH: onPath ? path.dirname(executable) : path.join(home, "empty"),
-                PATHEXT: ".COM;.EXE;.BAT;.CMD",
-              },
-            }),
-          ),
-        );
-        assert.notInclude(editors, "antigravity");
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
 }
 
 it.effect.skipIf(windowsHost)("ignores unusable app bundles and keeps PATH launchers first", () =>

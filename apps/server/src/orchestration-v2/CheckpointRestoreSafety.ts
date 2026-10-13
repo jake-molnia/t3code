@@ -1,3 +1,4 @@
+import { RestoreSafety } from "../agentRuntime/RestoreSafety.ts";
 import type { OrchestrationV2AppThread, OrchestrationV2CheckpointScope } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
@@ -22,6 +23,8 @@ export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpoi
       readonly path: Path.Path;
     },
   ) {
+    const remote = yield* RestoreSafety;
+    if (remote.check) return yield* remote.check(thread, scope);
     const { fileSystem, projections, projects, path } = dependencies;
     const contains = (parent: string, child: string) => {
       const relative = path.relative(parent, child);

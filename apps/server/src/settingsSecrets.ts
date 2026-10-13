@@ -1,5 +1,4 @@
 import {
-  AntigravitySettings,
   ClaudeSettings,
   CodexSettings,
   type ServerSettings,
@@ -24,7 +23,6 @@ export const SECRET_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
 const providerSecretFields = new Map([
   ["codex", secretSettingsFields(CodexSettings)],
   ["claudeAgent", secretSettingsFields(ClaudeSettings)],
-  ["antigravity", secretSettingsFields(AntigravitySettings)],
   ...[cursorClient, grokClient, museClient, openCodeClient, piClient, acpRegistryClient].map(
     (definition) =>
       [definition.driverKind, secretSettingsFields(definition.settingsSchema)] as const,

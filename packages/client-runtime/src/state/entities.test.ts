@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  ExecutionPoolId,
   MessageId,
   NodeId,
   ProviderDriverKind,
@@ -752,5 +753,29 @@ describe("V2 client presentation", () => {
       { requestId: multiRequestId, multiSelect: true },
       { requestId: legacyRequestId, multiSelect: false },
     ]);
+  });
+});
+
+describe("execution pool presentation", () => {
+  it("keeps root, fork and child placement on the central environment", () => {
+    const environmentId = EnvironmentId.make("central");
+    const executionPoolId = ExecutionPoolId.make("portal");
+    const root = presentThreadShell(environmentId, { ...v2ThreadShell, executionPoolId });
+    const child = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      executionPoolId,
+      lineage: { ...v2ThreadShell.lineage, relationshipToParent: "subagent" },
+    });
+    expect(root.environmentId).toBe(environmentId);
+    expect(root.executionPoolId).toBe(executionPoolId);
+    expect(child.executionPoolId).toBe(executionPoolId);
+    expect(child.projectId).toBe(root.projectId);
+    const fork = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      executionPoolId,
+      forkedFrom: { type: "run", threadId: v2ThreadShell.id, runId: RunId.make("source-run") },
+    });
+    expect(fork.executionPoolId).toBe(executionPoolId);
+    expect(fork.environmentId).toBe(environmentId);
   });
 });

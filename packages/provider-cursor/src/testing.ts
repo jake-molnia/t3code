@@ -11,3 +11,5 @@ export {
   cursorSdkModelSelection,
   makeCursorAgentOptions,
 } from "./server/adapter.ts";
+
+export { cursorMcpServers } from "./server/adapter.ts";

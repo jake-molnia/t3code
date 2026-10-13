@@ -81,7 +81,7 @@ describe("requestLatencyState", () => {
   });
 
   it("gives provider updates a longer threshold before warning", () => {
-    trackRpcRequestSent("1", WS_METHODS.serverUpdateProvider, "server.updateProvider · env-1");
+    trackRpcRequestSent("1", WS_METHODS.serverUpdateServer, "server.updateProvider · env-1");
     vi.advanceTimersByTime(LONG_RUNNING_RPC_ACK_THRESHOLD_MS - 1);
     expect(getSlowRpcAckRequests()).toEqual([]);
 
