@@ -1,15 +1,22 @@
 import { Schema } from "effect";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
 export const ExecutionPoolId = TrimmedNonEmptyString.pipe(Schema.brand("ExecutionPoolId"));
 export type ExecutionPoolId = typeof ExecutionPoolId.Type;
+/** CPU/memory/pod-request fit estimate, not a Kubernetes scheduling guarantee. */
+export const ExecutionPoolRequestCapacity = Schema.Struct({
+  profile: TrimmedNonEmptyString,
+  sampledAt: NonNegativeInt,
+  availableSlots: NonNegativeInt,
+});
 export const ExecutionPool = Schema.Struct({
   id: ExecutionPoolId,
   label: Schema.String,
   available: Schema.Boolean,
   resources: Schema.NullOr(HostResourcesSnapshot),
+  requestCapacity: Schema.optionalKey(Schema.NullOr(ExecutionPoolRequestCapacity)),
   providerDrivers: Schema.Array(ProviderDriverKind),
 });
 export type ExecutionPool = typeof ExecutionPool.Type;

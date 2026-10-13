@@ -1,5 +1,6 @@
 import {
   ExecutionPoolId,
+  ExecutionPoolRequestCapacity,
   ExecutionPoolsSnapshot,
   HostResourcesSnapshot,
   ProviderDriverKind,
@@ -12,6 +13,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest } from "effect/http";
+
+const ResourceObservation = Schema.Struct({
+  ...HostResourcesSnapshot.fields,
+  requestCapacity: Schema.optionalKey(Schema.NullOr(ExecutionPoolRequestCapacity)),
+});
 
 const Pool = Schema.Struct({
   id: ExecutionPoolId,
@@ -124,11 +130,14 @@ export const layer = Layer.effect(
               Effect.timeout("3 seconds"),
               Effect.orElseSucceed(() => false),
             );
-          const resources = available
+          const observation = available
             ? yield* http
                 .execute(
                   HttpClientRequest.get(
-                    new URL("v1/resources", pool.url.replace(/\/?$/, "/")).toString(),
+                    new URL(
+                      `v1/resources?profile=${encodeURIComponent(pool.profile)}`,
+                      pool.url.replace(/\/?$/, "/"),
+                    ).toString(),
                   ).pipe(HttpClientRequest.setHeaders(headers)),
                 )
                 .pipe(
@@ -139,7 +148,7 @@ export const layer = Layer.effect(
                       return yield* response.json;
                     }),
                   ),
-                  Effect.flatMap(Schema.decodeUnknownEffect(HostResourcesSnapshot)),
+                  Effect.flatMap(Schema.decodeUnknownEffect(ResourceObservation)),
                   Effect.timeout("3 seconds"),
                   Effect.orElseSucceed(() => null),
                 )
@@ -148,7 +157,20 @@ export const layer = Layer.effect(
             id: pool.id,
             label: pool.label,
             available,
-            resources,
+            resources:
+              observation === null
+                ? null
+                : {
+                    sampledAt: observation.sampledAt,
+                    cpuCount: observation.cpuCount,
+                    cpuUtilization: observation.cpuUtilization,
+                    availableMemoryBytes: observation.availableMemoryBytes,
+                    totalMemoryBytes: observation.totalMemoryBytes,
+                  },
+            requestCapacity:
+              observation?.requestCapacity?.profile === pool.profile
+                ? observation.requestCapacity
+                : null,
             providerDrivers: pool.providerDrivers,
           };
         }),

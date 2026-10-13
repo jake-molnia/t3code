@@ -84,7 +84,17 @@ const controller = (name: string) =>
           if (url.pathname === "/control/healthz")
             return new Response(null, { status: health.status });
           if (url.pathname === "/control/v1/resources")
-            return Response.json(health.metrics, { status: health.metricsStatus });
+            return Response.json(
+              {
+                ...health.metrics,
+                requestCapacity: {
+                  profile: name === "portal" ? "wrong-profile" : url.searchParams.get("profile"),
+                  sampledAt: 123,
+                  availableSlots: 0,
+                },
+              },
+              { status: health.metricsStatus },
+            );
           if (url.pathname === "/control/v1/operations" && request.method === "POST") {
             const operation = decodeOperation(await request.json());
             operations.push(operation);
@@ -309,8 +319,10 @@ it.layer(services, { excludeTestServices: true })("durable execution pool routin
           label: "gompers",
           available: true,
           resources: resourceSample,
+          requestCapacity: { profile: "gompers-v1", sampledAt: 123, availableSlots: 0 },
           providerDrivers: [ProviderDriverKind.make("codex")],
         });
+        expect(healthy.pools[1]?.requestCapacity).toBeNull();
         const published = JSON.stringify(healthy);
         for (const privateValue of [
           f.a.token,

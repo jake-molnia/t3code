@@ -238,3 +238,46 @@ describe("persisted new-thread branch hints", () => {
     expect(resolve({ threadLocked: true })).toBe(gompers);
   });
 });
+
+describe("reservation capacity", () => {
+  const full = pool(gompers, {
+    requestCapacity: { profile: "t3-v7", sampledAt: now, availableSlots: 0 },
+  });
+  it("excludes freshly measured zero capacity without rewriting actual utilization", () => {
+    expect(
+      chooseExecutionPool(
+        catalog([full, pool(portal)]),
+        codex,
+        { [gompers]: 100, [portal]: 1 },
+        now,
+      ),
+    ).toBe(portal);
+    expect(chooseExecutionPool(catalog([full]), codex, {}, now)).toBeNull();
+    expect(full.resources?.cpuUtilization).toBe(0.2);
+  });
+  it("does not treat stale or unavailable reservation inventory as measured zero", () => {
+    for (const requestCapacity of [
+      null,
+      { profile: "t3-v7", sampledAt: now - 16000, availableSlots: 0 },
+    ])
+      expect(
+        chooseExecutionPool(catalog([pool(gompers, { requestCapacity })]), codex, {}, now),
+      ).toBe(gompers);
+  });
+  it("preserves explicit choices and bound workspace affinity when capacity is exhausted", () => {
+    for (const placement of [
+      { automatic: false, placementLocked: false },
+      { automatic: true, placementLocked: true },
+    ])
+      expect(
+        resolveExecutionPoolSelection({
+          catalog: { ...catalog([full, pool(portal)]), pending: false },
+          selectedPoolId: gompers,
+          driver: codex,
+          ...placement,
+          weights: {},
+          now,
+        }),
+      ).toBe(gompers);
+  });
+});

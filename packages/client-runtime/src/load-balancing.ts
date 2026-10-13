@@ -52,7 +52,16 @@ export function chooseExecutionPool(
   const pools = catalog.snapshot?.pools ?? [];
   const id = chooseLoadBalancedEnvironment(
     pools
-      .filter((pool) => pool.available && pool.providerDrivers.includes(driver))
+      .filter((pool) => {
+        if (!pool.available || !pool.providerDrivers.includes(driver)) return false;
+        const capacity = pool.requestCapacity;
+        return !(
+          capacity &&
+          capacity.availableSlots === 0 &&
+          now - capacity.sampledAt <= 15_000 &&
+          capacity.sampledAt <= now + 5_000
+        );
+      })
       .map((pool) => ({
         environmentId: pool.id,
         resources: pool.resources,
