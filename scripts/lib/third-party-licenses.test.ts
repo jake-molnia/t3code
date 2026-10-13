@@ -19,12 +19,6 @@ const REPOSITORY_ROOT = NodePath.resolve(
   NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),
   "../..",
 );
-const DEVICE_TOOL_VERSIONS = JSON.parse(
-  await NodeFSP.readFile(
-    NodePath.join(REPOSITORY_ROOT, "apps/server/src/device/deviceToolVersions.json"),
-    "utf8",
-  ),
-) as { readonly "agent-device": string; readonly "expo-device-hub": string };
 
 async function writeJson(path: string, value: unknown): Promise<void> {
   await NodeFSP.mkdir(NodePath.dirname(path), { recursive: true });
@@ -84,38 +78,29 @@ afterEach(async () => {
 });
 
 describe("third-party license generation", () => {
-  it("generates mobile notices without scripts workspace dependency links", async () => {
+  it("generates configured notices with a standalone copy of the generator", async () => {
     const fixture = await createFixture();
     const generatorPath = NodePath.join(fixture.root, "scripts/lib/third-party-licenses.ts");
-    const versionsPath = NodePath.join(
-      fixture.root,
-      "apps/server/src/device/deviceToolVersions.json",
-    );
-    await Promise.all([
-      NodeFSP.mkdir(NodePath.dirname(generatorPath), { recursive: true }),
-      NodeFSP.mkdir(NodePath.dirname(versionsPath), { recursive: true }),
-    ]);
+    await NodeFSP.mkdir(NodePath.dirname(generatorPath), { recursive: true });
     await Promise.all([
       writeJson(NodePath.join(fixture.root, "scripts/package.json"), { type: "module" }),
       NodeFSP.copyFile(
         NodePath.join(REPOSITORY_ROOT, "scripts/lib/third-party-licenses.ts"),
         generatorPath,
       ),
-      NodeFSP.copyFile(
-        NodePath.join(REPOSITORY_ROOT, "apps/server/src/device/deviceToolVersions.json"),
-        versionsPath,
-      ),
       writeJson(fixture.configFile, {
-        customNotices: Object.keys(DEVICE_TOOL_VERSIONS).map((name) => ({
-          name,
-          license: "MIT",
-          noticeFile: "asset-notice.txt",
-          bundles: ["device-tools"],
-          includeInBundles: ["mobile", "web"],
-        })),
+        customNotices: [
+          {
+            name: "vendored-font",
+            version: "2.3.4",
+            license: "MIT",
+            noticeFile: "asset-notice.txt",
+            bundles: ["assets"],
+            includeInBundles: ["web"],
+          },
+        ],
       }),
     ]);
-
     const output = NodeChildProcess.execFileSync(
       process.execPath,
       [
@@ -123,12 +108,10 @@ describe("third-party license generation", () => {
         "--eval",
         `
           import { pathToFileURL } from "node:url";
-          const { generateThirdPartyLicenseManifest } = await import(
-            pathToFileURL(process.argv[1]).href + "?version=1"
-          );
+          const { generateThirdPartyLicenseManifest } = await import(pathToFileURL(process.argv[1]).href);
           const manifest = await generateThirdPartyLicenseManifest({
             configFile: process.argv[2],
-            packageManifests: [{ bundle: "mobile", path: process.argv[3] }],
+            packageManifests: [{ bundle: "web", path: process.argv[3] }],
           });
           process.stdout.write(JSON.stringify(manifest));
         `,
@@ -138,70 +121,59 @@ describe("third-party license generation", () => {
       ],
       { cwd: fixture.root, encoding: "utf8" },
     );
-    const manifest = JSON.parse(output) as {
-      entries: ReadonlyArray<{ name: string; version: string }>;
-    };
-    expect(manifest.entries).toEqual(
-      expect.arrayContaining([
+    expect(JSON.parse(output)).toMatchObject({
+      entries: expect.arrayContaining([
         expect.objectContaining({
-          name: "agent-device",
-          version: DEVICE_TOOL_VERSIONS["agent-device"],
+          name: "vendored-font",
+          version: "2.3.4",
+          noticeText: "Asset notice text",
         }),
         expect.objectContaining({
-          name: "expo-device-hub",
-          version: DEVICE_TOOL_VERSIONS["expo-device-hub"],
+          name: "demo-dependency",
+          version: "1.2.3",
+          noticeText: "Demo MIT license text",
         }),
       ]),
-    );
+    });
   });
 
-  it.each(["web", "mobile"])(
-    "uses installer pins for device tool notices in the %s manifest",
+  it.each(["web", "worker"])(
+    "uses explicitly configured custom versions in the %s manifest",
     async (bundle) => {
       const fixture = await createFixture();
       await writeJson(fixture.configFile, {
         customNotices: [
           {
-            name: "agent-device",
+            name: "unversioned-asset",
             license: "MIT",
             noticeFile: "asset-notice.txt",
-            bundles: ["device-tools"],
-            includeInBundles: ["web", "mobile"],
-          },
-          {
-            name: "expo-device-hub",
-            license: "MIT",
-            noticeFile: "asset-notice.txt",
-            version: "0.0.0",
-            bundles: ["device-tools"],
-            includeInBundles: ["web", "mobile"],
+            bundles: ["assets"],
+            includeInBundles: ["web", "worker"],
           },
           {
             name: "vendored-asset",
+            version: "1.2.3",
             license: "MIT",
             noticeFile: "asset-notice.txt",
-            version: "1.2.3",
-            bundles: ["web", "mobile"],
+            bundles: ["assets"],
+            includeInBundles: ["web", "worker"],
           },
         ],
       });
-
       const manifest = await generateThirdPartyLicenseManifest({
         configFile: fixture.configFile,
         packageManifests: [{ bundle, path: fixture.appManifest }],
       });
-
-      expect(manifest.entries.find((entry) => entry.name === "agent-device")).toMatchObject({
-        version: DEVICE_TOOL_VERSIONS["agent-device"],
-        bundles: ["device-tools"],
+      expect(manifest.entries.find((entry) => entry.name === "unversioned-asset")).toMatchObject({
+        version: null,
+        bundles: ["assets"],
+        noticeText: "Asset notice text",
       });
-      expect(manifest.entries.find((entry) => entry.name === "expo-device-hub")).toMatchObject({
-        version: DEVICE_TOOL_VERSIONS["expo-device-hub"],
-        bundles: ["device-tools"],
+      expect(manifest.entries.find((entry) => entry.name === "vendored-asset")).toMatchObject({
+        version: "1.2.3",
+        bundles: ["assets"],
+        noticeText: "Asset notice text",
       });
-      expect(manifest.entries.find((entry) => entry.name === "vendored-asset")?.version).toBe(
-        "1.2.3",
-      );
     },
   );
 

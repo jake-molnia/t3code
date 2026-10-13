@@ -823,13 +823,6 @@ async function customEntries(
   includedBundles: ReadonlySet<string>,
   allowMissingGeneratedNotices: boolean,
 ): Promise<ReadonlyArray<ThirdPartyLicenseEntry>> {
-  const deviceToolVersions: unknown = JSON.parse(
-    await NodeFSP.readFile(
-      new URL("../../apps/server/src/device/deviceToolVersions.json", import.meta.url),
-      "utf8",
-    ),
-  );
-  if (!isRecord(deviceToolVersions)) throw new Error("Device tool versions must be an object.");
   const entries = await Promise.all(
     config.customNotices
       .filter(
@@ -875,10 +868,7 @@ async function customEntries(
           name: notice.name,
           noticeText,
           sourceUrl: notice.sourceUrl ?? null,
-          version:
-            readOptionalString(deviceToolVersions, notice.name, "Device tool versions") ??
-            notice.version ??
-            null,
+          version: notice.version ?? null,
         };
       }),
   );

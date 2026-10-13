@@ -51,7 +51,7 @@ COPY --from=harnesses /opt/native/az/opt/az /opt/az
 COPY --from=harnesses /opt/native/az/usr/bin/az /usr/bin/az
 COPY --from=harnesses /opt/native/extensions /opt/azure/extensions
 COPY --from=harnesses /opt/providers.lock.json /opt/t3/providers.lock.json
-RUN ln -s /opt/opencode2/node_modules/.bin/opencode2 /usr/local/bin/opencode2 \
+RUN ln -sfn /opt/opencode2/node_modules/.bin/opencode2 /usr/local/bin/opencode2 \
     && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
     && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs
