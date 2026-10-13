@@ -44,6 +44,14 @@ export const migrate = Effect.gen(function* () {
     sources_json TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   )`;
+  yield* sql`CREATE TABLE IF NOT EXISTS agent_runtime_command_residency (
+    item_id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    identity_json TEXT NOT NULL,
+    checked_at INTEGER NOT NULL DEFAULT 0
+  )`;
+  yield* sql`CREATE INDEX IF NOT EXISTS agent_runtime_command_residency_thread
+    ON agent_runtime_command_residency(thread_id, checked_at)`;
   yield* sql`CREATE TABLE IF NOT EXISTS agent_runtime_event_cursors (
     workspace_id TEXT NOT NULL,
     incarnation TEXT NOT NULL,

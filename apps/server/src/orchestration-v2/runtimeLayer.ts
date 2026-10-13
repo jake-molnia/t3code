@@ -4,6 +4,7 @@ import { SessionPlacement } from "../execution/SessionPlacement.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as AgentRuntime from "../agentRuntime/RuntimeClient.ts";
+import * as RemoteCommandRecovery from "../execution/RemoteCommandRecovery.ts";
 import * as RemoteSessionRecovery from "../execution/RemoteSessionRecovery.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -340,7 +341,13 @@ const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.laye
       Effect.gen(function* () {
         const runtime = yield* Effect.serviceOption(AgentRuntime.RuntimeClient);
         if (Option.isNone(runtime)) return Layer.empty;
-        return RemoteSessionRecovery.layer.pipe(
+        return Layer.merge(
+          RemoteSessionRecovery.layer,
+          RemoteCommandRecovery.workerLayer.pipe(
+            Layer.provide(RemoteCommandRecovery.layer),
+            Layer.provide(ThreadCommandExecutor.layer),
+          ),
+        ).pipe(
           Layer.provide(Layer.succeed(AgentRuntime.RuntimeClient, runtime.value)),
           Layer.provide(
             Layer.mergeAll(

@@ -72,14 +72,22 @@ export type EventSinkV2Error = typeof EventSinkV2Error.Type;
 /**
  * SERVICE DEFINITION
  */
+interface ExecutionCommandGuard {
+  readonly itemId: string;
+  readonly identityJson: string;
+  readonly payloadJson: string;
+}
+
 export interface EventSinkV2Shape {
   readonly write: (input: {
+    readonly executionCommandGuard?: ExecutionCommandGuard;
     readonly executionDelivery?: ExecutionEvent;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, EventSinkV2Error>;
   readonly writeWithEffects: (input: {
+    readonly executionCommandGuard?: ExecutionCommandGuard;
     readonly executionDelivery?: ExecutionEvent;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
@@ -335,7 +343,10 @@ const layerBase: Layer.Layer<
       );
     };
 
-    const applyStoredEvents = (storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>) =>
+    const applyStoredEvents = (
+      storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>,
+      delivery?: ExecutionEvent,
+    ) =>
       Effect.gen(function* () {
         yield* Effect.forEach(
           storedEvents,
@@ -344,7 +355,7 @@ const layerBase: Layer.Layer<
               .apply(stored.event)
               .pipe(
                 Effect.andThen(
-                  ExecutionBindings.apply(stored.event).pipe(
+                  ExecutionBindings.apply(stored.event, delivery).pipe(
                     Effect.provideService(SqlClient.SqlClient, sql),
                   ),
                 ),
@@ -411,6 +422,17 @@ const layerBase: Layer.Layer<
       return yield* commitThenPublish(
         Effect.gen(function* () {
           if (yield* received(input.executionDelivery)) return [];
+          if (input.executionCommandGuard) {
+            const guard = input.executionCommandGuard;
+            const current = yield* sql`SELECT 1 FROM agent_runtime_command_residency AS residency
+              JOIN orchestration_v2_projection_turn_items AS item ON item.turn_item_id = residency.item_id
+              JOIN orchestration_v2_projection_runs AS run ON run.run_id = item.run_id
+              WHERE residency.item_id = ${guard.itemId} AND residency.identity_json = ${guard.identityJson}
+                AND item.payload_json = ${guard.payloadJson}
+                AND item.status IN ('pending', 'running', 'waiting')
+                AND run.status IN ('completed', 'failed', 'interrupted', 'cancelled')`;
+            if (current.length === 0) return [];
+          }
           const normalized = yield* normalizeEvents(
             input.guardPendingUserInputCancellations === true
               ? yield* guardUserInputCancellations(input.events)
@@ -420,7 +442,7 @@ const layerBase: Layer.Layer<
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
-          yield* applyStoredEvents(committed);
+          yield* applyStoredEvents(committed, input.executionDelivery);
           yield* acknowledge(input.executionDelivery);
           yield* effectOutbox.enqueue(input.effects);
           return committed;
@@ -481,7 +503,7 @@ const layerBase: Layer.Layer<
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
               events: normalized,
             });
-            yield* applyStoredEvents(storedEvents);
+            yield* applyStoredEvents(storedEvents, input.executionDelivery);
             yield* acknowledge(input.executionDelivery);
             yield* effectOutbox.enqueue(input.effects ?? []);
             return { committed: true as const, storedEvents };
@@ -549,7 +571,7 @@ const layerBase: Layer.Layer<
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
-          yield* applyStoredEvents(storedEvents);
+          yield* applyStoredEvents(storedEvents, input.executionDelivery);
           yield* acknowledge(input.executionDelivery);
           return { committed: true as const, storedEvents };
         }),

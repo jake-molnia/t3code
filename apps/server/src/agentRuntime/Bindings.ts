@@ -1,7 +1,13 @@
 import type { OrchestrationV2DomainEvent } from "@t3tools/contracts";
+import {
+  ExecutionIdentity,
+  type ExecutionEvent,
+} from "../../../../packages/contracts/src/execution.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+
+const encodeIdentity = Schema.encodeEffect(Schema.fromJsonString(ExecutionIdentity));
 
 export const Binding = Schema.Struct({
   threadId: Schema.String,
@@ -32,8 +38,24 @@ export const read = Effect.fn("AgentRuntimeBindings.read")(function* (threadId: 
 /** Called inside EventSink's transaction, together with thread creation and run intent. */
 export const apply = Effect.fn("AgentRuntimeBindings.apply")(function* (
   event: OrchestrationV2DomainEvent,
+  delivery?: ExecutionEvent,
 ) {
   const sql = yield* SqlClient.SqlClient;
+  if (event.type === "turn-item.updated" && event.payload.type === "command_execution") {
+    const item = event.payload;
+    if (item.status !== "pending" && item.status !== "running" && item.status !== "waiting") {
+      yield* sql`DELETE FROM agent_runtime_command_residency WHERE item_id = ${item.id}`;
+    } else if (delivery) {
+      const identity = yield* encodeIdentity(delivery.identity);
+      yield* sql`INSERT INTO agent_runtime_command_residency(item_id, thread_id, identity_json)
+        VALUES (${item.id}, ${event.threadId}, ${identity})
+        ON CONFLICT(item_id) DO UPDATE SET
+          checked_at = CASE WHEN identity_json = excluded.identity_json THEN checked_at ELSE 0 END,
+          identity_json = excluded.identity_json`;
+    }
+  }
+  if (event.type === "thread.deleted")
+    yield* sql`DELETE FROM agent_runtime_command_residency WHERE thread_id = ${event.threadId}`;
   if (event.type === "thread.created") {
     const thread = event.payload;
     if (
