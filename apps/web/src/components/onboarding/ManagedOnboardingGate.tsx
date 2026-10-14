@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useExecutionPools } from "../../hooks/useExecutionPools";
 import { useCompleteOnboarding } from "../../onboarding/firstRun";
 import { Button } from "../ui/button";
@@ -7,7 +7,6 @@ import { Button } from "../ui/button";
 /** Managed installations already have execution and providers; use normal project creation. */
 export function ManagedOnboardingGate(props: {
   environmentId: EnvironmentId;
-  children: ReactNode;
   onDone: () => void | Promise<void>;
 }) {
   const { onDone } = props;
@@ -16,9 +15,9 @@ export function ManagedOnboardingGate(props: {
   const completion = useRef<{ attempt: number; promise: Promise<void> } | null>(null);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
-  const managed = (catalog.snapshot?.pools.length ?? 0) > 0;
+  const ready = catalog.snapshot !== null;
   useEffect(() => {
-    if (!managed) return;
+    if (!ready) return;
     let active = true;
     if (completion.current?.attempt !== retry)
       completion.current = { attempt: retry, promise: complete() };
@@ -32,7 +31,7 @@ export function ManagedOnboardingGate(props: {
     return () => {
       active = false;
     };
-  }, [managed, complete, onDone, retry]);
+  }, [ready, complete, onDone, retry]);
 
   if (failed || catalog.failed) {
     return (
@@ -53,6 +52,5 @@ export function ManagedOnboardingGate(props: {
       </div>
     );
   }
-  if (!catalog.snapshot || managed) return null;
-  return props.children;
+  return null;
 }

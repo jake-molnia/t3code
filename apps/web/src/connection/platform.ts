@@ -4,33 +4,19 @@ import {
   Persistence,
 } from "@t3tools/client-runtime/platform";
 import {
-  BearerConnectionCredential,
-  BearerConnectionProfile,
-  BearerConnectionRegistration,
-  BearerConnectionTarget,
   ConnectionBlockedError,
-  type ConnectionAttemptError,
   ConnectionTransientError,
   Connectivity,
   mapRemoteEnvironmentError,
-  type PlatformConnectionRegistration,
   PrimaryConnectionRegistration,
   PrimaryConnectionTarget,
   Wakeups,
 } from "@t3tools/client-runtime/connection";
-import { bootstrapRemoteBearerSession } from "@t3tools/client-runtime/authorization";
+
 import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
 import { managedRelayAccountChanges, managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import { EnvironmentRpcRequestObserver } from "@t3tools/client-runtime/rpc";
-import {
-  AuthStandardClientScopes,
-  type DesktopBridge,
-  type DesktopEnvironmentBootstrap,
-  type DesktopSshEnvironmentTarget,
-  type EnvironmentId,
-  PRIMARY_LOCAL_ENVIRONMENT_ID,
-} from "@t3tools/contracts";
-import * as Clock from "effect/Clock";
+
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -38,10 +24,9 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { FetchHttpClient } from "effect/http";
 
 import { APP_VERSION } from "../branding";
-import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
+
 import * as PrimaryEnvironmentHttpLayer from "../environments/primary/httpLayer";
 import {
   readPrimaryEnvironmentTarget,
@@ -49,14 +34,10 @@ import {
 } from "../environments/primary/target";
 import { clearComposerDraftsEnvironment } from "../composerDraftStore";
 import { isHostedStaticApp } from "../hostedPairing";
-import { isLocalEnvironmentDisabled } from "../localEnvironment";
+
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { acknowledgeRpcRequest, trackRpcRequestSent } from "../rpc/requestLatencyState";
-import {
-  desktopLocalConnectionId,
-  readDesktopSecondaryBootstrapsResult,
-  type DesktopSecondaryBootstrapsRead,
-} from "./desktopLocal";
+
 import * as ConnectionStorage from "./storage";
 import { clientPresentationMetadata } from "./clientMetadata";
 
@@ -167,63 +148,6 @@ function clientMetadata() {
   });
 }
 
-function sshPreparationError(cause: unknown) {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  if (message.toLowerCase().includes("cancel")) {
-    return new ConnectionBlockedError({
-      reason: "authentication",
-      detail: message,
-    });
-  }
-  return new ConnectionTransientError({
-    reason: "remote-unavailable",
-    detail: `Could not prepare the SSH environment: ${message}`,
-  });
-}
-
-export const provisionDesktopSshEnvironment = Effect.fn(
-  "web.connectionPlatform.ssh.provisionDesktop",
-)(function* (
-  bridge: DesktopBridge,
-  target: DesktopSshEnvironmentTarget,
-  expectedEnvironmentId?: EnvironmentId,
-) {
-  const bootstrap = yield* Effect.tryPromise({
-    try: () =>
-      bridge.ensureSshEnvironment(target, {
-        issuePairingToken: true,
-      }),
-    catch: sshPreparationError,
-  });
-  const pairingToken = bootstrap.pairingToken;
-  if (pairingToken === null) {
-    return yield* new ConnectionBlockedError({
-      reason: "authentication",
-      detail: "The SSH environment did not issue a pairing credential.",
-    });
-  }
-  const descriptor = yield* Effect.tryPromise({
-    try: () => bridge.fetchSshEnvironmentDescriptor(bootstrap.httpBaseUrl),
-    catch: sshPreparationError,
-  });
-  if (expectedEnvironmentId !== undefined && descriptor.environmentId !== expectedEnvironmentId) {
-    return yield* new ConnectionBlockedError({
-      reason: "configuration",
-      detail: `That host reaches ${descriptor.label}, a different machine. Add it as its own environment instead.`,
-    });
-  }
-  const access = yield* Effect.tryPromise({
-    try: () => bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, pairingToken),
-    catch: sshPreparationError,
-  });
-  return {
-    environmentId: descriptor.environmentId,
-    label: descriptor.label,
-    bootstrap,
-    bearerToken: access.access_token,
-  };
-});
-
 const layerCapabilities = Layer.effectContext(
   Effect.sync(() => {
     const presentation = ClientCapabilities.ClientPresentation.of({
@@ -263,80 +187,29 @@ const layerCapabilities = Layer.effectContext(
       deviceId: Effect.succeedNone,
     });
     const primaryAuth = ClientCapabilities.PrimaryEnvironmentAuth.of({
-      bearerToken: Effect.tryPromise({
-        try: readDesktopPrimaryBearerToken,
-        catch: (cause) =>
-          new ConnectionTransientError({
-            reason: "remote-unavailable",
-            detail: `Could not load the desktop primary credential: ${String(cause)}`,
-          }),
-      }).pipe(Effect.map(Option.fromNullishOr)),
+      bearerToken: Effect.succeedNone,
     });
-    const ssh = ClientCapabilities.SshEnvironmentGateway.of({
-      provision: Effect.fn("web.connectionPlatform.ssh.provision")(
-        function* (target, expectedEnvironmentId) {
-          const bridge = window.desktopBridge;
-          if (bridge === undefined) {
-            return yield* new ConnectionBlockedError({
-              reason: "unsupported",
-              detail: "SSH environments are only available in the desktop app.",
-            });
-          }
-          return yield* provisionDesktopSshEnvironment(bridge, target, expectedEnvironmentId);
-        },
-      ),
-      prepare: Effect.fn("web.connectionPlatform.ssh.prepare")(function* (input) {
-        const bridge = window.desktopBridge;
-        if (bridge === undefined) {
-          return yield* new ConnectionBlockedError({
-            reason: "unsupported",
-            detail: "SSH environments are only available in the desktop app.",
-          });
-        }
-        const bootstrap = yield* Effect.tryPromise({
-          try: () =>
-            bridge.ensureSshEnvironment(input.target, {
-              issuePairingToken: true,
-            }),
-          catch: sshPreparationError,
-        });
-        if (bootstrap.pairingToken === null) {
-          return yield* new ConnectionBlockedError({
-            reason: "authentication",
-            detail: "The SSH environment did not issue a pairing credential.",
-          });
-        }
-        const access = yield* Effect.tryPromise({
-          try: () =>
-            bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, bootstrap.pairingToken!),
-          catch: sshPreparationError,
-        });
-        return {
-          bootstrap,
-          bearerToken: access.access_token,
-        };
-      }),
-      disconnect: Effect.fn("web.connectionPlatform.ssh.disconnect")(function* (target) {
-        const bridge = window.desktopBridge;
-        if (bridge === undefined) {
-          return;
-        }
-        yield* Effect.tryPromise({
-          try: () => bridge.disconnectSshEnvironment(target),
-          catch: (cause) =>
-            new ConnectionTransientError({
-              reason: "remote-unavailable",
-              detail: `Could not disconnect the SSH environment: ${String(cause)}`,
-            }),
-        });
-      }),
-    });
-
     return Context.make(ClientCapabilities.CloudSession, cloudSession).pipe(
       Context.add(ClientCapabilities.PrimaryEnvironmentAuth, primaryAuth),
       Context.add(ClientCapabilities.RelayDeviceIdentity, identity),
       Context.add(ClientCapabilities.ClientPresentation, presentation),
-      Context.add(ClientCapabilities.SshEnvironmentGateway, ssh),
+      Context.add(ClientCapabilities.SshEnvironmentGateway, {
+        provision: () =>
+          Effect.fail(
+            new ConnectionBlockedError({
+              reason: "unsupported",
+              detail: "Execution is managed by sandbox pools.",
+            }),
+          ),
+        prepare: () =>
+          Effect.fail(
+            new ConnectionBlockedError({
+              reason: "unsupported",
+              detail: "Execution is managed by sandbox pools.",
+            }),
+          ),
+        disconnect: () => Effect.void,
+      }),
     );
   }),
 );
@@ -360,384 +233,22 @@ const loadPrimaryConnectionRegistration = Effect.fn(
   });
 });
 
-// A desktop-local secondary backend (e.g. a parallel WSL backend) lives on its
-// own loopback origin, so — unlike the same-origin primary — it authenticates
-// with a bearer token minted from the bootstrap credential the desktop issues.
-const loadSecondaryConnectionRegistration = Effect.fn(
-  "web.connectionPlatform.loadSecondaryConnectionRegistration",
-)(function* (entry: DesktopEnvironmentBootstrap) {
-  if (
-    entry.httpBaseUrl === null ||
-    entry.wsBaseUrl === null ||
-    entry.bootstrapToken === undefined
-  ) {
-    return yield* new ConnectionTransientError({
-      reason: "endpoint-unavailable",
-      detail: `Desktop-local backend ${entry.id} is not ready yet.`,
-    });
-  }
-  const httpBaseUrl = entry.httpBaseUrl;
-  const wsBaseUrl = entry.wsBaseUrl;
-  const descriptor = yield* fetchRemoteEnvironmentDescriptor({ httpBaseUrl }).pipe(
-    Effect.mapError(mapRemoteEnvironmentError),
-  );
-  const issuedAtEpochMs = yield* Clock.currentTimeMillis;
-  // The desktop seed grant is administrative so the primary window can manage
-  // access; a secondary backend session only needs to operate its environment.
-  const access = yield* bootstrapRemoteBearerSession({
-    httpBaseUrl,
-    credential: entry.bootstrapToken,
-    scopes: AuthStandardClientScopes,
-    clientMetadata: clientMetadata(),
-  }).pipe(Effect.mapError(mapRemoteEnvironmentError));
-  // Keep the desktop pool's stable backend id in the connection id. The
-  // descriptor environment id still scopes projects and RPC state, while the
-  // backend id lets desktop-only operations (notably the WSL folder picker)
-  // route back to the instance that owns the environment.
-  const connectionId = desktopLocalConnectionId(entry.id);
-  // Prefer the desktop's bootstrap label (it identifies the backend and distro,
-  // e.g. "WSL: Ubuntu") over the generic descriptor label, so consumers can show
-  // a meaningful name without recovering it from the bootstrap list later.
-  const label = entry.label || descriptor.label;
-  return {
-    registration: new BearerConnectionRegistration({
-      target: new BearerConnectionTarget({
-        environmentId: descriptor.environmentId,
-        label,
-        connectionId,
-      }),
-      profile: new BearerConnectionProfile({
-        connectionId,
-        environmentId: descriptor.environmentId,
-        label,
-        httpBaseUrl,
-        wsBaseUrl,
-      }),
-      credential: new BearerConnectionCredential({ token: access.access_token }),
-    }),
-    expiresAtEpochMs: secondaryBearerExpiresAtEpochMs(issuedAtEpochMs, access.expires_in),
-    refreshAtEpochMs: secondaryBearerRefreshAtEpochMs(issuedAtEpochMs, access.expires_in),
-  };
-});
-
-// Poll cadence for the desktop bootstrap topology. There is no change event on
-// the bridge, so the renderer polls; successful registrations are cached by a
-// signature of their endpoint until bearer credentials approach expiry.
-const PLATFORM_POLL_INTERVAL = "3 seconds";
-const SECONDARY_BEARER_REFRESH_SKEW_MS = 5_000;
-
-export function secondaryBearerExpiresAtEpochMs(
-  issuedAtEpochMs: number,
-  expiresInSeconds: number,
-): number {
-  return issuedAtEpochMs + Math.max(0, expiresInSeconds * 1_000);
-}
-
-export function secondaryBearerRefreshAtEpochMs(
-  issuedAtEpochMs: number,
-  expiresInSeconds: number,
-): number {
-  return Math.max(
-    issuedAtEpochMs,
-    secondaryBearerExpiresAtEpochMs(issuedAtEpochMs, expiresInSeconds) -
-      SECONDARY_BEARER_REFRESH_SKEW_MS,
-  );
-}
-
-interface CachedPlatformRegistration {
-  readonly signature: string;
-  readonly registration: PlatformConnectionRegistration;
-  readonly expiresAtEpochMs?: number;
-  readonly refreshAtEpochMs?: number;
-  /** The bootstrap token a desktop-local bearer was exchanged for. */
-  readonly bootstrapToken?: string;
-}
-
-export type PrimaryEnvironmentTargetRead =
-  | {
-      readonly _tag: "Success";
-      readonly target: PrimaryEnvironmentTarget | null;
-    }
-  | {
-      readonly _tag: "Failure";
-      readonly cause: unknown;
-    };
-
-export function readPrimaryEnvironmentTargetResult(
-  readTarget: () => PrimaryEnvironmentTarget | null = readPrimaryEnvironmentTarget,
-): PrimaryEnvironmentTargetRead {
-  try {
-    return { _tag: "Success", target: readTarget() };
-  } catch (cause) {
-    return { _tag: "Failure", cause };
-  }
-}
-
-export function primaryRegistrationToRetainAfterTopologyRead(
-  previous: ReadonlyMap<string, CachedPlatformRegistration>,
-  topologyRead: PrimaryEnvironmentTargetRead,
-): CachedPlatformRegistration | undefined {
-  return topologyRead._tag === "Failure" ? previous.get(PRIMARY_LOCAL_ENVIRONMENT_ID) : undefined;
-}
-
-export function canReuseCachedPlatformRegistration(
-  cached: CachedPlatformRegistration,
-  signature: string,
-  nowEpochMs: number,
-): boolean {
-  return (
-    cached.signature === signature &&
-    (cached.refreshAtEpochMs === undefined || nowEpochMs < cached.refreshAtEpochMs)
-  );
-}
-
-export function canRetainCachedPlatformRegistrationAfterRefreshFailure(
-  cached: CachedPlatformRegistration,
-  signature: string,
-  nowEpochMs: number,
-): boolean {
-  return (
-    cached.signature === signature &&
-    cached.expiresAtEpochMs !== undefined &&
-    nowEpochMs < cached.expiresAtEpochMs
-  );
-}
-
-const REJECTED_BOOTSTRAP_RETRY_INITIAL_MS = 60_000;
-const REJECTED_BOOTSTRAP_RETRY_MAX_MS = 30 * 60_000;
-
-/** A bootstrap token a backend rejected, and when the poll may try it again. */
-export interface RejectedSecondaryBootstrap {
-  readonly signature: string;
-  readonly retryAtEpochMs: number;
-  readonly delayMs: number;
-}
-
-/**
- * A backend that rejected a bootstrap token will usually keep rejecting it, so
- * the poll backs off on that exact signature instead of re-presenting a dead
- * credential every few seconds. It still retries on a capped backoff: a
- * backend that restarts on the same port seeds a fresh grant for the same
- * token, and nothing in the topology says it restarted. A new token or
- * endpoint retries at once.
- */
-export function isRejectedSecondaryBootstrap(
-  rejected: RejectedSecondaryBootstrap | undefined,
-  signature: string,
-  nowEpochMs: number,
-): rejected is RejectedSecondaryBootstrap {
-  return (
-    rejected !== undefined &&
-    rejected.signature === signature &&
-    nowEpochMs < rejected.retryAtEpochMs
-  );
-}
-
-export function nextRejectedSecondaryBootstrap(
-  previous: RejectedSecondaryBootstrap | undefined,
-  signature: string,
-  nowEpochMs: number,
-): RejectedSecondaryBootstrap {
-  const delayMs =
-    previous?.signature === signature
-      ? Math.min(previous.delayMs * 2, REJECTED_BOOTSTRAP_RETRY_MAX_MS)
-      : REJECTED_BOOTSTRAP_RETRY_INITIAL_MS;
-  return { signature, retryAtEpochMs: nowEpochMs + delayMs, delayMs };
-}
-
-export function isRejectedBootstrapCredentialError(error: ConnectionAttemptError): boolean {
-  return error._tag === "ConnectionBlockedError" && error.reason === "authentication";
-}
-
-export function secondaryRegistrationsToRetainAfterTopologyRead(
-  previous: ReadonlyMap<string, CachedPlatformRegistration>,
-  topologyRead: DesktopSecondaryBootstrapsRead,
-  nowEpochMs: number,
-): ReadonlyMap<string, CachedPlatformRegistration> {
-  if (topologyRead._tag === "Success") {
-    return new Map();
-  }
-  return new Map(
-    [...previous].filter(
-      ([, cached]) => cached.expiresAtEpochMs !== undefined && nowEpochMs < cached.expiresAtEpochMs,
-    ),
-  );
-}
-
+/** Retry central discovery without reintroducing saved machine registrations. */
 const layerPlatformConnectionSource = Layer.effect(
   PlatformConnectionSource.PlatformConnectionSource,
   Effect.gen(function* () {
-    if (isHostedStaticApp() || isLocalEnvironmentDisabled()) {
-      return PlatformConnectionSource.PlatformConnectionSource.of({
-        registrations: Stream.empty,
-      });
-    }
-    const cacheRef = yield* Ref.make(new Map<string, CachedPlatformRegistration>());
-    const rejectedRef = yield* Ref.make(new Map<string, RejectedSecondaryBootstrap>());
-
-    // Resolve the full set of platform-managed environments the host currently
-    // reports: the primary (same-origin cookie auth) plus any desktop-local
-    // backends running alongside it (bearer auth). Reused registrations come
-    // from the cache; a failed entry is skipped and retried on the next poll.
-    const buildPlatformRegistrations = Effect.gen(function* () {
-      const previous = yield* Ref.get(cacheRef);
-      const nowEpochMs = yield* Clock.currentTimeMillis;
-      const next = new Map<string, CachedPlatformRegistration>();
-      const registrations: Array<PlatformConnectionRegistration> = [];
-
-      const primaryTopologyRead = readPrimaryEnvironmentTargetResult();
-      const retainedPrimary = primaryRegistrationToRetainAfterTopologyRead(
-        previous,
-        primaryTopologyRead,
-      );
-      if (retainedPrimary !== undefined) {
-        next.set(PRIMARY_LOCAL_ENVIRONMENT_ID, retainedPrimary);
-        registrations.push(retainedPrimary.registration);
-      }
-
-      if (primaryTopologyRead._tag === "Failure") {
-        yield* Effect.logWarning("Could not read the primary environment topology.", {
-          cause: primaryTopologyRead.cause,
-        });
-      } else if (primaryTopologyRead.target !== null) {
-        const primaryTarget = primaryTopologyRead.target;
-        const signature = `primary|${primaryTarget.target.httpBaseUrl}|${primaryTarget.target.wsBaseUrl}`;
-        const cached = previous.get(PRIMARY_LOCAL_ENVIRONMENT_ID);
-        if (
-          cached !== undefined &&
-          canReuseCachedPlatformRegistration(cached, signature, nowEpochMs)
-        ) {
-          next.set(PRIMARY_LOCAL_ENVIRONMENT_ID, cached);
-          registrations.push(cached.registration);
-        } else {
-          const built = yield* loadPrimaryConnectionRegistration(primaryTarget).pipe(
-            Effect.tapError((error) =>
-              Effect.logWarning("Could not discover the primary environment.", { error }),
-            ),
-            Effect.option,
-          );
-          if (Option.isSome(built)) {
-            const cacheEntry = { signature, registration: built.value };
-            next.set(PRIMARY_LOCAL_ENVIRONMENT_ID, cacheEntry);
-            registrations.push(built.value);
-          }
-        }
-      }
-
-      const topologyRead = readDesktopSecondaryBootstrapsResult();
-      for (const [id, cached] of secondaryRegistrationsToRetainAfterTopologyRead(
-        previous,
-        topologyRead,
-        nowEpochMs,
-      )) {
-        next.set(id, cached);
-        registrations.push(cached.registration);
-      }
-
-      if (topologyRead._tag === "Failure") {
-        yield* Effect.logWarning("Could not read the desktop-local backend topology.", {
-          cause: topologyRead.cause,
-        });
-      } else {
-        const rejected = yield* Ref.get(rejectedRef);
-        const nextRejected = new Map<string, RejectedSecondaryBootstrap>();
-        for (const bootstrap of topologyRead.bootstraps) {
-          // The cached bearer belongs to the endpoint, not to the bootstrap
-          // token it was exchanged for: a new token must not drop a live
-          // session (its removal also clears the environment's drafts). The
-          // token only decides whether a rejected exchange is retried.
-          const endpointSignature = `${bootstrap.httpBaseUrl}|${bootstrap.wsBaseUrl}`;
-          const signature = `${endpointSignature}|${bootstrap.bootstrapToken ?? ""}`;
-          const cached = previous.get(bootstrap.id);
-          // A new token from the desktop means something changed (rotation, a
-          // restarted backend): exchange it rather than reusing a bearer that
-          // may be dead. The old bearer stays registered if that exchange fails.
-          if (
-            cached !== undefined &&
-            cached.bootstrapToken === bootstrap.bootstrapToken &&
-            canReuseCachedPlatformRegistration(cached, endpointSignature, nowEpochMs)
-          ) {
-            next.set(bootstrap.id, cached);
-            registrations.push(cached.registration);
-            continue;
-          }
-          const previouslyRejected = rejected.get(bootstrap.id);
-          if (isRejectedSecondaryBootstrap(previouslyRejected, signature, nowEpochMs)) {
-            nextRejected.set(bootstrap.id, previouslyRejected);
-            // The bearer minted before the token died is still good until it expires.
-            if (
-              cached !== undefined &&
-              canRetainCachedPlatformRegistrationAfterRefreshFailure(
-                cached,
-                endpointSignature,
-                nowEpochMs,
-              )
-            ) {
-              next.set(bootstrap.id, cached);
-              registrations.push(cached.registration);
-            }
-            continue;
-          }
-          const built = yield* loadSecondaryConnectionRegistration(bootstrap).pipe(
-            Effect.tapError((error) =>
-              Effect.logWarning("Could not connect a desktop-local backend.", {
-                id: bootstrap.id,
-                error,
-              }),
-            ),
-            Effect.tapError((error) =>
-              isRejectedBootstrapCredentialError(error)
-                ? // Back off from when the rejection arrived; the exchanges in
-                  // this poll can take longer than the first backoff step.
-                  Clock.currentTimeMillis.pipe(
-                    Effect.map((rejectedAtEpochMs) =>
-                      nextRejected.set(
-                        bootstrap.id,
-                        nextRejectedSecondaryBootstrap(
-                          previouslyRejected,
-                          signature,
-                          rejectedAtEpochMs,
-                        ),
-                      ),
-                    ),
-                  )
-                : Effect.void,
-            ),
-            Effect.option,
-          );
-          if (Option.isSome(built)) {
-            const cacheEntry = {
-              signature: endpointSignature,
-              ...(bootstrap.bootstrapToken === undefined
-                ? {}
-                : { bootstrapToken: bootstrap.bootstrapToken }),
-              ...built.value,
-            };
-            next.set(bootstrap.id, cacheEntry);
-            registrations.push(built.value.registration);
-          } else if (
-            cached !== undefined &&
-            canRetainCachedPlatformRegistrationAfterRefreshFailure(
-              cached,
-              endpointSignature,
-              nowEpochMs,
-            )
-          ) {
-            next.set(bootstrap.id, cached);
-            registrations.push(cached.registration);
-          }
-        }
-        yield* Ref.set(rejectedRef, nextRejected);
-      }
-
-      yield* Ref.set(cacheRef, next);
-      return registrations as ReadonlyArray<PlatformConnectionRegistration>;
-    }).pipe(Effect.provide(FetchHttpClient.layer));
-
+    const cached = yield* Ref.make<ReadonlyArray<PrimaryConnectionRegistration>>([]);
+    const discover = Effect.gen(function* () {
+      const previous = yield* Ref.get(cached);
+      if (previous.length > 0) return previous;
+      const target = readPrimaryEnvironmentTarget();
+      if (target === null) return yield* Ref.get(cached);
+      const registrations = [yield* loadPrimaryConnectionRegistration(target)];
+      yield* Ref.set(cached, registrations);
+      return registrations;
+    }).pipe(Effect.catch(() => Ref.get(cached)));
     return PlatformConnectionSource.PlatformConnectionSource.of({
-      registrations: Stream.tick(PLATFORM_POLL_INTERVAL).pipe(
-        Stream.mapEffect(() => buildPlatformRegistrations),
-      ),
+      registrations: Stream.tick("3 seconds").pipe(Stream.mapEffect(() => discover)),
     });
   }),
 );
