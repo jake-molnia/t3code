@@ -14,9 +14,134 @@ import { ProviderInstanceId } from "@t3tools/contracts";
 import * as Runtime from "../agentRuntime/RuntimeClient.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeRemoteDrivers } from "./RemoteProviderDrivers.ts";
+import { makeProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
+import { harnessDefaults } from "./HarnessDefaults.ts";
 
 const decodePollingRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ method: Schema.String })),
+);
+
+it.live.each([
+  { name: "omitted Codex launch arguments", driver: "codex", config: { setupMode: "existing" } },
+  {
+    name: "explicit empty Codex launch arguments",
+    driver: "codex",
+    config: { setupMode: "existing", launchArgs: "" },
+  },
+  {
+    name: "explicit Codex launch arguments",
+    driver: "codex",
+    config: { setupMode: "existing", launchArgs: "-c model_provider=native" },
+  },
+  { name: "absent Codex config", driver: "codex", config: undefined },
+  {
+    name: "native OpenCode overrides",
+    driver: "opencode",
+    config: { binaryPath: "/native/opencode", serverUrl: "" },
+  },
+  {
+    name: "native Antigravity credentials",
+    driver: "antigravity",
+    config: {
+      binaryPath: "/native/agy_acp_server.par",
+      authMethod: "gemini-api-key",
+      apiKey: "fixture-key",
+    },
+  },
+  { name: "native Cursor binary", driver: "cursor", config: { binaryPath: "/native/cursor" } },
+  { name: "native Grok binary", driver: "grok", config: { binaryPath: "/native/grok" } },
+  {
+    name: "native Pi launch arguments",
+    driver: "pi",
+    config: { binaryPath: "/native/pi", launchArgs: "" },
+  },
+] as const)("preserves $name through registry, transport, and worker defaults", (testCase) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("transport-config-test");
+      const driverKind = C.ProviderDriverKind.make(testCase.driver);
+      const operatorConfig = {
+        ...(testCase.driver === "codex"
+          ? { setupMode: "existing", launchArgs: "-c model_provider=aperture" }
+          : { binaryPath: "/operator/provider" }),
+        ...(testCase.driver === "opencode" ? { serverUrl: "http://operator.invalid" } : {}),
+        ...(testCase.driver === "pi" ? { launchArgs: "--operator" } : {}),
+      };
+      const apply = harnessDefaults(
+        JSON.stringify({ [testCase.driver]: { config: operatorConfig } }),
+      );
+      const received: C.ProviderInstanceConfig[] = [];
+      const configured: C.ProviderInstanceConfig[] = [];
+      const requestSchema = Schema.fromJsonString(
+        Schema.Struct({ method: Schema.String, input: Schema.Unknown }),
+      );
+      const capabilities = yield* Schema.encodeEffect(
+        Schema.toCodecJson(C.OrchestrationV2ProviderCapabilities),
+      )(CodexProviderCapabilitiesV2);
+      const client = createExecutionClient({
+        identity: {
+          workspaceId: "utility",
+          allocationId: "allocation",
+          podUid: "pod",
+          generation: 1,
+          incarnation: "one",
+          protocolVersion: 1,
+        },
+        endpoint: "http://worker.test",
+        token: "fake-token",
+        fetch: async (_url, init) => {
+          const request = Schema.decodeUnknownSync(requestSchema)(init?.body);
+          if (request.method === "configureProvider") {
+            const payload = Schema.decodeUnknownSync(Schema.toCodecJson(ConfigureProvider))(
+              request.input,
+            );
+            received.push(payload.config);
+            configured.push(apply(payload.config));
+            return Response.json({ ok: true, value: null });
+          }
+          if (request.method === "getCapabilities")
+            return Response.json({ ok: true, value: capabilities });
+          throw new Error(`Unexpected request: ${request.method}`);
+        },
+      });
+      yield* Effect.gen(function* () {
+        const drivers = yield* makeRemoteDrivers;
+        const { registry } = yield* makeProviderInstanceRegistry({
+          drivers,
+          configMap: {
+            [instanceId]: {
+              driver: driverKind,
+              enabled: true,
+              ...(testCase.config === undefined ? {} : { config: testCase.config }),
+            },
+          },
+        });
+        const instance = yield* registry.getInstance(instanceId);
+        if (!instance) return yield* Effect.die("Configured instance was not materialized");
+        yield* instance.orchestrationAdapter.getCapabilities();
+        expect(received).toHaveLength(1);
+        expect(received[0]?.config).toEqual(testCase.config ?? {});
+        expect(configured[0]?.config).toEqual({ ...operatorConfig, ...testCase.config });
+        const driver = drivers.find((candidate) => candidate.driverKind === driverKind);
+        if (!driver) return yield* Effect.die("Configured driver was not registered");
+        const native = yield* Schema.decodeUnknownEffect(driver.configSchema)(
+          configured[0]?.config,
+        );
+        expect(native).toMatchObject({ ...operatorConfig, ...testCase.config });
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            McpProviderSessions.layer,
+            Settings.layerTest(),
+            Layer.mock(Runtime.RuntimeClient)({
+              enabled: true,
+              forUtility: () => Effect.succeed(client),
+            }),
+          ),
+        ),
+      );
+    }),
+  ),
 );
 
 it.live.each(["codex", "antigravity"])(
@@ -363,6 +488,7 @@ it.live.each([
   "pending-live",
   "pending-replaced",
   "pending-status",
+  "pending-nested-status",
   "unauthorized",
   "profile-error",
   "identity-mismatch",
@@ -436,7 +562,10 @@ it.live.each([
         expect(acquisitions).toBe(0);
       } else {
         expect(calls.at(-1)).toBe(
-          state === "live" || state === "pending-live" || state === "pending-status"
+          state === "live" ||
+            state === "pending-live" ||
+            state === "pending-status" ||
+            state === "pending-nested-status"
             ? "attachSession"
             : "openSession",
         );
@@ -460,18 +589,26 @@ it.live.each([
                     new Runtime.RuntimeClientError({
                       operation: "observe-thread",
                       cause:
-                        state === "pending-status"
-                          ? new Runtime.WorkerNotReady({})
-                          : new Runtime.RuntimeClientError({
-                              operation: "request",
-                              httpStatus:
-                                state === "unauthorized"
-                                  ? 401
-                                  : state === "profile-error"
-                                    ? 409
-                                    : 503,
-                              cause: "controller rejected observation",
-                            }),
+                        state === "pending-nested-status"
+                          ? new Runtime.RuntimeClientError({
+                              operation: "observe",
+                              cause: new Runtime.RuntimeClientError({
+                                operation: "observe",
+                                cause: new Runtime.WorkerNotReady({}),
+                              }),
+                            })
+                          : state === "pending-status"
+                            ? new Runtime.WorkerNotReady({})
+                            : new Runtime.RuntimeClientError({
+                                operation: "request",
+                                httpStatus:
+                                  state === "unauthorized"
+                                    ? 401
+                                    : state === "profile-error"
+                                      ? 409
+                                      : 503,
+                                cause: "controller rejected observation",
+                              }),
                     }),
                   )
                 : Effect.succeed(

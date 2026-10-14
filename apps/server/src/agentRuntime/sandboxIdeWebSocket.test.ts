@@ -22,7 +22,11 @@ it.effect(
   "bridges browser WebSocket frames through a prefixed controller endpoint and fences identity changes",
   () =>
     Effect.gen(function* () {
-      const upstream = NodeHttp.createServer();
+      const upstream = NodeHttp.createServer((request, response) => {
+        if (request.url !== "/healthz") return response.writeHead(404).end();
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ status: "alive" }));
+      });
       const sockets = new NodeSocket.NodeWS.WebSocketServer({ server: upstream });
       sockets.on("connection", (socket) =>
         socket.on("message", (message, binary) => socket.send(message, { binary })),

@@ -1,6 +1,8 @@
 import * as Deferred from "effect/Deferred";
 import { sameIdentity } from "../execution/ExecutionWorker.ts";
 import * as AgentRuntime from "../agentRuntime/RuntimeClient.ts";
+import { trackRemoteSessionSetup } from "../execution/RemoteSessionSetup.ts";
+import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import {
   closeRemoteProviderSession,
   abortRemoteProviderSessionOpen,
@@ -416,6 +418,7 @@ export const layerWithOptions = (
       );
       const layerScope = yield* Effect.scope;
       const agentRuntime = yield* Effect.serviceOption(AgentRuntime.RuntimeClient);
+      const setupTracker = yield* Effect.serviceOption(WorktreeSetupTracker.WorktreeSetupTracker);
       const remoteExecution = Option.isSome(agentRuntime);
       // Ctrl+C, or a stop that signals the whole process group, reaches the
       // provider CLIs with the server. They report their own background work
@@ -2155,7 +2158,28 @@ export const layerWithOptions = (
                 existing.ownerThreadId === input.threadId &&
                 Option.isSome(agentRuntime)
               ) {
-                const observation = yield* agentRuntime.value.observeThread(input.threadId).pipe(
+                const runtime = agentRuntime.value;
+                const driver = existing.runtime.driver;
+                const observation = yield* runtime.observeThread(input.threadId).pipe(
+                  Effect.catch((error) => {
+                    if (!AgentRuntime.isWorkerObservationPending(error)) return Effect.fail(error);
+                    const acquire = runtime.forThread(input.threadId, driver);
+                    return (
+                      Option.isSome(setupTracker)
+                        ? trackRemoteSessionSetup({
+                            tracker: setupTracker.value,
+                            threadId: input.threadId,
+                            acquire,
+                            open: Effect.succeed,
+                          })
+                        : acquire
+                    ).pipe(
+                      Effect.map((client): AgentRuntime.RuntimeObservation => ({
+                        kind: "running",
+                        client,
+                      })),
+                    );
+                  }),
                   Effect.mapError(
                     (cause) =>
                       new ProviderSessionOpenError({
@@ -2165,25 +2189,26 @@ export const layerWithOptions = (
                       }),
                   ),
                 );
-                const residency = yield* agentRuntime.value
-                  .sessionResidency(input.providerSessionId)
-                  .pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new ProviderSessionOpenError({
-                          instanceId: input.modelSelection.instanceId,
-                          providerSessionId: input.providerSessionId,
-                          cause,
-                        }),
-                    ),
-                  );
+                const residency = yield* runtime.sessionResidency(input.providerSessionId).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderSessionOpenError({
+                        instanceId: input.modelSelection.instanceId,
+                        providerSessionId: input.providerSessionId,
+                        cause,
+                      }),
+                  ),
+                );
+                // The event pump can release this entry while acquisition is waiting.
+                existing = (yield* Ref.get(sessions)).get(key);
                 if (
-                  observation.kind === "stopped" ||
-                  (observation.kind === "running" &&
-                    residency !== null &&
-                    !sameIdentity(residency, observation.client.identity))
+                  existing !== undefined &&
+                  (observation.kind === "stopped" ||
+                    (observation.kind === "running" &&
+                      residency !== null &&
+                      !sameIdentity(residency, observation.client.identity)))
                 ) {
-                  // A replaced worker cannot receive a close. Retire its central scope before resuming native history on the new worker.
+                  // A replaced worker cannot receive a close. Retire its central scope before restoring native history.
                   forgetRemoteProviderSession(input.providerSessionId);
                   yield* releaseEntry({
                     providerSessionId: input.providerSessionId,

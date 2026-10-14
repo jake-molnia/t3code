@@ -1,3 +1,4 @@
+import * as PreviewRecording from "./PreviewRecording.ts";
 import { ExecutionTransportError } from "../execution/ExecutionClient.ts";
 import * as Scope from "effect/Scope";
 import * as FileSystem from "effect/FileSystem";
@@ -27,6 +28,8 @@ import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as P from "./worker/PreviewProtocol.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
 
+const isPreviewAutomationError = Schema.is(C.PreviewAutomationError);
+
 class RemotePreview extends Context.Service<
   RemotePreview,
   {
@@ -46,6 +49,9 @@ const layerCore = Layer.effect(
     const path = yield* Path.Path;
     const config = yield* ServerConfig.ServerConfig;
     const scope = yield* Effect.scope;
+    const recordingServices = yield* Effect.context<
+      Crypto.Crypto | FileSystem.FileSystem | Path.Path | ServerConfig.ServerConfig
+    >();
     const epoch = yield* crypto.randomUUIDv4;
     let revision = 0;
     const events = yield* PubSub.unbounded<C.PreviewEvent>();
@@ -132,8 +138,8 @@ const layerCore = Layer.effect(
                     revision: revision + 1,
                   });
               }
-              const batch = yield* Effect.tryPromise(() =>
-                current.client.events(cursor, undefined, `preview:${threadId}`),
+              const batch = yield* Effect.tryPromise((signal) =>
+                current.client.events(cursor, signal, `preview:${threadId}`),
               );
               for (const envelope of batch) {
                 if (envelope.identity.incarnation === incarnation) {
@@ -153,15 +159,17 @@ const layerCore = Layer.effect(
               return Array.from(sessions.values()).some((session) => session.threadId === threadId);
             }).pipe(
               Effect.catchCause((cause) =>
-                Effect.gen(function* () {
-                  if (!disconnected)
-                    yield* Effect.logWarning("Remote preview observation disconnected", {
-                      threadId,
-                      cause,
-                    });
-                  disconnected = true;
-                  return true;
-                }),
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.gen(function* () {
+                      if (!disconnected)
+                        yield* Effect.logWarning("Remote preview observation disconnected", {
+                          threadId,
+                          cause,
+                        });
+                      disconnected = true;
+                      return true;
+                    }),
               ),
             );
             if (!keepWatching) return;
@@ -271,7 +279,8 @@ const layerCore = Layer.effect(
             let afterSequence = 0;
             while (true) {
               const batch = yield* Effect.tryPromise({
-                try: () => client.transient("preview.viewerPoll", { ...opened, afterSequence }),
+                try: (signal) =>
+                  client.transient("preview.viewerPoll", { ...opened, afterSequence }, signal),
                 catch: (cause) =>
                   cause instanceof ExecutionTransportError
                     ? cause
@@ -422,19 +431,51 @@ const layerCore = Layer.effect(
                   const outcome = yield* Effect.tryPromise(() =>
                     client.call("preview.automation", { request: event.request }),
                   ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(P.AutomationOutcome)));
+                  const retained =
+                    outcome.ok && event.request.operation === "recordingStop"
+                      ? {
+                          ...outcome,
+                          result: yield* PreviewRecording.retain(
+                            client,
+                            event.request.threadId,
+                            outcome.result,
+                          ).pipe(Effect.provide(recordingServices)),
+                        }
+                      : outcome;
                   yield* broker.respond({
                     clientId: C.SERVER_BROWSER_AUTOMATION_CLIENT_ID,
                     connectionId: event.connectionId,
                     requestId: event.request.requestId,
-                    ...outcome,
+                    ...retained,
                   });
                 }).pipe(
                   Effect.catchCause((cause) =>
-                    Effect.logWarning("Remote preview automation failed", { cause }),
+                    Cause.hasInterruptsOnly(cause)
+                      ? Effect.failCause(cause)
+                      : Effect.logWarning("Remote preview automation failed", { cause }).pipe(
+                          Effect.andThen(
+                            broker.respond({
+                              clientId: C.SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+                              connectionId: event.connectionId,
+                              requestId: event.request.requestId,
+                              ok: false,
+                              error: {
+                                _tag: "PreviewAutomationExecutionError",
+                                message: "Sandbox browser operation failed.",
+                              },
+                            }),
+                          ),
+                        ),
                   ),
                   Effect.forkScoped,
                   Effect.asVoid,
                 ),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (bridges.get(client.identity.workspaceId)?.broker === broker)
+                bridges.delete(client.identity.workspaceId);
+            }),
           ),
           Effect.provideService(Scope.Scope, scope),
           Effect.forkIn(scope),
@@ -460,14 +501,15 @@ const layerCore = Layer.effect(
           yield* watch(request.scope.thread.threadId);
           return value;
         }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new C.PreviewAutomationNoAvailableHostError({
-                operation: request.operation,
-                environmentId: request.scope.environmentId,
-                ...request.scope.thread,
-                cause,
-              }),
+          Effect.mapError((cause) =>
+            isPreviewAutomationError(cause)
+              ? cause
+              : new C.PreviewAutomationNoAvailableHostError({
+                  operation: request.operation,
+                  environmentId: request.scope.environmentId,
+                  ...request.scope.thread,
+                  cause,
+                }),
           ),
         ),
     });

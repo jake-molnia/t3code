@@ -23,9 +23,15 @@ afterEach(async () => {
 });
 async function fixture(
   acquireLease: () => Promise<(() => void) | undefined> = async () => () => {},
+  health: (response: NodeHttp.ServerResponse) => void = (response) =>
+    response.end(JSON.stringify({ status: "alive" })),
 ) {
   const seen: Array<NodeHttp.IncomingHttpHeaders> = [];
   const server = NodeHttp.createServer((request, response) => {
+    if (request.url === "/healthz") {
+      health(response);
+      return;
+    }
     seen.push(request.headers);
     if (request.url === "/redirect") {
       response.writeHead(302, { location: "/login" }).end();
@@ -126,6 +132,57 @@ it("streams authenticated WebSocket frames through the worker", async () => {
   } finally {
     socket.terminate();
   }
+});
+
+it("holds IDE writes until health is ready and forwards each body once", async () => {
+  const probed = Promise.withResolvers<NodeHttp.ServerResponse>();
+  let leases = 0;
+  const { url, headers, seen } = await fixture(
+    async () => {
+      leases++;
+      return () => leases--;
+    },
+    (response) => probed.resolve(response),
+  );
+  const result = fetch(url, { method: "POST", headers, body: "edit during startup" });
+  const probe = await probed.promise;
+  expect(seen).toHaveLength(0);
+  expect(leases).toBe(1);
+  probe.end(JSON.stringify({ status: "alive" }));
+  expect(await (await result).text()).toBe("edit during startup");
+  expect(seen).toHaveLength(1);
+});
+
+it("cancels pending IDE readiness and releases its lease when the browser disconnects", async () => {
+  const probed = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+  const probeClosed = Promise.withResolvers<void>();
+  const { url, headers, seen } = await fixture(
+    async () => () => released.resolve(),
+    (response) => {
+      response.once("close", () => probeClosed.resolve());
+      probed.resolve();
+    },
+  );
+  const abort = new AbortController();
+  const result = fetch(url, { headers, signal: abort.signal });
+  const rejected = expect(result).rejects.toThrow();
+  await probed.promise;
+  abort.abort();
+  await rejected;
+  await Promise.all([released.promise, probeClosed.promise]);
+  expect(seen).toHaveLength(0);
+});
+
+it("does not forward IDE traffic or retry when its health endpoint rejects access", async () => {
+  let probes = 0;
+  const { url, headers, seen } = await fixture(undefined, (response) => {
+    probes++;
+    response.writeHead(401).end();
+  });
+  expect((await fetch(url, { headers })).status).toBe(502);
+  expect(probes).toBe(1);
+  expect(seen).toHaveLength(0);
 });
 
 it("rejects new IDE traffic after quiescence and releases WebSocket activity on disconnect", async () => {
