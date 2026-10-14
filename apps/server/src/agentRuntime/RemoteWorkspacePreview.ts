@@ -27,6 +27,8 @@ import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as P from "./worker/PreviewProtocol.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
 
+const isPreviewAutomationError = Schema.is(C.PreviewAutomationError);
+
 class RemotePreview extends Context.Service<
   RemotePreview,
   {
@@ -436,6 +438,12 @@ const layerCore = Layer.effect(
                   Effect.asVoid,
                 ),
           ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (bridges.get(client.identity.workspaceId)?.broker === broker)
+                bridges.delete(client.identity.workspaceId);
+            }),
+          ),
           Effect.provideService(Scope.Scope, scope),
           Effect.forkIn(scope),
         );
@@ -460,14 +468,15 @@ const layerCore = Layer.effect(
           yield* watch(request.scope.thread.threadId);
           return value;
         }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new C.PreviewAutomationNoAvailableHostError({
-                operation: request.operation,
-                environmentId: request.scope.environmentId,
-                ...request.scope.thread,
-                cause,
-              }),
+          Effect.mapError((cause) =>
+            isPreviewAutomationError(cause)
+              ? cause
+              : new C.PreviewAutomationNoAvailableHostError({
+                  operation: request.operation,
+                  environmentId: request.scope.environmentId,
+                  ...request.scope.thread,
+                  cause,
+                }),
           ),
         ),
     });
