@@ -549,7 +549,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "privacy-policy",
     title: "Privacy policy",
     to: "/settings/general",
-    searchTerms: ["telemetry analytics usage data tracking legal opt out"],
+    searchTerms: ["privacy legal policy"],
   },
   {
     id: "telemetry-export",
