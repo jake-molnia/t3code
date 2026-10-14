@@ -35,12 +35,16 @@ const hostReporting = (output: { readonly version: string; readonly ldd: string 
       commands.push([name, ...args].join(" "));
       return ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(1),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        exitCode: Effect.succeed(
+          ChildProcessSpawner.ExitCode(
+            name === "ldd" || output.version.startsWith("Google Chrome") ? 0 : 1,
+          ),
+        ),
         isRunning: Effect.succeed(false),
         kill: () => Effect.void,
         unref: Effect.succeed(Effect.void),
         stdin: Sink.drain,
-        stdout: Stream.empty,
+        stdout: Stream.make(new TextEncoder().encode(name === "ldd" ? output.ldd : output.version)),
         stderr: Stream.empty,
         all: Stream.make(new TextEncoder().encode(name === "ldd" ? output.ldd : output.version)),
         getInputFd: () => Sink.drain,
@@ -72,7 +76,7 @@ const diagnose = (input: {
 };
 
 describe("diagnoseLaunchFailure", () => {
-  it.effect("turns Chrome's sandbox abort into the AppArmor steps", () =>
+  it.effect("turns Chrome's sandbox abort into worker setup guidance", () =>
     Effect.gen(function* () {
       const { error, commands } = yield* diagnose({
         platform: "linux",

@@ -1,10 +1,15 @@
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  ANTIGRAVITY_DEFAULT_MODEL,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@t3tools/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
 import { createModelSelection } from "@t3tools/shared/model";
 import { deriveEffectiveComposerModelState } from "./composerDraftStore";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
-import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "./providerInstances";
+import { deriveProviderInstanceEntries } from "./providerInstances";
 import {
   getCustomModelOptionsByInstance,
   getAppModelOptionsForInstance,
@@ -716,5 +721,37 @@ describe("resolveAppModelSelectionState with the opencode plan agent", () => {
     expect(resolveAppModelSelectionState(settings, [opencode])).toEqual(
       createModelSelection(instanceId, model, [{ id: "agent", value: "plan" }]),
     );
+  });
+});
+
+describe("Antigravity account models", () => {
+  it("keeps an unavailable saved model visible without injecting custom or other-account models", () => {
+    const instanceId = ProviderInstanceId.make("google-one");
+    const driver = ProviderDriverKind.make("antigravity");
+    const providers = [
+      provider({ provider: driver, instanceId, models: ["gemini-available"] }),
+      provider({ provider: driver, instanceId: "google-two", models: ["gemini-other-account"] }),
+    ];
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: { [instanceId]: { driver, config: { customModels: ["invented-model"] } } },
+    };
+    const entry = deriveProviderInstanceEntries(providers).find(
+      (item) => item.instanceId === instanceId,
+    );
+    if (!entry) throw new Error("Missing Google account");
+    const options = getAppModelOptionsForInstance(settings, entry, "gemini-retired");
+    expect(options.map((model) => model.slug)).toEqual(["gemini-available", "gemini-retired"]);
+    expect(options.find((model) => model.slug === "gemini-retired")?.isUnavailable).toBe(true);
+    expect(
+      resolveAppModelSelectionForInstance(instanceId, settings, providers, "gemini-retired", {
+        preserveUnavailableSelection: true,
+      }),
+    ).toBe("gemini-retired");
+    expect(
+      getAppModelOptionsForInstance(settings, entry, ANTIGRAVITY_DEFAULT_MODEL).map(
+        (model) => model.slug,
+      ),
+    ).toEqual(["gemini-available"]);
   });
 });

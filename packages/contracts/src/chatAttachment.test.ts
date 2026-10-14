@@ -5,13 +5,13 @@ import * as Schema from "effect/Schema";
 
 import {
   ChatAttachment,
+  ChatImageAttachment,
   isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
-  SnapShotAccessibility,
+  UploadChatAttachment,
 } from "./chatAttachment.ts";
 
 const decodeAttachment = Schema.decodeUnknownEffect(ChatAttachment);
-const decodeSnapShotAccessibility = Schema.decodeUnknownEffect(SnapShotAccessibility);
 
 // Attachments ride on persisted events and thread streams with no client
 // version negotiation. A type this build does not know must decode instead of
@@ -50,33 +50,35 @@ it.effect("rejects malformed known attachment types instead of tolerating them",
   }),
 );
 
-it.effect("rejects accessibility trees above the serialized payload limit", () =>
-  Effect.gen(function* () {
-    const result = yield* Effect.exit(
-      decodeSnapShotAccessibility({
-        format: "element-tree",
-        coordinateSpace: "captured-image",
-        imageSize: { width: 800, height: 600 },
-        truncated: false,
-        root: {
-          role: "window",
-          bounds: { x: 0, y: 0, width: 800, height: 600 },
-          children: Array.from({ length: 10 }, () => ({
-            role: "text",
-            value: "x".repeat(8_000),
-            bounds: null,
-            children: [],
-          })),
-        },
-      }),
-    );
-
-    assert.strictEqual(Exit.isFailure(result), true);
-  }),
-);
-
 it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects svg", () => {
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/png"), true);
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
+});
+
+it("preserves ordinary and historical images while discarding obsolete capture metadata", () => {
+  const image = {
+    type: "image",
+    id: "historical-image",
+    name: "screenshot.png",
+    mimeType: "image/png",
+    sizeBytes: 12,
+  } satisfies ChatImageAttachment;
+  const sources = [
+    undefined,
+    {
+      kind: "snap-shot",
+      capturedAt: "2026-08-24T11:00:00.000Z",
+      appName: "Editor",
+      windowTitle: "main.ts",
+      accessibleText: "Old captured text",
+      accessibility: { format: "flat-text", text: "Old text", truncated: false },
+    },
+    { kind: "snap-shot", accessibility: { format: "obsolete" } },
+  ];
+  for (const source of sources) {
+    assert.deepEqual(Schema.decodeUnknownSync(ChatAttachment)({ ...image, source }), image);
+    const upload = { ...image, dataUrl: "data:image/png;base64,AQID" };
+    assert.deepEqual(Schema.decodeUnknownSync(UploadChatAttachment)({ ...upload, source }), upload);
+  }
 });

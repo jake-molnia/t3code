@@ -14,14 +14,139 @@ import { ProviderInstanceId } from "@t3tools/contracts";
 import * as Runtime from "../agentRuntime/RuntimeClient.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeRemoteDrivers } from "./RemoteProviderDrivers.ts";
+import { makeProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
+import { harnessDefaults } from "./HarnessDefaults.ts";
 
 const decodePollingRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ method: Schema.String })),
 );
 
-it.live(
-  "central provider factory needs no process or filesystem services and fails closed without a sandbox",
-  () =>
+it.live.each([
+  { name: "omitted Codex launch arguments", driver: "codex", config: { setupMode: "existing" } },
+  {
+    name: "explicit empty Codex launch arguments",
+    driver: "codex",
+    config: { setupMode: "existing", launchArgs: "" },
+  },
+  {
+    name: "explicit Codex launch arguments",
+    driver: "codex",
+    config: { setupMode: "existing", launchArgs: "-c model_provider=native" },
+  },
+  { name: "absent Codex config", driver: "codex", config: undefined },
+  {
+    name: "native OpenCode overrides",
+    driver: "opencode",
+    config: { binaryPath: "/native/opencode", serverUrl: "" },
+  },
+  {
+    name: "native Antigravity credentials",
+    driver: "antigravity",
+    config: {
+      binaryPath: "/native/agy_acp_server.par",
+      authMethod: "gemini-api-key",
+      apiKey: "fixture-key",
+    },
+  },
+  { name: "native Cursor binary", driver: "cursor", config: { binaryPath: "/native/cursor" } },
+  { name: "native Grok binary", driver: "grok", config: { binaryPath: "/native/grok" } },
+  {
+    name: "native Pi launch arguments",
+    driver: "pi",
+    config: { binaryPath: "/native/pi", launchArgs: "" },
+  },
+] as const)("preserves $name through registry, transport, and worker defaults", (testCase) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("transport-config-test");
+      const driverKind = C.ProviderDriverKind.make(testCase.driver);
+      const operatorConfig = {
+        ...(testCase.driver === "codex"
+          ? { setupMode: "existing", launchArgs: "-c model_provider=aperture" }
+          : { binaryPath: "/operator/provider" }),
+        ...(testCase.driver === "opencode" ? { serverUrl: "http://operator.invalid" } : {}),
+        ...(testCase.driver === "pi" ? { launchArgs: "--operator" } : {}),
+      };
+      const apply = harnessDefaults(
+        JSON.stringify({ [testCase.driver]: { config: operatorConfig } }),
+      );
+      const received: C.ProviderInstanceConfig[] = [];
+      const configured: C.ProviderInstanceConfig[] = [];
+      const requestSchema = Schema.fromJsonString(
+        Schema.Struct({ method: Schema.String, input: Schema.Unknown }),
+      );
+      const capabilities = yield* Schema.encodeEffect(
+        Schema.toCodecJson(C.OrchestrationV2ProviderCapabilities),
+      )(CodexProviderCapabilitiesV2);
+      const client = createExecutionClient({
+        identity: {
+          workspaceId: "utility",
+          allocationId: "allocation",
+          podUid: "pod",
+          generation: 1,
+          incarnation: "one",
+          protocolVersion: 1,
+        },
+        endpoint: "http://worker.test",
+        token: "fake-token",
+        fetch: async (_url, init) => {
+          const request = Schema.decodeUnknownSync(requestSchema)(init?.body);
+          if (request.method === "configureProvider") {
+            const payload = Schema.decodeUnknownSync(Schema.toCodecJson(ConfigureProvider))(
+              request.input,
+            );
+            received.push(payload.config);
+            configured.push(apply(payload.config));
+            return Response.json({ ok: true, value: null });
+          }
+          if (request.method === "getCapabilities")
+            return Response.json({ ok: true, value: capabilities });
+          throw new Error(`Unexpected request: ${request.method}`);
+        },
+      });
+      yield* Effect.gen(function* () {
+        const drivers = yield* makeRemoteDrivers;
+        const { registry } = yield* makeProviderInstanceRegistry({
+          drivers,
+          configMap: {
+            [instanceId]: {
+              driver: driverKind,
+              enabled: true,
+              ...(testCase.config === undefined ? {} : { config: testCase.config }),
+            },
+          },
+        });
+        const instance = yield* registry.getInstance(instanceId);
+        if (!instance) return yield* Effect.die("Configured instance was not materialized");
+        yield* instance.orchestrationAdapter.getCapabilities();
+        expect(received).toHaveLength(1);
+        expect(received[0]?.config).toEqual(testCase.config ?? {});
+        expect(configured[0]?.config).toEqual({ ...operatorConfig, ...testCase.config });
+        const driver = drivers.find((candidate) => candidate.driverKind === driverKind);
+        if (!driver) return yield* Effect.die("Configured driver was not registered");
+        const native = yield* Schema.decodeUnknownEffect(driver.configSchema)(
+          configured[0]?.config,
+        );
+        expect(native).toMatchObject({ ...operatorConfig, ...testCase.config });
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            McpProviderSessions.layer,
+            Settings.layerTest(),
+            Layer.mock(Runtime.RuntimeClient)({
+              enabled: true,
+              forUtility: () => Effect.succeed(client),
+            }),
+          ),
+        ),
+      );
+    }),
+  ),
+);
+
+it.live.each(["codex", "antigravity"])(
+  "%s central factory needs no local execution services and fails closed without a sandbox",
+  (driverKind) =>
     Effect.gen(function* () {
       let utilityRequests = 0;
       const runtime = Layer.succeed(
@@ -50,10 +175,10 @@ it.live(
       yield* Effect.scoped(
         Effect.gen(function* () {
           const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
-          const driver = drivers.find((driver) => driver.driverKind === "codex");
+          const driver = drivers.find((driver) => driver.driverKind === driverKind);
           if (!driver) throw new Error("Codex driver missing");
           const instance = yield* driver.create({
-            instanceId: ProviderInstanceId.make("codex"),
+            instanceId: ProviderInstanceId.make(driverKind),
             displayName: undefined,
             environment: [],
             enabled: true,
@@ -112,25 +237,28 @@ it.live("does not expose invented central auth controllers for CLI-owned account
   }).pipe(Effect.scoped, Effect.provide(Layer.merge(unavailableRuntime, Settings.layerTest()))),
 );
 
-it.live(
-  "keeps configured instance environment across roots and invalidates connected Cursor copies on logout",
-  () =>
+it.live.each(["cursor", "antigravity"])(
+  "keeps %s instance credentials separate across roots and clears copies on logout",
+  (driverKind) =>
     Effect.gen(function* () {
-      const instanceId = ProviderInstanceId.make("cursor-account");
+      const instanceId = ProviderInstanceId.make(`${driverKind}-account`);
       const snapshot = yield* buildUnavailableProviderSnapshot({
         instanceId,
-        driverKind: C.ProviderDriverKind.make("cursor"),
+        driverKind: C.ProviderDriverKind.make(driverKind),
         reason: "test",
       });
       const encodedSnapshot = yield* Schema.encodeEffect(Schema.toCodecJson(C.ServerProvider))(
         snapshot,
       );
-      let ownerKey: unknown = {
-        version: 1,
-        backendUrl: "https://api.cursor.com",
-        apiKey: "fake-account-key",
-        createdAtMs: 100,
-      };
+      let ownerKey: unknown =
+        driverKind === "antigravity"
+          ? { personal: "native-oauth-fixture", business: null }
+          : {
+              version: 1,
+              backendUrl: "https://api.cursor.com",
+              apiKey: "fake-account-key",
+              createdAtMs: 100,
+            };
       const copies = new Map<string, unknown>();
       const reviewRequests: Array<{ workspaceId: string; input: typeof ReviewGuideInput.Type }> =
         [];
@@ -160,7 +288,9 @@ it.live(
               environments.set(workspaceId, input.config.environment);
             } else {
               const input = Schema.decodeUnknownSync(ProviderRequest)(request.input);
-              if (request.method === "auth.executionCredentials") value = ownerKey;
+              if (request.method === "provider.refreshModels") value = null;
+              else if (request.method === "provider.refresh") value = encodedSnapshot;
+              else if (request.method === "auth.executionCredentials") value = ownerKey;
               else if (request.method === "auth.importExecutionCredentials")
                 copies.set(workspaceId, input.input);
               else if (request.method === "provider.snapshotForCwd") value = encodedSnapshot;
@@ -195,7 +325,7 @@ it.live(
       ];
       yield* Effect.gen(function* () {
         const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
-        const driver = drivers.find((driver) => driver.driverKind === "cursor");
+        const driver = drivers.find((driver) => driver.driverKind === driverKind);
         if (!driver) throw new Error("Missing Cursor");
         const instance = yield* driver.create({
           instanceId,
@@ -206,6 +336,7 @@ it.live(
         });
         if (!instance.snapshotForCwd || !instance.auth)
           throw new Error("Missing Cursor capabilities");
+        if (instance.refreshModels) yield* instance.refreshModels();
         yield* instance.snapshotForCwd("first");
         yield* instance.snapshotForCwd("second");
         expect(copies.get("root-one")).toEqual(ownerKey);
@@ -229,6 +360,11 @@ it.live(
           stops: [],
         });
         expect(reviewRequests).toEqual([{ workspaceId: "root-one", input: reviewInput }]);
+        if (driverKind === "antigravity") {
+          expect(instance.auth.isLogoutPrompt?.(" /logout ", false)).toBe(true);
+          expect(instance.auth.isLogoutPrompt?.("/logout", true)).toBe(false);
+          expect(instance.auth.isLogoutPrompt?.("Explain /logout", false)).toBe(false);
+        }
         yield* instance.auth.logout(Effect.void);
         expect(ownerKey).toBeNull();
         expect(copies.get("root-one")).toBeNull();

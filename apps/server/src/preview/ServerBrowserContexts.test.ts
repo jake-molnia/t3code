@@ -77,6 +77,33 @@ afterEach(() => {
 });
 
 describe("ServerBrowserContexts", () => {
+  it("keeps incognito and named profiles separate from the runtime desktop", async () => {
+    const desktop = makeContext();
+    const privateContext = makeContext();
+    const work = makeContext();
+    const browser = {
+      contexts: () => [desktop],
+      newContext: vi.fn(async () => privateContext),
+      on: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    launches.connect.mockResolvedValue(browser as unknown as Browser);
+    launches.persistent.mockResolvedValue(work as unknown as BrowserContext);
+    const pool = new ServerBrowserContexts({ ...options(), cdpEndpoint: "http://127.0.0.1:9222" });
+    expect(await pool.contextFor("default")).toBe(desktop);
+    expect(await pool.contextFor(INCOGNITO_BROWSER_PROFILE_ID)).toBe(privateContext);
+    expect(await pool.contextFor("work")).toBe(work);
+    await pool.clearProfile("work");
+    expect(work.close).toHaveBeenCalledOnce();
+    expect(launches.rm).toHaveBeenCalledWith("/test/profiles/work", {
+      recursive: true,
+      force: true,
+    });
+    await pool.close();
+    expect(privateContext.close).toHaveBeenCalledOnce();
+    expect(desktop.close).not.toHaveBeenCalled();
+  });
+
   it("shares the runtime desktop without launching Chromium or closing its existing tabs", async () => {
     const context = makeContext();
     const existingPage = { close: vi.fn() };
@@ -95,6 +122,7 @@ describe("ServerBrowserContexts", () => {
     ]);
     expect(first).toBe(child);
     expect(first).toBe(context);
+    expect(pool.isHeadfulContext(first)).toBe(true);
     expect(launches.connect).toHaveBeenCalledTimes(1);
     expect(launches.launch).not.toHaveBeenCalled();
     expect(launches.persistent).not.toHaveBeenCalled();
@@ -202,6 +230,8 @@ describe("ServerBrowserContexts", () => {
     const [a, reused, b, privateContext] = await Promise.all([first, again, second, incognito]);
     expect(a).toBe(reused);
     expect(new Set([a, b, privateContext]).size).toBe(3);
+    for (const context of [a, b, privateContext])
+      expect(pool.isHeadfulContext(context)).toBe(false);
     expect(launches.launch).toHaveBeenCalledTimes(1);
     expect(launches.persistent).not.toHaveBeenCalled();
     expect(browser.newContext).toHaveBeenCalledWith({
@@ -220,6 +250,7 @@ describe("ServerBrowserContexts", () => {
     launches.launch.mockResolvedValue(browser as unknown as Browser);
     const pool = new ServerBrowserContexts(options());
     const persistent = await pool.contextFor("work/team");
+    expect(pool.isHeadfulContext(persistent)).toBe(false);
     expect(await pool.contextFor("work/team")).toBe(persistent);
     expect(await pool.contextFor("work/team", "agent")).not.toBe(persistent);
     expect(launches.persistent).toHaveBeenCalledExactlyOnceWith(

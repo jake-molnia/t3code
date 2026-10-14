@@ -20,7 +20,6 @@ import {
 } from "./baseSchemas.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
-import { KeybindingShortcut } from "./keybindings.ts";
 import {
   CustomModelSetting,
   DEFAULT_TEXT_GENERATION_MODEL,
@@ -161,66 +160,6 @@ const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;
 export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
 export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
-
-export const SnapShotKeyChord = KeybindingShortcut.check(
-  Schema.makeFilter(
-    (shortcut) =>
-      shortcut.metaKey ||
-      shortcut.ctrlKey ||
-      shortcut.shiftKey ||
-      shortcut.altKey ||
-      shortcut.modKey ||
-      "Snapshot shortcut requires a modifier.",
-  ),
-);
-export type SnapShotKeyChord = typeof SnapShotKeyChord.Type;
-export const SNAP_SHOT_MODIFIERS = ["shift", "meta", "control", "alt"] as const;
-export const SnapShotModifier = Schema.Literals(SNAP_SHOT_MODIFIERS);
-export type SnapShotModifier = typeof SnapShotModifier.Type;
-export const SnapShotShortcut = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("both-shift-keys") }),
-  Schema.Struct({ kind: Schema.Literal("modifier-pair"), modifier: SnapShotModifier }),
-  SnapShotKeyChord,
-]);
-export type SnapShotShortcut = typeof SnapShotShortcut.Type;
-export const SnapShotSound = Schema.Literals(["soft-pop", "camera-shutter"]);
-export type SnapShotSound = typeof SnapShotSound.Type;
-const DEFAULT_SNAP_SHOT_SOUND: SnapShotSound = "soft-pop";
-
-export type SnapShotModifierPairShortcut = Extract<SnapShotShortcut, { readonly kind: string }>;
-
-export function isModifierPairShortcut(
-  shortcut: SnapShotShortcut,
-): shortcut is SnapShotModifierPairShortcut {
-  return "kind" in shortcut;
-}
-
-export function snapShotShortcutModifierPair(
-  shortcut: SnapShotModifierPairShortcut,
-): SnapShotModifier {
-  return shortcut.kind === "both-shift-keys" ? "shift" : shortcut.modifier;
-}
-
-const APPLE_MODIFIER_LABELS: Record<SnapShotModifier, string> = {
-  shift: "Shift",
-  meta: "Command",
-  control: "Control",
-  alt: "Option",
-};
-const OTHER_MODIFIER_LABELS: Record<SnapShotModifier, string> = {
-  shift: "Shift",
-  meta: "Super",
-  control: "Ctrl",
-  alt: "Alt",
-};
-
-export function snapShotModifierPairLabel(modifier: SnapShotModifier, apple: boolean): string {
-  const label = (apple ? APPLE_MODIFIER_LABELS : OTHER_MODIFIER_LABELS)[modifier];
-  return `${label} + ${label}`;
-}
-const DEFAULT_SNAP_SHOT_SHORTCUT: SnapShotShortcut = {
-  kind: "both-shift-keys",
-};
 
 export const NotificationMode = Schema.Literals([
   "off",
@@ -491,19 +430,6 @@ export const ClientSettingsSchema = Schema.Struct({
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
   ),
-  snapShotEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  snapShotIncludeAccessibility: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(true)),
-  ),
-  snapShotShortcut: SnapShotShortcut.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNAP_SHOT_SHORTCUT)),
-  ),
-  snapShotPlaySound: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  snapShotSound: SnapShotSound.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNAP_SHOT_SOUND)),
-  ),
-  snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
@@ -728,6 +654,84 @@ export const ClaudeSettings = makeProviderSettingsSchema(
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
+
+export const ANTIGRAVITY_AUTH_METHODS = [
+  { value: "oauth-personal", label: "Google account" },
+  { value: "oauth-business", label: "Gemini Enterprise" },
+  { value: "gemini-api-key", label: "Gemini API key" },
+  { value: "agent-platform", label: "Agent Platform (Vertex AI)" },
+] as const satisfies ReadonlyArray<ProviderSettingsFormOption>;
+export const AntigravityAuthMethod = Schema.Literals(
+  ANTIGRAVITY_AUTH_METHODS.map((method) => method.value),
+);
+export type AntigravityAuthMethod = typeof AntigravityAuthMethod.Type;
+
+export const AntigravitySettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    authMethod: AntigravityAuthMethod.pipe(
+      Schema.withDecodingDefault(Effect.succeed("oauth-personal" as const)),
+      Schema.annotateKey({
+        title: "Sign-in method",
+        description:
+          "Google accounts use your subscription; API keys and Agent Platform bill usage.",
+        providerSettingsForm: {
+          control: "select",
+          options: ANTIGRAVITY_AUTH_METHODS,
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    apiKey: TrimmedString.pipe(
+      secretSetting,
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "API key",
+        description: "Gemini or Vertex AI express key. Stored separately on the host.",
+        providerSettingsForm: {
+          control: "password",
+          placeholder: "Optional",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    gcpProject: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "GCP project",
+        description:
+          "Required for Gemini Enterprise. Agent Platform uses it when no API key is set.",
+        providerSettingsForm: { placeholder: "my-project-id", clearWhenEmpty: "omit" },
+      }),
+    ),
+    gcpLocation: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "GCP location",
+        description: "Region for Gemini Enterprise or Agent Platform.",
+        providerSettingsForm: { placeholder: "us-central1", clearWhenEmpty: "omit" },
+      }),
+    ),
+    binaryPath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Binary path",
+        description:
+          "Absolute path to the official Antigravity executable in the sandbox image. Leave empty to use the image default.",
+        providerSettingsForm: { placeholder: "Automatic", clearWhenEmpty: "persist" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["authMethod", "apiKey", "gcpProject", "gcpLocation", "binaryPath"] },
+);
+export type AntigravitySettings = typeof AntigravitySettings.Type;
 
 /**
  * A read-only quota source outside this environment's provider CLIs. The
@@ -1284,7 +1288,9 @@ export const providerInstanceConfigEnabledFlag = (config: unknown): boolean | un
  * `enabled` decoding default of each driver's settings schema.
  */
 const DEFAULT_DISABLED_PROVIDER_DRIVERS: ReadonlySet<ProviderDriverKind> = new Set(
-  ["cursor", "grok", "muse", "pi", "opencode"].map((driver) => ProviderDriverKind.make(driver)),
+  ["cursor", "grok", "muse", "pi", "opencode", "antigravity"].map((driver) =>
+    ProviderDriverKind.make(driver),
+  ),
 );
 
 /** Built-in drivers whose default instance runs before the user configures it. */
@@ -1659,13 +1665,6 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
-  snapShotEnabled: Schema.optionalKey(Schema.Boolean),
-  snapShotIncludeAccessibility: Schema.optionalKey(Schema.Boolean),
-  snapShotShortcut: Schema.optionalKey(SnapShotShortcut),
-  snapShotPlaySound: Schema.optionalKey(Schema.Boolean),
-  snapShotSound: Schema.optionalKey(SnapShotSound),
-  snapShotFlash: Schema.optionalKey(Schema.Boolean),
-  snapShotAnimations: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

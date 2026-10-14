@@ -628,7 +628,7 @@ export function getUploadedAttachments(input: {
       name: image.name,
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
-      ...(image.source ? { source: image.source } : {}),
+      ...(image.type === "file" && image.source ? { source: image.source } : {}),
     });
   }
   return attachments;
