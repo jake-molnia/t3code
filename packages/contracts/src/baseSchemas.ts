@@ -357,12 +357,6 @@ export const ClientOs = Schema.Literals([
 ]);
 export type ClientOs = typeof ClientOs.Type;
 
-export const ClientDeviceType = Schema.Literals(["desktop", "phone", "tablet", "unknown"]);
-export type ClientDeviceType = typeof ClientDeviceType.Type;
-
-export const ClientWebDeployment = Schema.Literals(["hosted", "server"]);
-export type ClientWebDeployment = typeof ClientWebDeployment.Type;
-
 export const ClientConnectionMethod = Schema.Literals(["direct", "ssh", "relay", "unknown"]);
 export type ClientConnectionMethod = typeof ClientConnectionMethod.Type;
 

@@ -34,7 +34,6 @@ import {
   type RelayManagedEndpointRuntimeConfig,
   RelayOkResponse,
 } from "@t3tools/contracts/relay";
-import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import {
   normalizeRelayIssuer,
   RELAY_HEALTH_REQUEST_TYP,
@@ -875,7 +874,6 @@ const make = Effect.gen(function* () {
       Effect.flatMap(HttpClientResponse.schemaBodyJson(input.schema)),
       Effect.timeout(input.timeout ?? "10 seconds"),
       Effect.mapError(relayRequestError),
-      withRelayClientTracing,
     );
 
   const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesiredLinkWith")(
@@ -1276,7 +1274,6 @@ const make = Effect.gen(function* () {
       httpClient.execute,
       Effect.flatMap(filterRelayResponse),
       Effect.flatMap(HttpClientResponse.schemaBodyJson(RelayOkResponse)),
-      withRelayClientTracing,
     );
     // ok:false means the relay skipped deletion because a concurrent provision
     // owns the recorded tunnel now — leave the stored config alone.
