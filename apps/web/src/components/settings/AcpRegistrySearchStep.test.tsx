@@ -7,7 +7,6 @@ import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 
 const atoms = vi.hoisted(() => ({
   search: Symbol("acp-search"),
-  prepare: Symbol("acp-prepare"),
 }));
 
 const state = vi.hoisted(() => ({
@@ -17,7 +16,6 @@ const state = vi.hoisted(() => ({
   canManage: true,
   refresh: vi.fn(),
   search: vi.fn(() => atoms.search),
-  prepare: vi.fn(),
 }));
 
 const lifecycle = vi.hoisted(() => ({
@@ -50,7 +48,6 @@ vi.mock("react/compiler-runtime", async () => {
 vi.mock("../../state/server", () => ({
   serverEnvironment: {
     searchAcpRegistry: state.search,
-    prepareAcpRegistryAgent: atoms.prepare,
   },
 }));
 
@@ -66,15 +63,6 @@ vi.mock("../../state/query", () => ({
     isPending: state.isPending,
     refresh: state.refresh,
   }),
-}));
-
-vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: () => state.prepare,
-}));
-
-vi.mock("@t3tools/client-runtime/state/runtime", () => ({
-  isAtomCommandInterrupted: () => false,
-  squashAtomCommandFailure: () => new Error("Prepare failed."),
 }));
 
 import { AcpRegistrySearchStep } from "./AcpRegistrySearchStep";
@@ -96,7 +84,7 @@ const gemini: AcpRegistrySearchAgent = {
 
 function render(options?: {
   readonly configured?: boolean;
-  readonly onPrepared?: (agent: AcpRegistrySearchAgent) => void;
+  readonly onSelected?: (agent: AcpRegistrySearchAgent) => void;
 }): ReactElement<Record<string, unknown>> {
   hooks.beginRender();
   return AcpRegistrySearchStep({
@@ -109,7 +97,7 @@ function render(options?: {
           },
         }
       : {},
-    onPrepared: options?.onPrepared ?? vi.fn(),
+    onSelected: options?.onSelected ?? vi.fn(),
     onManualConfiguration: vi.fn(),
   }) as ReactElement<Record<string, unknown>>;
 }
@@ -133,10 +121,7 @@ describe("AcpRegistrySearchStep", () => {
     state.isPending = false;
     state.refresh.mockReset();
     state.search.mockClear();
-    state.prepare.mockReset().mockResolvedValue({
-      _tag: "Success",
-      value: { agentId: "gemini", version: "1.2.3", distribution: "npx", prepared: true },
-    });
+
     lifecycle.cleanups = [];
     vi.stubGlobal(
       "fetch",
@@ -247,92 +232,21 @@ describe("AcpRegistrySearchStep", () => {
     expect(findByAriaLabel(refreshingTree, "Add Gemini CLI")).not.toBeNull();
   });
 
-  it("prepares a result before handing it back to the wizard", async () => {
-    state.prepare.mockResolvedValueOnce({
-      _tag: "Success",
-      value: { agentId: "gemini", version: "2.0.0", distribution: "binary", prepared: true },
-    });
+  it("selects registry metadata without an installation command", () => {
     state.result = { agents: [gemini] };
-    const onPrepared = vi.fn();
-    const tree = render({ onPrepared });
-
-    const add = findByAriaLabel(tree, "Add Gemini CLI");
-    (add.props.onClick as (() => void) | undefined)?.();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(state.prepare).toHaveBeenCalledWith({
-      environmentId,
-      input: { agentId: "gemini" },
-    });
-    expect(onPrepared).toHaveBeenCalledWith({
-      ...gemini,
-      version: "2.0.0",
-      distribution: "binary",
-    });
+    const onSelected = vi.fn();
+    const add = findByAriaLabel(render({ onSelected }), "Add Gemini CLI");
+    (add.props.onClick as () => void)();
+    expect(onSelected).toHaveBeenCalledExactlyOnceWith(gemini);
   });
 
-  it("rechecks the grant before preparing an agent", async () => {
+  it("rechecks the grant before selecting an agent", () => {
     state.result = { agents: [gemini] };
-    const onPrepared = vi.fn();
-    const add = findByAriaLabel(render({ onPrepared }), "Add Gemini CLI");
+    const onSelected = vi.fn();
+    const add = findByAriaLabel(render({ onSelected }), "Add Gemini CLI");
     state.canManage = false;
-    await (add.props.onClick as () => void)();
-    expect(state.prepare).not.toHaveBeenCalled();
-    expect(onPrepared).not.toHaveBeenCalled();
-  });
-
-  it("ignores a stale prepare completion", async () => {
-    let resolveFirst!: (value: { readonly _tag: "Success"; readonly value: unknown }) => void;
-    let resolveSecond!: (value: { readonly _tag: "Success"; readonly value: unknown }) => void;
-    state.prepare
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveFirst = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveSecond = resolve;
-          }),
-      );
-    state.result = { agents: [gemini] };
-    const onPrepared = vi.fn();
-    const tree = render({ onPrepared });
-    const add = findByAriaLabel(tree, "Add Gemini CLI");
-
-    (add.props.onClick as (() => void) | undefined)?.();
-    (add.props.onClick as (() => void) | undefined)?.();
-    resolveFirst({ _tag: "Success", value: {} });
-    await Promise.resolve();
-    expect(onPrepared).not.toHaveBeenCalled();
-
-    resolveSecond({ _tag: "Success", value: {} });
-    await Promise.resolve();
-    expect(onPrepared).toHaveBeenCalledOnce();
-  });
-
-  it("ignores prepare completion after unmount", async () => {
-    let resolvePrepare!: (value: { readonly _tag: "Success"; readonly value: unknown }) => void;
-    state.prepare.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolvePrepare = resolve;
-        }),
-    );
-    state.result = { agents: [gemini] };
-    const onPrepared = vi.fn();
-    const tree = render({ onPrepared });
-
-    const add = findByAriaLabel(tree, "Add Gemini CLI");
-    (add.props.onClick as (() => void) | undefined)?.();
-    for (const cleanup of lifecycle.cleanups) cleanup();
-    resolvePrepare({ _tag: "Success", value: {} });
-    await Promise.resolve();
-
-    expect(onPrepared).not.toHaveBeenCalled();
+    (add.props.onClick as () => void)();
+    expect(onSelected).not.toHaveBeenCalled();
   });
 
   it("renders existing registry configuration as already added", () => {

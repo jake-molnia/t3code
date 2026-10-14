@@ -282,9 +282,6 @@ importers:
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
-      yauzl:
-        specifier: ^3.4.0
-        version: 3.4.0
     devDependencies:
       '@effect/vitest':
         specifier: 4.0.2
@@ -319,9 +316,6 @@ importers:
       '@types/proper-lockfile':
         specifier: ^4.1.4
         version: 4.1.4
-      '@types/yauzl':
-        specifier: ^3.4.0
-        version: 3.4.0
       effect-acp:
         specifier: workspace:*
         version: link:../../packages/effect-acp
