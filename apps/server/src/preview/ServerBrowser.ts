@@ -1,11 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 import {
+  INCOGNITO_BROWSER_PROFILE_ID,
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_PROFILE_ID,
   FILL_PREVIEW_VIEWPORT,
   findBrowserProfile,
-  INCOGNITO_BROWSER_PROFILE_ID,
   resolveBrowserProfiles,
   type BrowserProfile,
   type PreviewReportProfilesInput,
@@ -75,7 +75,6 @@ import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
-import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
 import * as PreviewManager from "./Manager.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
@@ -93,8 +92,6 @@ const SCREENCAST_MOTION_FRAMES = 4;
 const SCREENCAST_MOTION_WINDOW_MS = 300;
 const SCREENCAST_MOTION_QUALITY = 50;
 const HOST_RECONNECT_DELAY = "1 second";
-/** How long a new tab waits for the desktop app to mount it before running headless. */
-const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
 const VIEWER_OUTPUT_LIMIT = 64;
 const RECORDING_SCREENCAST = { format: "jpeg", quality: 90, everyNthFrame: 1 } as const;
 const decodeViewportSetting = Schema.decodeUnknownSync(PreviewViewportSettingSchema);
@@ -299,11 +296,6 @@ interface ServerTab {
   readonly networkEntries: Array<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: Array<PreviewAutomationActionEvent>;
   readonly control: SessionControl;
-  /**
-   * Set when the desktop app renders this tab. The server drives the desktop's
-   * page; the desktop owns its size, storage, and window.
-   */
-  readonly desktop: { readonly close: () => Promise<void> } | null;
   readonly profileId: string | undefined;
   /** Set when a page in another tab opened this one with `window.open` or a link. */
   readonly openerTabId: string | undefined;
@@ -506,7 +498,6 @@ const make = Effect.gen(function* () {
   const cdpUrl = yield* Effect.try(() => new URL(cdpEndpoint)).pipe(Effect.orDie);
   if (cdpUrl.protocol !== "http:" || cdpUrl.hostname !== "127.0.0.1")
     return yield* Effect.die(new Error("The sandbox browser CDP endpoint must use loopback HTTP."));
-  const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   // The fix every host error names, rendered for how this server was launched.
@@ -638,7 +629,7 @@ const make = Effect.gen(function* () {
   /** The CSS size the page lays out in: the viewport shrunk by the tab's zoom, as Chrome zooms. */
   const layoutSize = (tab: ServerTab) => {
     const size = tab.page.viewportSize();
-    if (!size || tab.desktop) return size;
+    if (!size) return size;
     return {
       width: Math.max(1, Math.round(size.width / tab.zoomFactor)),
       height: Math.max(1, Math.round(size.height / tab.zoomFactor)),
@@ -647,11 +638,9 @@ const make = Effect.gen(function* () {
 
   /**
    * Zooms a headless page as Chrome's zoom does: it lays out in fewer CSS
-   * pixels and draws each one larger, so frames keep their size. The desktop
-   * zooms the pages it renders itself.
+   * pixels and draws each one larger, so frames keep their size.
    */
   const applyZoom = async (tab: ServerTab) => {
-    if (tab.desktop) return;
     const size = tab.page.viewportSize();
     if (!size) return;
     if (tab.zoomFactor === 1) {
@@ -676,8 +665,6 @@ const make = Effect.gen(function* () {
 
   const applySetting = async (tab: ServerTab, setting: PreviewViewportSetting) => {
     tab.setting = setting;
-    // The desktop lays its webview out at the published setting itself.
-    if (tab.desktop) return;
     const size =
       fixedViewportSize(setting) ??
       [...tab.viewers]
@@ -698,15 +685,12 @@ const make = Effect.gen(function* () {
       await tab.page.emulateMedia({ colorScheme: colorScheme === "system" ? null : colorScheme });
     }
     const zoomFactor = snapshot.zoomFactor ?? 1;
-    if (zoomFactor !== tab.zoomFactor && !tab.desktop) {
+    if (zoomFactor !== tab.zoomFactor) {
       tab.zoomFactor = zoomFactor;
       await applyZoom(tab);
       broadcastViewport(tab);
     }
   };
-
-  /** Whether the preview session for a tab still exists. */
-  const sessionOpen = (tab: ServerTab) => !closedSessions.has(tabKey(tab.threadId, tab.tabId));
 
   const dropTab = (tab: ServerTab, closeSession: boolean) => {
     const key = tabKey(tab.threadId, tab.tabId);
@@ -714,13 +698,9 @@ const make = Effect.gen(function* () {
     tabs.delete(key);
     tab.closing = true;
     clearAbortedNavigation(tab);
-    // A desktop page outlives the connection unless its session closed with it.
-    const end = tab.desktop && !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
-    for (const viewer of tab.viewers) viewer.push({ _tag: end });
+    for (const viewer of tab.viewers) viewer.push({ _tag: "gone" });
     void tab.control.close().catch(constVoid);
-    // The desktop owns its page; letting go only ends this connection.
-    if (tab.desktop) void tab.desktop.close().catch(constVoid);
-    else void tab.page.close().catch(constVoid);
+    void tab.page.close().catch(constVoid);
     void tab.recording?.encoder.close().catch(constVoid);
     void NodeFSP.rm(downloadDir(tab), { recursive: true, force: true }).catch(constVoid);
     reportLiveTabs();
@@ -729,68 +709,20 @@ const make = Effect.gen(function* () {
     }
   };
 
-  /**
-   * With a desktop app attached, every tab of this server renders there, so a
-   * new tab waits for its `<webview>` instead of launching headless.
-   */
-  const desktopRenders = (snapshot: PreviewSessionSnapshot) =>
-    desktopChannel.available
-      ? Effect.runPromise(
-          desktopChannel.awaitAttached(
-            { threadId: snapshot.threadId, tabId: snapshot.tabId },
-            DESKTOP_ATTACH_TIMEOUT,
-          ),
-        )
-      : Promise.resolve(false);
-
-  /** Connects to the desktop's page for a tab, which it renders and the server drives. */
-  const connectDesktop = async (snapshot: PreviewSessionSnapshot) => {
-    const scope = await Effect.runPromise(Scope.make());
-    try {
-      const endpoint = await Effect.runPromise(
-        desktopChannel
-          .endpoint({ threadId: snapshot.threadId, tabId: snapshot.tabId })
-          .pipe(Scope.provide(scope)),
-      );
-      const connected = await contexts.connectDesktopPage(endpoint);
-      return {
-        page: connected.page,
-        close: async () => {
-          await connected.browser.close().catch(constVoid);
-          await Effect.runPromise(Scope.close(scope, Exit.void));
-        },
-      };
-    } catch (cause) {
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-      throw cause;
-    }
-  };
-
   const createTab = async (snapshot: PreviewSessionSnapshot): Promise<ServerTab> => {
     const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
     adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
-    const desktop =
-      adopted === undefined && (await desktopRenders(snapshot))
-        ? await connectDesktop(snapshot)
-        : null;
-    // An agent tab without a profile (no client reported one) keeps throwaway storage.
-    const isolatedContext =
-      adopted === undefined &&
-      desktop === null &&
-      ((snapshot.automationOwner !== undefined && snapshot.profileId === undefined) ||
-        snapshot.profileId === INCOGNITO_BROWSER_PROFILE_ID);
     const context =
       adopted?.page.context() ??
-      desktop?.page.context() ??
-      (await contexts.contextFor(snapshot.profileId ?? "default"));
+      (await contexts.contextFor(
+        snapshot.profileId ?? "default",
+        snapshot.profileId === INCOGNITO_BROWSER_PROFILE_ID ? snapshot.automationOwner : undefined,
+      ));
     if (adopted?.page.isClosed()) throw new Error("The popup closed before it opened.");
-    // The desktop page already has its own clipboard; the bridge script is for headless tabs.
-    if (!desktop) await prepareContext(context);
-    const page = adopted?.page ?? desktop?.page ?? (await context.newPage());
+    await prepareContext(context);
+    const page = adopted?.page ?? (await context.newPage());
     const cdp = await context.newCDPSession(page);
-    // The desktop's page is already a normal browser. A popup's first request
-    // went out before it became a tab; everything after presents as Chrome.
-    if (!desktop) await presentAsChrome(cdp, host);
+    await presentAsChrome(cdp, host);
     page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
     const control = new SessionControl(snapshot.automationOwner ?? null, () =>
@@ -808,7 +740,6 @@ const make = Effect.gen(function* () {
       networkEntries: [],
       actionTimeline: [],
       control,
-      desktop: desktop === null ? null : { close: desktop.close },
       profileId: snapshot.profileId,
       openerTabId: adopted?.openerTabId,
       downloads: [],
@@ -827,9 +758,7 @@ const make = Effect.gen(function* () {
       captureLock: Promise.resolve(),
       capturing: 0,
     };
-    if (!desktop) {
-      await page.setViewportSize(fixedViewportSize(tab.setting) ?? UNATTACHED_FILL_VIEWPORT);
-    }
+    await page.setViewportSize(fixedViewportSize(tab.setting) ?? UNATTACHED_FILL_VIEWPORT);
     await applyRendering(tab, snapshot);
     const isMainNavigation = (request: { isNavigationRequest(): boolean; frame(): unknown }) =>
       request.isNavigationRequest() && request.frame() === page.mainFrame();
@@ -919,16 +848,15 @@ const make = Effect.gen(function* () {
     const key = tabKey(tab.threadId, tab.tabId);
     if (closedPendingTabs.delete(key)) {
       await control.close().catch(constVoid);
-      if (desktop) await desktop.close().catch(constVoid);
-      else await page.close().catch(constVoid);
+      await page.close().catch(constVoid);
       throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
     }
     page.on("close", () => dropTab(tab, true));
     page.on("crash", () => dropTab(tab, true));
     tabs.set(key, tab);
     reportLiveTabs();
-    // A popup is already loading its own URL, and the desktop loads its tab's.
-    if (!adopted && !desktop && snapshot.navStatus._tag === "Loading") {
+    // A popup is already loading its own URL.
+    if (!adopted && snapshot.navStatus._tag === "Loading") {
       tab.initialNavigation = page
         .goto(snapshot.navStatus.url, { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS })
         .then(constVoid);
@@ -1659,7 +1587,7 @@ const make = Effect.gen(function* () {
           "The recording captured no frames.",
         );
       }
-      // Use the desktop upload location so the MCP handler can claim the recording.
+      // The central preview adapter transfers this worker artifact before the MCP handler claims it.
       const extension = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
       const pendingId = `${PENDING_ATTACHMENT_THREAD_SEGMENT}-${NodeCrypto.randomUUID()}-${extension}`;
       const path = NodePath.join(config.attachmentsDir, `${pendingId}.${extension}`);
@@ -1685,19 +1613,11 @@ const make = Effect.gen(function* () {
     (tab: ServerTab): ServerBrowserPage.PointerReporter =>
     async ({ x, y }, phase) => {
       const encoder = tab.recording?.encoder;
-      // A desktop-rendered tab is always on screen in the desktop app.
-      if (tab.viewers.size === 0 && !encoder && !tab.desktop) return;
+      if (tab.viewers.size === 0 && !encoder) return;
       const show = (next: "move" | "click") => {
         const sequence = ++pointerSequence;
         for (const viewer of tab.viewers)
           viewer.push({ _tag: "pointer", phase: next, x, y, sequence });
-        if (tab.desktop)
-          runFork(
-            desktopChannel.pointer(
-              { threadId: tab.threadId, tabId: tab.tabId },
-              { phase: next, x, y },
-            ),
-          );
         void encoder
           ?.evaluate(
             ([px, py, click]) =>
@@ -2251,7 +2171,7 @@ const make = Effect.gen(function* () {
         const height = Math.min(Math.round(num(message.height)), 2160);
         if (width < 100 || height < 100) return;
         viewer.requestedSize = { width, height, order: ++viewerResizeOrder };
-        if (tab.setting._tag !== "fill" || tab.desktop) return;
+        if (tab.setting._tag !== "fill") return;
         const current = tab.page.viewportSize();
         if (current?.width === width && current.height === height) return;
         await tab.page.setViewportSize({ width, height });
@@ -2391,7 +2311,8 @@ const make = Effect.gen(function* () {
       );
       if (input.canOperate && tab.control.agentId === null && tab.control.controller === null) {
         yield* Effect.promise(() => tab.control.take(viewer.id));
-        if (!tab.desktop) yield* Effect.promise(() => tab.page.bringToFront());
+        if (contexts.isHeadfulContext(tab.page.context()))
+          yield* Effect.promise(() => tab.page.bringToFront());
       }
       broadcastControl(tab);
       pushFileChooser(tab);
@@ -2476,7 +2397,7 @@ const make = Effect.gen(function* () {
                 const taking = tab.control.take(viewer.id);
                 broadcastControl(tab);
                 await taking;
-                if (!tab.desktop) await tab.page.bringToFront();
+                if (contexts.isHeadfulContext(tab.page.context())) await tab.page.bringToFront();
                 pushFileChooser(tab);
               } else if (message.type === "releaseControl") {
                 const releasing = tab.control.release(viewer.id, () =>
@@ -2509,33 +2430,6 @@ const make = Effect.gen(function* () {
     });
 
   yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
-  // The desktop took its page back (closed, swapped, crashed, or devtools opened).
-  // The session stays; the next viewer or agent reconnects when it re-attaches.
-  yield* desktopChannel.detached.pipe(
-    Stream.runForEach((key) =>
-      Effect.sync(() => {
-        const tab = tabs.get(tabKey(key.threadId, key.tabId));
-        if (tab?.desktop) dropTab(tab, false);
-      }),
-    ),
-    Effect.forkScoped,
-  );
-  // The page came back, for example after its DevTools closed. Reconnect now
-  // rather than on the next viewer or agent, or the tab's URL and title stop
-  // reaching every client in the meantime.
-  yield* desktopChannel.attached.pipe(
-    Stream.runForEach((key) =>
-      Effect.gen(function* () {
-        if (tabs.has(tabKey(key.threadId, key.tabId))) return;
-        const { sessions } = yield* manager.list({ threadId: ThreadId.make(key.threadId) });
-        const snapshot = sessions.find(
-          (session) => session.tabId === key.tabId && session.runtime === "server",
-        );
-        if (snapshot) yield* Effect.promise(() => ensureTab(snapshot).catch(constVoid));
-      }).pipe(Effect.ignore),
-    ),
-    Effect.forkScoped,
-  );
   yield* Effect.sync(closeIdleAgentTabs).pipe(
     Effect.repeat(Schedule.spaced(IDLE_SWEEP_INTERVAL)),
     Effect.forkScoped,

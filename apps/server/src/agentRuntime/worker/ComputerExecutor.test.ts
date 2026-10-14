@@ -254,3 +254,49 @@ it.effect("counts an in-flight computer request until interruption finishes", ()
     expect(yield* executor.activity).toEqual({ activeOperations: 0, pendingCallbacks: 0 });
   }),
 );
+
+it.effect(
+  "serializes display requests across callers and releases the queue after interruption",
+  () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const calls: string[] = [];
+      const executor = yield* makeComputerExecutor.pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({
+            env: { T3CODE_SANDBOX_COMPUTER_URL: "http://127.0.0.1:18091" },
+          }),
+        ),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.gen(function* () {
+              if (request.url.endsWith("/info"))
+                return HttpClientResponse.fromWeb(request, Response.json(desktopInfo));
+              calls.push(request.url);
+              if (calls.length === 1) {
+                yield* Deferred.succeed(entered, undefined);
+                return yield* Effect.never;
+              }
+              return HttpClientResponse.fromWeb(request, Response.json({ success: true }));
+            }),
+          ),
+        ),
+      );
+      const first = yield* executor
+        .execute("computer.action", { kind: "type", text: "first" })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      const second = yield* executor
+        .execute("computer.action", { kind: "press", key: "enter" })
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      expect(yield* executor.activity).toEqual({ activeOperations: 2, pendingCallbacks: 0 });
+      expect(calls).toHaveLength(1);
+      yield* Fiber.interrupt(first);
+      expect(yield* Fiber.join(second)).toEqual({ ok: true });
+      expect(calls).toHaveLength(2);
+      expect(yield* executor.activity).toEqual({ activeOperations: 0, pendingCallbacks: 0 });
+    }),
+);
