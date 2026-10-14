@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  SERVER_SOURCE_REPOSITORY,
   ORCHESTRATION_PROTOCOL_VERSION,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
@@ -185,6 +186,8 @@ export const make = Effect.gen(function* () {
   const identity = yield* ServerEnvironmentIdentity;
   const hostPlatform = yield* HostProcess.Platform;
   const hostArchitecture = yield* HostProcess.Architecture;
+  const hostEnvironment = yield* HostProcess.Environment;
+  const revision = hostEnvironment.T3_SOURCE_REVISION?.trim();
   const environmentId = yield* identity.getEnvironmentId;
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
@@ -198,6 +201,12 @@ export const make = Effect.gen(function* () {
       ...(machine === null ? {} : { machine }),
     },
     serverVersion: packageJson.version,
+    build: {
+      sourceRepository: SERVER_SOURCE_REPOSITORY,
+      revision: revision && /^[0-9a-f]{40}$/.test(revision) ? revision : null,
+      packageVersion: packageJson.version,
+      upstreamVersion: packageJson.version.replace(/\.sandbox\.\d+$/, ""),
+    },
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
       repositoryIdentity: true,

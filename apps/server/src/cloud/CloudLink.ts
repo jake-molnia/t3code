@@ -52,10 +52,8 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -71,7 +69,6 @@ import * as HttpServer from "effect/http/HttpServer";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as AgentAwarenessRelay from "../relay/AgentAwarenessRelay.ts";
 import { makeRelayEnvironmentClient } from "../relay/relayEnvironmentClient.ts";
@@ -118,7 +115,6 @@ import {
   parseManagedEndpointLocalOrigin,
   requestAbsoluteUrl,
 } from "./linkChecks.ts";
-import { desktopUpdateRestartPending, pendingUpdateHandoffExists } from "./updateHandoff.ts";
 
 const CLOUD_MINT_NONCE_PREFIX = "cloud-mint-nonce-";
 const CLOUD_MINT_JTI_PREFIX = "cloud-mint-jti-";
@@ -575,20 +571,8 @@ const make = Effect.gen(function* () {
   const httpServer = yield* HttpServer.HttpServer;
   const awarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
   const crypto = yield* Crypto.Crypto;
-  const config = yield* ServerConfig.ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
 
   const withSecrets = Effect.provideService(ServerSecretStore.ServerSecretStore, secrets);
-  const withRuntimeFiles = <A, E>(
-    effect: Effect.Effect<A, E, ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path>,
-  ) =>
-    effect.pipe(
-      Effect.provideService(ServerConfig.ServerConfig, config),
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
-    );
-
   const validateLinkedCloudUser = (
     cloudUserId: string,
   ): Effect.Effect<void, EnvironmentAuth.ServerAuthInternalError | CloudLinkAccountMismatchError> =>
@@ -1238,22 +1222,6 @@ const make = Effect.gen(function* () {
       !(yield* readCliDesiredCloudLink.pipe(withSecrets)) ||
       (yield* readCliDesiredLinkMode.pipe(withSecrets)) !== "managed"
     ) {
-      return false;
-    }
-    // A shutdown that hands off to a pending update is not the environment
-    // going offline: the service launcher or the desktop app immediately brings
-    // a server back (the new version, or the old one after a rollback). Deleting
-    // the tunnel here forces that server to provision a replacement UUID, and the
-    // public hostname's route to the new tunnel takes 1-2 minutes to propagate —
-    // the dominant cost of an update restart. Keep the tunnel instead: the next
-    // boot respawns the connector from the stored config and is reachable as
-    // soon as it connects, and the reconcile confirms the still-live tunnel
-    // without replacing it.
-    if (
-      (yield* withRuntimeFiles(desktopUpdateRestartPending)) ||
-      (yield* withRuntimeFiles(pendingUpdateHandoffExists))
-    ) {
-      yield* Effect.logInfo("Keeping the managed tunnel across the update restart");
       return false;
     }
     const token = yield* cliTokenManager.getExisting;

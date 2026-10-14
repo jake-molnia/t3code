@@ -1,4 +1,3 @@
-import { HOSTED_APP_CHANNEL } from "~/branding";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 import { STATIC_KEYBINDING_COMMANDS, type KeybindingCommand } from "@t3tools/contracts";
@@ -57,7 +56,6 @@ export interface SettingsSearchItem {
   readonly windowsOnly?: boolean;
   // Its row renders only where the release channel can change: the desktop
   // app, or a hosted web build deployed with a channel.
-  readonly releaseChannelOnly?: boolean;
   readonly cloudOnly?: boolean;
   readonly environmentOnly?: boolean;
   readonly providerSettingsOnly?: boolean;
@@ -536,14 +534,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "app-version",
     title: "Version",
     to: "/settings/general",
-    searchTerms: ["about check for updates download install upgrade release"],
-  },
-  {
-    id: "update-track",
-    title: "Update track",
-    to: "/settings/general",
-    searchTerms: ["release channel stable latest nightly prerelease"],
-    releaseChannelOnly: true,
+    searchTerms: ["about server version fork revision upstream baseline releases deployment"],
   },
   {
     id: "cli-command",
@@ -1078,7 +1069,6 @@ export function searchSettings(
   return items
     .flatMap((item, index) => {
       if (!isElectron && item.desktopOnly === true) return [];
-      if (item.releaseChannelOnly && !isElectron && HOSTED_APP_CHANNEL === null) return [];
       if (item.macOnly && !isMacPlatform(platform)) return [];
       if (item.windowsOnly && !isWindowsPlatform(platform)) return [];
 

@@ -1,3 +1,4 @@
+import * as ServerVersion from "./environment/ServerVersion.ts";
 import * as RemoteUsageHistory from "./agentRuntime/UsageHistory.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as RemoteProjectMetadata from "./agentRuntime/RemoteProjectMetadata.ts";
@@ -132,7 +133,6 @@ import {
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as CloudHttp from "./cloud/http.ts";
 import * as CloudLink from "./cloud/CloudLink.ts";
-import { pendingServiceUpdateExists } from "./cloud/updateHandoff.ts";
 import * as RelayTracing from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import {
@@ -143,7 +143,6 @@ import {
 } from "./cloud/managedTunnelStartup.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
-import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -593,6 +592,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(layerRepositoryIdentityResolver),
+  Layer.provideMerge(ServerVersion.layer.pipe(Layer.provide(layerServerEnvironment))),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
   Layer.provideMerge(ServerSecretStore.layer),
@@ -699,7 +699,6 @@ const layerMakeServer = Layer.unwrap(
     const tailscaleParked = yield* Deferred.make<void>();
     const cloudLinkParked = yield* Deferred.make<void>();
     const routesReady = yield* Deferred.make<void>();
-    const layerLauncher = ServiceLauncherClient.layer;
 
     yield* fixPath({ shellEnvironmentPrepared: config.shellEnvironmentPrepared });
 
@@ -721,11 +720,9 @@ const layerMakeServer = Layer.unwrap(
             return;
           }
 
-          const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
           const state = yield* makePersistedServerRuntimeState({
             config,
             port: address.port,
-            serviceManaged: launcher.managed,
           });
           yield* persistServerRuntimeState({
             path: config.serverRuntimeStatePath,
@@ -813,21 +810,9 @@ const layerMakeServer = Layer.unwrap(
           ),
           Effect.asVoid,
         );
-        // A launcher trial can be stopped before activation. The previous
-        // server is already gone, so the trial owns cleanup immediately; the
-        // pending-state check keeps the tunnel for normal commit or rollback,
-        // while the launcher's explicit-stop marker allows it to be released.
-        // Other runtimes wait for activation so a failed standby cannot tear
-        // down the active runtime's tunnel.
-        const cleanupBeforeActivation = yield* pendingServiceUpdateExists;
-        if (cleanupBeforeActivation) {
-          yield* Effect.addFinalizer(() => releaseManagedTunnel);
-        }
         yield* ServerActivation.forkParked(
           Effect.gen(function* () {
-            if (!cleanupBeforeActivation) {
-              yield* Effect.addFinalizer(() => releaseManagedTunnel);
-            }
+            yield* Effect.addFinalizer(() => releaseManagedTunnel);
             const server = yield* HttpServer.HttpServer;
             const address = server.address;
             if (typeof address === "string" || !("port" in address)) return;
@@ -1026,9 +1011,9 @@ const layerMakeServer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
+    }).pipe(Layer.provideMerge(layerRuntimeDependencies));
 
-    const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
+    const layerRoutes = HttpRouter.serve(layerMakeRoutes, {
       disableLogger: !config.logWebSocketEvents,
       routerConfig: HTTP_ROUTER_CONFIG,
     }).pipe(
@@ -1038,7 +1023,7 @@ const layerMakeServer = Layer.unwrap(
     const layerServerApplication = Layer.mergeAll(
       layerRoutes,
       layerHttpListening,
-      layerRuntimeState.pipe(Layer.provide(layerLauncher)),
+      layerRuntimeState,
       layerTailscaleServe,
       layerCloudDesiredLinkReconcile,
       HeapSnapshot.layer,

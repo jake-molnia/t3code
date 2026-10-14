@@ -85,9 +85,9 @@ transport.
 
 Remote servers can outlive several client releases. Clients must use advertised
 capabilities and handle their absence, rather than assume their own version
-describes the server. Process replacement belongs to the launcher's
-[update protocol](./server-updates.md); the connection runtime handles the
-resulting disconnect.
+describes the server. Process replacement belongs to the deployment operator. See
+[deployment versions and restart recovery](./server-updates.md). The connection
+runtime handles the resulting disconnect.
 
 ### Desktop without a local environment
 

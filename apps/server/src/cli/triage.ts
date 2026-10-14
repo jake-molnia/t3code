@@ -27,7 +27,6 @@ import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/cli";
 
 import packageJson from "../../package.json" with { type: "json" };
-import * as BootService from "../cloud/bootService.ts";
 import * as ServerConfig from "../config.ts";
 import { resolveBaseDir } from "../os-jank.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
@@ -205,7 +204,7 @@ export const triageCommand = Command.make("triage", {
             // The server writes no log file of its own. Service installs and the
             // desktop app capture its output. The glob covers every desktop backend
             // (such as WSL) and rotated copies; names come from DesktopObservability.ts.
-            serviceLogPath: path.join(paths.logsDir, BootService.BOOT_SERVICE_LOG_FILE),
+            serviceLogPath: path.join(paths.logsDir, "boot-service.log"),
             desktopBackendLogGlob: path.join(paths.logsDir, "server-child*.log*"),
             serverTracePath: paths.serverTracePath,
             providerEventLogPath: paths.providerEventLogPath,

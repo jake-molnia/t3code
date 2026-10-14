@@ -1,60 +1,24 @@
-# Server updates
+# Deployment versions and restart recovery
 
-A [stable launcher](../../apps/server/src/serviceLauncher.ts) owns the runtime
-selected by systemd or launchd. It is the only runtime writer of durable service
-state. Server children request updates over inherited IPC; they never rewrite
-their service definition or select their own replacement. Local service commands
-may replace the launcher and state while the service is stopped. Foreground CLI
-processes do not self-update.
+The deployment image owns application upgrades. The server never downloads a
+replacement runtime, restarts itself to install it, or restores SQLite during an
+upgrade. Deployment rollback and database migration compatibility belong to the
+operator.
 
-Exact-version installs keep restarts independent of npm cache eviction or a moving
-release tag. Installation and preflight happen in staging before publishing an
-immutable runtime. Preflight checks the launcher protocol because a target that
-needs new rollback guarantees cannot safely run under an older launcher. Upgrading
-that launcher requires a local service update.
+`T3_SOURCE_REVISION` records the fork commit baked into the central image. The
+sandbox image workflow passes its source SHA as a build argument. An image built
+outside that workflow must supply the same argument; absent or invalid metadata
+is displayed as unknown rather than inferred from the upstream package version.
+The package version retains the fork's `.sandbox.N` suffix. The upstream baseline
+is that version before the sandbox suffix; neither identifies the deployed fork
+commit.
 
-## Commit boundary
-
-The launcher durably records the pending update before acknowledging it, then
-stops the old child and starts the target as a trial. Service-state writes use
-same-directory replacement with file and directory fsync. Invalid state stops
-startup rather than guessing which runtime to boot.
-
-The trial must finish migrations, acquire dependencies, bind HTTP, and park every
-long-running root at the activation gate before reporting `prepared`. The launcher
-then commits the target version durably and replies `committed`. Only then may the
-child release its gates, accept commands, and publish ready. Keep fallible startup
-acquisitions before this boundary. A listener alone does not prove the runtime is
-ready to commit.
-
-A failed or timed-out trial returns to the old version. After commit, the target
-is authoritative and the service manager's ordinary restart policy applies.
-
-## Database rollback
-
-After the old child exits, the launcher snapshots SQLite's main file, WAL, and
-shared-memory file. This makes trial migrations reversible without down
-migrations. The snapshot is made once per update and survives launcher restarts;
-replacing it during a retry could capture changes from the failed trial.
-
-Rollback stops the trial before restoring. A durable restore marker makes an
-interrupted restore finish before either version boots. Keep the snapshot until
-commit, or until both restoration and the terminal rollback state are durable.
-Attachments and other files outside SQLite are outside this rollback boundary.
-
-## Client acknowledgement
-
-An accepted update is still pending. Clients correlate the launcher's update ID
-with the ready event after reconnecting, then check the outcome and target version.
-A reconnect alone cannot distinguish successful replacement from rollback. Older
-servers without an update ID retain version-only correlation.
-
-Desktop updates have a separate two-phase handoff because installing the app stops
-its bundled backend. Preparation returns a token while the connection is alive;
-the client commits that token only after receiving it. Otherwise backend shutdown
-could lose the only successful RPC result. The client must then observe the
-prepared version after reconnecting. If installation fails, desktop restarts the
-stopped backends and replays the failure for the same token.
+Settings > About checks stable GitHub releases in `jake-molnia/t3code`. A release
+is newer only when GitHub's commit comparison reports that its tag descends from
+the deployed fork revision. Upstream release numbers cannot order fork builds.
+Divergent history, a missing release, rate limits, and offline checks are treated
+as unavailable. Checks are lazy, cached for one hour, and bounded to five seconds.
+The notice links to release details; deployment remains an operator action.
 
 ## Recovering interrupted threads
 
@@ -70,7 +34,7 @@ its continuation tells the provider what will not report back.
 Recovery retires effects tied to the lost process and records continuation intent
 in the durable outbox. That intent survives another restart before provider startup.
 Continuation effects wait for activation; a slow provider must not delay the server's
-readiness or the launcher's commit boundary. Graceful shutdown captures intent before
+readiness. Graceful shutdown captures intent before
 closing providers, then reconciles after ingestion has stopped so a late completion
 cannot be overwritten by a stale cancellation.
 
