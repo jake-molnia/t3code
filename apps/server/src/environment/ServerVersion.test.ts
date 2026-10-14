@@ -13,7 +13,17 @@ import * as ServerEnvironment from "./ServerEnvironment.ts";
 import * as ServerVersion from "./ServerVersion.ts";
 
 const revision = "a".repeat(40);
-const release = { tag_name: "sandbox-v8", draft: false, prerelease: false };
+const publishedRevision = "b".repeat(40);
+const publishedBuild = {
+  id: 123,
+  head_sha: publishedRevision,
+  head_branch: "main",
+  head_repository: { full_name: SERVER_SOURCE_REPOSITORY },
+  path: ".github/workflows/sandbox-images.yml",
+  event: "push",
+  status: "completed",
+  conclusion: "success",
+};
 const environment = (sourceRevision: string | null) =>
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
     getEnvironmentId: Effect.succeed(EnvironmentId.make("test")),
@@ -36,15 +46,15 @@ function fixture(
   options: {
     revision?: string | null;
     status?: number;
-    release?: unknown;
+    builds?: unknown;
     comparison?: unknown;
   } = {},
 ) {
   const requests: string[] = [];
-  const http = HttpClient.make((request) => {
-    requests.push(`${request.method} ${request.url}`);
-    const body = request.url.endsWith("releases/latest")
-      ? (options.release ?? release)
+  const http = HttpClient.make((request, url) => {
+    requests.push(`${request.method} ${url}`);
+    const body = url.pathname.endsWith("/runs")
+      ? (options.builds ?? { workflow_runs: [publishedBuild] })
       : (options.comparison ?? { status: "ahead" });
     return Effect.succeed(
       HttpClientResponse.fromWeb(request, Response.json(body, { status: options.status ?? 200 })),
@@ -57,19 +67,19 @@ function fixture(
   return { layer, requests };
 }
 
-it.effect("reports only a descendant fork release and caches read-only requests", () => {
+it.effect("reports a published descendant image and caches read-only requests", () => {
   const { layer, requests } = fixture();
   return Effect.gen(function* () {
     const service = yield* ServerVersion.ServerVersion;
     expect(yield* service.check).toEqual({
       status: "available",
-      tag: "sandbox-v8",
-      url: "https://github.com/jake-molnia/t3code/releases/tag/sandbox-v8",
+      revision: publishedRevision,
+      url: "https://github.com/jake-molnia/t3code/actions/runs/123",
     });
     yield* service.check;
     expect(requests).toEqual([
-      "GET https://api.github.com/repos/jake-molnia/t3code/releases/latest",
-      `GET https://api.github.com/repos/jake-molnia/t3code/compare/${revision}...sandbox-v8`,
+      "GET https://api.github.com/repos/jake-molnia/t3code/actions/workflows/sandbox-images.yml/runs?branch=main&status=success&per_page=1",
+      `GET https://api.github.com/repos/jake-molnia/t3code/compare/${revision}...${publishedRevision}`,
     ]);
     yield* TestClock.adjust("1 hour");
     yield* service.check;
@@ -77,8 +87,24 @@ it.effect("reports only a descendant fork release and caches read-only requests"
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("accepts a successful manual publication from main", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerVersion.ServerVersion;
+    expect(yield* service.check).toMatchObject({
+      status: "available",
+      revision: publishedRevision,
+    });
+  }).pipe(
+    Effect.provide(
+      fixture({
+        builds: { workflow_runs: [{ ...publishedBuild, event: "workflow_dispatch" }] },
+      }).layer,
+    ),
+  ),
+);
+
 it.effect.each(["behind", "identical"])(
-  "does not advertise an older or identical release: %s",
+  "does not advertise an older or identical published image: %s",
   (status) =>
     Effect.gen(function* () {
       const service = yield* ServerVersion.ServerVersion;
@@ -90,12 +116,21 @@ it.effect.each([
   { status: 404 },
   { status: 429 },
   { status: 503 },
-  { release: { tag_name: "bad" } },
-  { release: { ...release, draft: true } },
-  { release: { ...release, prerelease: true } },
+  { builds: {} },
+  { builds: { workflow_runs: [] } },
+  ...[
+    { conclusion: "failure" },
+    { conclusion: "cancelled" },
+    { status: "in_progress", conclusion: null },
+    { head_branch: "feature" },
+    { event: "pull_request" },
+    { head_repository: { full_name: "other/fork" } },
+    { path: ".github/workflows/ci.yml" },
+    { head_sha: "not-a-revision" },
+  ].map((overrides) => ({ builds: { workflow_runs: [{ ...publishedBuild, ...overrides }] } })),
   { comparison: { status: "diverged" } },
   { comparison: { status: "unexpected" } },
-])("degrades unavailable or incomparable releases to a passive notice: %j", (options) =>
+])("degrades unpublished or incomparable images to a passive notice: %j", (options) =>
   Effect.gen(function* () {
     const service = yield* ServerVersion.ServerVersion;
     expect(yield* service.check).toEqual({ status: "unavailable" });

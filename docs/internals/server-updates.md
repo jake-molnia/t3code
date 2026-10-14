@@ -13,12 +13,19 @@ The package version retains the fork's `.sandbox.N` suffix. The upstream baselin
 is that version before the sandbox suffix; neither identifies the deployed fork
 commit.
 
-Settings > About checks stable GitHub releases in `jake-molnia/t3code`. A release
-is newer only when GitHub's commit comparison reports that its tag descends from
-the deployed fork revision. Upstream release numbers cannot order fork builds.
-Divergent history, a missing release, rate limits, and offline checks are treated
-as unavailable. Checks are lazy, cached for one hour, and bounded to five seconds.
-The notice links to release details; deployment remains an operator action.
+Settings > About follows the successful `main` runs of
+[the sandbox-image workflow](../../.github/workflows/sandbox-images.yml), which
+verifies and publishes both images before succeeding. GitHub Releases are not
+this fork's publication channel. The check uses the newest successful run's
+source revision, not the current branch head, so a failed or incomplete build
+cannot advertise an unpublished image. A successful manual run on `main` also
+qualifies. The notice links to the build's verified image tags and digests.
+
+An image is newer only when GitHub's commit comparison reports that its source
+descends from the deployed fork revision. Upstream release numbers cannot order
+fork builds. Divergent history, missing successful builds, rate limits, and
+offline checks are treated as unavailable. Checks are lazy, cached for one hour,
+and bounded to five seconds. Deployment remains an operator action.
 
 ## Recovering interrupted threads
 

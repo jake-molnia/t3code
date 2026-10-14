@@ -1,5 +1,5 @@
 import {
-  SERVER_RELEASES_URL,
+  SERVER_IMAGE_WORKFLOW,
   SERVER_SOURCE_REPOSITORY,
   type ServerReleaseNotice,
 } from "@t3tools/contracts";
@@ -10,10 +10,19 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
 
-const Release = Schema.Struct({
-  tag_name: Schema.String.check(Schema.isMinLength(1)),
-  draft: Schema.Boolean,
-  prerelease: Schema.Boolean,
+const PublishedImageBuilds = Schema.Struct({
+  workflow_runs: Schema.Array(
+    Schema.Struct({
+      id: Schema.Int.check(Schema.isGreaterThan(0)),
+      head_sha: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
+      head_branch: Schema.Literal("main"),
+      head_repository: Schema.Struct({ full_name: Schema.Literal(SERVER_SOURCE_REPOSITORY) }),
+      path: Schema.Literal(`.github/workflows/${SERVER_IMAGE_WORKFLOW}`),
+      event: Schema.Literals(["push", "workflow_dispatch"]),
+      status: Schema.Literal("completed"),
+      conclusion: Schema.Literal("success"),
+    }),
+  ),
 });
 const Comparison = Schema.Struct({
   status: Schema.Literals(["ahead", "behind", "identical", "diverged"]),
@@ -44,21 +53,22 @@ const make = Effect.gen(function* () {
 
   const check = yield* Effect.gen(function* () {
     if (!revision) return { status: "unconfigured" } as const;
-    const release = yield* get("releases/latest").pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Release)),
+    const builds = yield* get(
+      `actions/workflows/${SERVER_IMAGE_WORKFLOW}/runs?branch=main&status=success&per_page=1`,
+    ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(PublishedImageBuilds)));
+    const build = builds.workflow_runs[0];
+    if (!build) return { status: "unavailable" } as const;
+    // This workflow succeeds only after verifying and publishing both images.
+    // Compare its source revision, never an unbuilt branch head or upstream version.
+    const comparison = yield* get(`compare/${revision}...${build.head_sha}`).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(Comparison)),
     );
-    if (release.draft || release.prerelease) return { status: "unavailable" } as const;
-    // Fork commits do not inherit the ordering of upstream package versions.
-    // Only a release descending from the deployed revision is a newer release.
-    const comparison = yield* get(
-      `compare/${revision}...${encodeURIComponent(release.tag_name)}`,
-    ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Comparison)));
     switch (comparison.status) {
       case "ahead":
         return {
           status: "available",
-          tag: release.tag_name,
-          url: `${SERVER_RELEASES_URL}/tag/${encodeURIComponent(release.tag_name)}`,
+          revision: build.head_sha,
+          url: `https://github.com/${SERVER_SOURCE_REPOSITORY}/actions/runs/${build.id}`,
         } as const;
       case "behind":
       case "identical":

@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { SERVER_RELEASES_URL } from "@t3tools/contracts";
+import { SERVER_IMAGE_BUILDS_URL } from "@t3tools/contracts";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { primaryServerConfigAtom, serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
@@ -33,17 +33,17 @@ export function ServerVersionSection() {
           </span>
           {release?.status === "available" ? (
             <span className="block">
-              A newer fork release is available: {release.tag}. Updates are managed by the
-              deployment administrator.
+              A newer server image is available: {release.revision.slice(0, 12)}. Updates are
+              managed by the deployment administrator.
             </span>
           ) : release?.status === "current" ? (
-            <span className="block">No newer fork release found.</span>
+            <span className="block">No newer published server image found.</span>
           ) : notice.isPending ? (
-            <span className="block">Checking fork releases…</span>
+            <span className="block">Checking published server images…</span>
           ) : release?.status === "unavailable" || notice.error ? (
-            <span className="block">Release check unavailable. You can still view releases.</span>
+            <span className="block">Image check unavailable. You can still view image builds.</span>
           ) : (
-            <span className="block">Release comparison requires a recorded fork revision.</span>
+            <span className="block">Image comparison requires a recorded fork revision.</span>
           )}
         </span>
       }
@@ -53,13 +53,13 @@ export function ServerVersionSection() {
           variant="outline"
           render={
             <a
-              href={release?.status === "available" ? release.url : SERVER_RELEASES_URL}
+              href={release?.status === "available" ? release.url : SERVER_IMAGE_BUILDS_URL}
               target="_blank"
               rel="noreferrer noopener"
             />
           }
         >
-          View releases
+          View image builds
         </Button>
       }
     />

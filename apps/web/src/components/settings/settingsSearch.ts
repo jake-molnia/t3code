@@ -534,7 +534,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "app-version",
     title: "Version",
     to: "/settings/general",
-    searchTerms: ["about server version fork revision upstream baseline releases deployment"],
+    searchTerms: ["about server version fork revision upstream baseline image builds deployment"],
   },
   {
     id: "cli-command",
