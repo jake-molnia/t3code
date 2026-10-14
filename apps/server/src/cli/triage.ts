@@ -183,15 +183,15 @@ export const triageCommand = Command.make("triage", {
       yield* fs.makeDirectory(scratchDir, { recursive: true });
 
       const version = packageJson.version;
+      const sourceRevision = (yield* HostProcess.Environment).T3_SOURCE_REVISION?.trim();
       const contextFilePath = path.join(scratchDir, "context.md");
       yield* fs.writeFileString(
         contextFilePath,
         buildTriageContext({
           generatedAt: DateTime.formatIso(now),
           version,
-          releaseTag: /^[^-+]+-(?:nightly|preview)\./.test(version)
-            ? `v${version} (prerelease build; if this tag does not exist, clone main)`
-            : `v${version}`,
+          sourceRevision:
+            sourceRevision && /^[0-9a-f]{40}$/.test(sourceRevision) ? sourceRevision : null,
           os: `${yield* HostProcess.Platform} ${yield* HostProcess.Architecture} (${NodeOS.release()})`,
           nodeVersion: process.version,
           launchedAs: yield* resolveCliCommand("triage"),
@@ -201,11 +201,6 @@ export const triageCommand = Command.make("triage", {
             dbPath: paths.dbPath,
             settingsPath: paths.settingsPath,
             logsDir: paths.logsDir,
-            // The server writes no log file of its own. Service installs and the
-            // desktop app capture its output. The glob covers every desktop backend
-            // (such as WSL) and rotated copies; names come from DesktopObservability.ts.
-            serviceLogPath: path.join(paths.logsDir, "boot-service.log"),
-            desktopBackendLogGlob: path.join(paths.logsDir, "server-child*.log*"),
             serverTracePath: paths.serverTracePath,
             providerEventLogPath: paths.providerEventLogPath,
             terminalLogsDir: paths.terminalLogsDir,
