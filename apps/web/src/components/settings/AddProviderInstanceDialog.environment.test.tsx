@@ -54,7 +54,7 @@ vi.mock("../ui/toast", () => ({ toastManager: { add: actions.toast } }));
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 
 const remoteEnvironmentId = EnvironmentId.make("remote-device");
-const preparedAgent: AcpRegistrySearchAgent = {
+const selectedAgent: AcpRegistrySearchAgent = {
   id: "kilo",
   name: "Kilo Code",
   version: "4.2.0",
@@ -84,7 +84,7 @@ function findByChildren(tree: ReturnType<typeof render>, children: string) {
   return result!;
 }
 
-async function selectPreparedAcp() {
+async function selectRegistryAcp() {
   const searchStep = render();
   const search = visitElements(
     searchStep,
@@ -92,8 +92,8 @@ async function selectPreparedAcp() {
       typeof element.type === "function" && element.type.name === "AcpRegistrySearchStep",
   );
   expect(search).not.toBeNull();
-  (search?.props.onPrepared as ((agent: AcpRegistrySearchAgent) => void) | undefined)?.(
-    preparedAgent,
+  (search?.props.onSelected as ((agent: AcpRegistrySearchAgent) => void) | undefined)?.(
+    selectedAgent,
   );
 }
 
@@ -195,7 +195,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     expect(settingsHooks.useMutation).toHaveBeenCalledWith(remoteEnvironmentId);
   });
 
-  it("awaits an atomic create before closing and retains prepared ACP metadata", async () => {
+  it("awaits an atomic create before closing and retains selected ACP metadata", async () => {
     const onOpenChange = vi.fn();
     let resolveMutation!: (value: { readonly _tag: "Success"; readonly value: unknown }) => void;
     settingsHooks.mutate.mockReturnValueOnce(
@@ -203,7 +203,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
         resolveMutation = resolve;
       }),
     );
-    await selectPreparedAcp();
+    await selectRegistryAcp();
 
     const identityStep = render(onOpenChange);
     expect(
@@ -362,7 +362,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
   it("keeps the dialog open when the atomic upsert fails", async () => {
     settingsHooks.mutate.mockResolvedValueOnce({ _tag: "Failure", cause: new Error("Conflict") });
     const onOpenChange = vi.fn();
-    await selectPreparedAcp();
+    await selectRegistryAcp();
 
     const identityStep = render(onOpenChange);
     (
