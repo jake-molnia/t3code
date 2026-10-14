@@ -6,8 +6,10 @@ import { validateHarnessLaunch } from "./HarnessDefaults.ts";
 import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
 import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CredentialSources from "./credentialSources.ts";
+import * as AntigravityCredentials from "../provider/AntigravityCredentials.ts";
 import * as CursorCredentialStore from "@t3tools/provider-cursor/server/credentialStore";
 import * as C from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -89,6 +91,9 @@ export const ReviewGuideInput = Schema.Struct({
 });
 export const ReviewGuideResult = Schema.Struct({ stops: C.PullRequestReviewGuide.fields.stops });
 const decodeReviewGuideInput = Schema.decodeUnknownEffect(Schema.toCodecJson(ReviewGuideInput));
+const decodeAntigravityCredentials = Schema.decodeUnknownEffect(
+  AntigravityCredentials.ExecutionCredentials,
+);
 const decodeRpcValue = Schema.decodeUnknownEffect(Schema.toCodecJson(ConfigureProvider));
 const decodeOwnerSessionIdInput = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -122,7 +127,11 @@ export const make = Effect.gen(function* () {
   const gateway = createModelGatewayCatalog({ directory: `${config.baseDir}/harnesses` });
   const refreshGateway = Effect.tryPromise(() => gateway.refresh());
   const credentialContext = yield* Effect.context<
-    Crypto.Crypto | FileSystem.FileSystem | ServerSecretStore.ServerSecretStore
+    | Crypto.Crypto
+    | FileSystem.FileSystem
+    | ServerSecretStore.ServerSecretStore
+    | ProviderHost.ProviderHost
+    | Path.Path
   >();
   const sources = yield* CredentialSources.CredentialSources;
   const authOwners = new Map<C.ProviderInstanceId, Set<string>>();
@@ -181,6 +190,15 @@ export const make = Effect.gen(function* () {
           command.instanceId,
           yield* Schema.decodeUnknownEffect(CredentialSources.CredentialSource)(command.input),
         );
+        return null;
+      }
+      if (
+        instance.driverKind === "antigravity" &&
+        (method === "auth.executionCredentials" || method === "auth.importExecutionCredentials")
+      ) {
+        const credentials = yield* AntigravityCredentials.make(command.instanceId);
+        if (method === "auth.executionCredentials") return yield* credentials.load;
+        yield* credentials.save(yield* decodeAntigravityCredentials(command.input));
         return null;
       }
       if (method === "auth.executionCredentials") {
@@ -283,6 +301,11 @@ export const make = Effect.gen(function* () {
           return yield* encodeServerProvider(
             gateway.snapshot(yield* instance.snapshot.getSnapshot),
           );
+        case "provider.refreshModels":
+          if (!instance.refreshModels)
+            return yield* new WorkerProviderError({ operation: "models_unavailable" });
+          yield* instance.refreshModels();
+          return null;
         case "provider.refresh":
           return yield* encodeServerProvider(gateway.snapshot(yield* instance.snapshot.refresh));
         case "provider.snapshotForCwd": {

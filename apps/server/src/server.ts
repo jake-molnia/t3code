@@ -1,5 +1,6 @@
 import * as InferenceProxy from "./modelGateway/InferenceProxy.ts";
 import * as ModelGateway from "./modelGateway/ModelGateway.ts";
+import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import * as RemoteUsageHistory from "./agentRuntime/UsageHistory.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as RemoteProjectMetadata from "./agentRuntime/RemoteProjectMetadata.ts";
@@ -286,6 +287,7 @@ const layerUsageHistory = RemoteUsageHistory.layer.pipe(Layer.provide(layerPersi
 const layerUsage = UsageService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      AntigravityUsage.layer,
       CursorUsageAccounts.layer.pipe(
         Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
       ),

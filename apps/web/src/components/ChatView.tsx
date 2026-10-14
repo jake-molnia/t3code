@@ -481,6 +481,7 @@ import {
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveComposerInteractionMode,
+  getAntigravitySendBlockReason,
   resolveComposerProviderSelection,
   resolveFileAttachmentUrl,
   resolveProactiveTurnDiffAction,
@@ -9079,6 +9080,11 @@ export default function ChatView(props: ChatViewProps) {
           threadIdForSend,
           `Choose a compatible pool for ${selection.model} before sending.`,
         );
+        return;
+      }
+      const providerBlockReason = getAntigravitySendBlockReason(provider.snapshot, selection.model);
+      if (providerBlockReason) {
+        setThreadError(threadIdForSend, providerBlockReason);
         return;
       }
       const providerState = getComposerProviderState({

@@ -1,3 +1,4 @@
+import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -403,6 +404,7 @@ const awaitPersistedProvider = (
 const layerTestNodeServices = Layer.mergeAll(
   NodeServices.layer,
   Layer.mock(CodexInstallation.CodexInstallation)({}),
+  Layer.mock(AntigravityInstallation.AntigravityInstallation)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
     getEnvironmentId: Effect.succeed(EnvironmentId.make("00000000-0000-4000-8000-000000000001")),
@@ -2857,6 +2859,7 @@ it.layer(
             );
 
             assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
+              "antigravity",
               "claudeAgent",
               "codex",
               "cursor",
@@ -2871,6 +2874,11 @@ it.layer(
             const museProvider = providers.find((provider) => provider.driver === "muse");
             assert.strictEqual(museProvider?.enabled, false);
             assert.strictEqual(museProvider?.status, "disabled");
+            const antigravityProvider = providers.find(
+              (provider) => provider.driver === "antigravity",
+            );
+            assert.strictEqual(antigravityProvider?.enabled, false);
+            assert.strictEqual(antigravityProvider?.status, "disabled");
             assert.strictEqual(cursorSpawned, false);
           }).pipe(Effect.provide(runtimeServices));
         }),

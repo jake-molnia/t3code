@@ -1,11 +1,11 @@
-import fs from "node:fs";
-import path from "node:path";
-import { spawnSync } from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
 
-const manifest = JSON.parse(fs.readFileSync("/opt/t3/providers.lock.json", "utf8"));
+const manifest = JSON.parse(NodeFS.readFileSync("/opt/t3/providers.lock.json", "utf8"));
 const results = [];
 function probe(name, binary, args, expected) {
-  const result = spawnSync(binary, args, {
+  const result = NodeChildProcess.spawnSync(binary, args, {
     timeout: 60_000,
     encoding: "utf8",
     env: { ...process.env, CI: "1" },
@@ -18,9 +18,26 @@ function probe(name, binary, args, expected) {
   return output;
 }
 for (const [driver, spec] of Object.entries(manifest.harnesses)) {
-  if (spec.kind === "sdk") {
+  if (driver === "antigravity") {
+    const result = NodeChildProcess.spawnSync(
+      "python3",
+      ["/opt/t3/probe-antigravity.py", `/opt/native/bin/${spec.binary}`, spec.version],
+      { timeout: 100_000, encoding: "utf8" },
+    );
+    if (result.status !== 0)
+      throw new Error(`Antigravity native protocol probe failed: ${result.stderr}`);
+    results.push({
+      driver,
+      version: spec.version,
+      verified: "native-protocol",
+      ...JSON.parse(result.stdout),
+    });
+  } else if (spec.kind === "sdk") {
     const installed = JSON.parse(
-      fs.readFileSync(path.join("/opt/t3/node_modules", spec.package, "package.json"), "utf8"),
+      NodeFS.readFileSync(
+        NodePath.join("/opt/t3/node_modules", spec.package, "package.json"),
+        "utf8",
+      ),
     );
     if (installed.version !== spec.version)
       throw new Error(`${driver} SDK version differs from manifest`);
