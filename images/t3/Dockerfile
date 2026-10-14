@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY images/t3/install-code-server.sh /tmp/
 RUN sh /tmp/install-code-server.sh "${TARGETARCH}" /opt/code-server
 
-FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:75ba12eae619c4944d51e35bdf8998655ec7342a0a8a92d3139073397b77bf2b AS t3-worker
+FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:accc2fdce07aa859dc86a59549e0d12baea04aeced200533475281e7f0347d84 AS t3-worker
 ARG TARGETARCH
 RUN test "$TARGETARCH" = amd64 \
     && apt-get update && apt-get install -y --no-install-recommends ca-certificates git git-lfs openssh-client python3 python3-venv ripgrep tini lsof procps chromium make g++ libffi8 libssl3t64 libbz2-1.0 libuuid1 zlib1g \
