@@ -95,6 +95,7 @@ describe("ServerBrowserContexts", () => {
     ]);
     expect(first).toBe(child);
     expect(first).toBe(context);
+    expect(pool.isHeadfulContext(first)).toBe(true);
     expect(launches.connect).toHaveBeenCalledTimes(1);
     expect(launches.launch).not.toHaveBeenCalled();
     expect(launches.persistent).not.toHaveBeenCalled();
@@ -202,6 +203,8 @@ describe("ServerBrowserContexts", () => {
     const [a, reused, b, privateContext] = await Promise.all([first, again, second, incognito]);
     expect(a).toBe(reused);
     expect(new Set([a, b, privateContext]).size).toBe(3);
+    for (const context of [a, b, privateContext])
+      expect(pool.isHeadfulContext(context)).toBe(false);
     expect(launches.launch).toHaveBeenCalledTimes(1);
     expect(launches.persistent).not.toHaveBeenCalled();
     expect(browser.newContext).toHaveBeenCalledWith({
@@ -220,6 +223,7 @@ describe("ServerBrowserContexts", () => {
     launches.launch.mockResolvedValue(browser as unknown as Browser);
     const pool = new ServerBrowserContexts(options());
     const persistent = await pool.contextFor("work/team");
+    expect(pool.isHeadfulContext(persistent)).toBe(false);
     expect(await pool.contextFor("work/team")).toBe(persistent);
     expect(await pool.contextFor("work/team", "agent")).not.toBe(persistent);
     expect(launches.persistent).toHaveBeenCalledExactlyOnceWith(
