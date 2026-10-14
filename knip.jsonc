@@ -17,9 +17,14 @@
       "vitest": { "entry": [".github/**/*.test.cjs"] },
     },
     "scripts": {
-      // Knip loads its preprocessor through a CLI option; native verification and
-      // worktree setup (from t3.json) run directly.
-      "entry": ["knip-schemas.ts", "setup-worktree.ts"],
+      // CLI entry points run directly by maintainers; setup-worktree also runs from t3.json.
+      "entry": [
+        "knip-schemas.ts",
+        "setup-worktree.ts",
+        "apply-web-brand-assets.ts",
+        "export-brand-icons.ts",
+        "smoke-cli-archive.ts",
+      ],
     },
     "apps/server": {
       // Vite+ pack entries and the launcher used by installed background services.
@@ -37,7 +42,7 @@
       // Keep the transitive Effect runtime pinned for standalone npm installs.
       // The Vite+ web build prerequisite.
       // Native and disk-loaded provider packages stay external to the bundle; the
-      // CLI archive and desktop sidecar stage them from this manifest.
+      // CLI archive stages them from this manifest.
       "ignoreDependencies": ["@effect/platform-node-shared", "@t3tools/web", "@napi-rs/keyring"],
     },
     "apps/web": {

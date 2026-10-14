@@ -282,9 +282,6 @@ importers:
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
-      yauzl:
-        specifier: ^3.4.0
-        version: 3.4.0
     devDependencies:
       '@effect/vitest':
         specifier: 4.0.2
@@ -304,9 +301,6 @@ importers:
       '@t3tools/source-control-testing':
         specifier: workspace:*
         version: link:../../packages/source-control-testing
-      '@t3tools/ssh':
-        specifier: workspace:*
-        version: link:../../packages/ssh
       '@t3tools/tailscale':
         specifier: workspace:*
         version: link:../../packages/tailscale
@@ -319,9 +313,6 @@ importers:
       '@types/proper-lockfile':
         specifier: ^4.1.4
         version: 4.1.4
-      '@types/yauzl':
-        specifier: ^3.4.0
-        version: 3.4.0
       effect-acp:
         specifier: workspace:*
         version: link:../../packages/effect-acp
