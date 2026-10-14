@@ -54,6 +54,8 @@ import {
   type ProviderStatusKey,
 } from "./providerStatus";
 
+const HARNESS_EXECUTION_FIELDS = ["binaryPath", "homePath", "launchArgs", "autoCompactWindow"];
+
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 function ProviderStatusDiagnostic({
@@ -973,6 +975,7 @@ export function ProviderInstanceCard({
   const runtimeFields = driverOption ? (
     <ProviderSettingsForm
       definition={driverOption}
+      fieldKeys={gatewayManaged ? HARNESS_EXECUTION_FIELDS : undefined}
       value={instance.config}
       idPrefix={`provider-instance-${instanceId}`}
       variant="settings"
@@ -1086,8 +1089,11 @@ export function ProviderInstanceCard({
         </SettingsSection>
       ) : null}
 
-      {gatewayManaged ? null : instance.driver === "codex" &&
-        readCodexSetupMode(instance.config) === "managed" ? (
+      {gatewayManaged ? (
+        <SettingsSection title="Execution" inert={readOnly} aria-disabled={readOnly || undefined}>
+          {runtimeFields}
+        </SettingsSection>
+      ) : instance.driver === "codex" && readCodexSetupMode(instance.config) === "managed" ? (
         <div
           inert={readOnly}
           aria-disabled={readOnly || undefined}

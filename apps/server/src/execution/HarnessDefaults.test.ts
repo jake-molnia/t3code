@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "@effect/vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
 import {
   harnessDefaults,
+  gatewayRouting,
   sandboxPolicy,
   validateHarnessLaunch,
   deploymentHarnessDefaults,
@@ -10,17 +11,20 @@ import {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("sandbox harness defaults", () => {
-  it("requires a bundled routing manifest only in explicit gateway mode", () => {
+  it("refuses missing model-access configuration in the shipped worker", () => {
     vi.stubEnv("T3_HARNESS_DEFAULTS_FILE", "");
     vi.stubEnv("T3_GATEWAY_HARNESS_CONFIG_FILE", "");
     vi.stubEnv("T3_GATEWAY_URL", "");
     const instance = { driver: ProviderDriverKind.make("codex"), config: { setupMode: "managed" } };
     expect(deploymentHarnessDefaults()(instance)).toBe(instance);
+    vi.stubEnv("T3_GATEWAY_HARNESS_CONFIG_FILE", "/opt/t3/gateway-harnesses.json");
+    expect(() => deploymentHarnessDefaults()).toThrow("Model access requires");
     vi.stubEnv("T3_GATEWAY_URL", "http://gateway");
-    expect(() => deploymentHarnessDefaults()).toThrow("requires T3_GATEWAY_HARNESS_CONFIG_FILE");
+    vi.stubEnv("T3_GATEWAY_API_KEY", "");
+    expect(() => deploymentHarnessDefaults()).toThrow("Model access requires");
   });
-  it("owns routing in gateway mode while preserving unrelated native settings", () => {
-    const apply = harnessDefaults(
+  it("preserves execution options while giving the gateway ownership of model access", () => {
+    const apply = gatewayRouting(
       JSON.stringify({
         codex: {
           config: { setupMode: "existing", launchArgs: "${T3_GATEWAY_URL}/v1" },
@@ -30,7 +34,6 @@ describe("sandbox harness defaults", () => {
         },
       }),
       { T3_GATEWAY_URL: "http://gateway", T3_GATEWAY_API_KEY: "gateway-key" },
-      "gateway",
     );
     const instance = {
       driver: ProviderDriverKind.make("codex"),
@@ -44,7 +47,7 @@ describe("sandbox harness defaults", () => {
       ...instance,
       config: {
         setupMode: "existing",
-        launchArgs: "http://gateway/v1",
+        launchArgs: "native-route http://gateway/v1",
         binaryPath: "/native/codex",
       },
       environment: [
@@ -53,6 +56,41 @@ describe("sandbox harness defaults", () => {
       ],
     });
     expect(apply({ ...instance, enabled: false })).toEqual({ ...instance, enabled: false });
+  });
+  it("does not let native account tokens override gateway credentials", () => {
+    const apply = gatewayRouting(
+      JSON.stringify({
+        claudeAgent: {
+          environment: [
+            { name: "ANTHROPIC_API_KEY", value: "${T3_GATEWAY_API_KEY}", sensitive: true },
+          ],
+        },
+      }),
+      { T3_GATEWAY_API_KEY: "gateway-key" },
+    );
+    const instance = {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      config: { autoCompactWindow: "250000", binaryPath: "/tools/claude" },
+      environment: [
+        { name: "CLAUDE_CODE_OAUTH_TOKEN", value: "native-account", sensitive: true },
+        { name: "ANTHROPIC_AUTH_TOKEN", value: "other-account", sensitive: true },
+        { name: "CLAUDE_CODE_USE_VERTEX", value: "1", sensitive: false },
+        { name: "BUILD_MODE", value: "debug", sensitive: false },
+      ],
+    };
+    expect(apply(instance)).toEqual({
+      ...instance,
+      environment: [
+        { name: "CLAUDE_CODE_OAUTH_TOKEN", value: "", sensitive: true },
+        { name: "ANTHROPIC_AUTH_TOKEN", value: "", sensitive: true },
+        { name: "CLAUDE_CODE_USE_VERTEX", value: "0", sensitive: false },
+        { name: "BUILD_MODE", value: "debug", sensitive: false },
+        { name: "CLAUDE_CODE_USE_BEDROCK", value: "0", sensitive: false },
+        { name: "CLAUDE_CODE_USE_FOUNDRY", value: "0", sensitive: false },
+        { name: "ANTHROPIC_API_KEY", value: "gateway-key", sensitive: true },
+      ],
+    });
+    expect(instance.environment).toHaveLength(4);
   });
   it("resolves operator credentials privately and preserves native instance settings", () => {
     const apply = harnessDefaults(

@@ -26,7 +26,6 @@ const decodeConfig = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schem
 export function harnessDefaults(
   text: string | undefined,
   environment: NodeJS.ProcessEnv = process.env,
-  mode: "defaults" | "gateway" = "defaults",
 ): (instance: ProviderInstanceConfig) => ProviderInstanceConfig {
   const defaults = text === undefined ? {} : decodeDefaults(text);
   const expand = (value: string): string =>
@@ -49,7 +48,7 @@ export function harnessDefaults(
     if (!override || instance.enabled === false) return instance;
     const variables = new Map((instance.environment ?? []).map((entry) => [entry.name, entry]));
     for (const entry of override.environment ?? [])
-      if (mode === "gateway" || !variables.has(entry.name))
+      if (!variables.has(entry.name))
         variables.set(entry.name, { ...entry, value: expand(entry.value) });
     const config = decodeConfig(instance.config ?? {});
     const configured =
@@ -57,15 +56,14 @@ export function harnessDefaults(
         ? undefined
         : Object.fromEntries(
             Object.entries(override.config)
-              .filter(([key]) => mode === "gateway" || !(key in config))
+              .filter(([key]) => !(key in config))
               .map(([key, value]) => [key, expandConfig(value)]),
           );
     return {
       ...instance,
       ...(configured
         ? {
-            config:
-              mode === "gateway" ? { ...config, ...configured } : { ...configured, ...config },
+            config: { ...configured, ...config },
           }
         : {}),
       environment: [...variables.values()],
@@ -89,14 +87,52 @@ export function validateHarnessLaunch(
   }
 }
 
+/** Model access belongs to the gateway; execution fields remain owned by the harness. */
+export function gatewayRouting(text: string, environment: NodeJS.ProcessEnv = process.env) {
+  const resolve = harnessDefaults(text, environment);
+  return (instance: ProviderInstanceConfig): ProviderInstanceConfig => {
+    if (instance.enabled === false) return instance;
+    const route = resolve({ driver: instance.driver });
+    const execution = decodeConfig(instance.config ?? {});
+    const routing = decodeConfig(route.config ?? {});
+    const launchArgs =
+      typeof routing.launchArgs === "string" && typeof execution.launchArgs === "string"
+        ? [execution.launchArgs, routing.launchArgs].filter(Boolean).join(" ")
+        : routing.launchArgs;
+    const variables = new Map((instance.environment ?? []).map((entry) => [entry.name, entry]));
+    if (instance.driver === "claudeAgent") {
+      // Empty credentials override an inherited token in the process environment too.
+      for (const name of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"])
+        variables.set(name, { name, value: "", sensitive: true });
+      for (const name of [
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+      ])
+        variables.set(name, { name, value: "0", sensitive: false });
+    }
+    for (const entry of route.environment ?? []) variables.set(entry.name, entry);
+    return {
+      ...instance,
+      config: { ...execution, ...routing, ...(launchArgs !== undefined ? { launchArgs } : {}) },
+      environment: [...variables.values()],
+    };
+  };
+}
+
 export function deploymentHarnessDefaults() {
-  const path = process.env.T3_HARNESS_DEFAULTS_FILE;
-  const defaults = harnessDefaults(path ? NodeFS.readFileSync(path, "utf8") : undefined);
-  if (!process.env.T3_GATEWAY_URL) return defaults;
   const gatewayPath = process.env.T3_GATEWAY_HARNESS_CONFIG_FILE;
-  if (!gatewayPath) throw new Error("Gateway execution requires T3_GATEWAY_HARNESS_CONFIG_FILE");
-  const gateway = harnessDefaults(NodeFS.readFileSync(gatewayPath, "utf8"), process.env, "gateway");
-  return (instance: ProviderInstanceConfig) => gateway(defaults(instance));
+  // The shipped worker always has this manifest. A missing address is a setup error,
+  // not an instruction to switch account ownership back to a native provider.
+  if (gatewayPath || process.env.T3_GATEWAY_URL) {
+    if (!gatewayPath || !process.env.T3_GATEWAY_URL || !process.env.T3_GATEWAY_API_KEY?.trim())
+      throw new Error(
+        "Model access requires T3_GATEWAY_HARNESS_CONFIG_FILE, T3_GATEWAY_URL, and T3_GATEWAY_API_KEY",
+      );
+    return gatewayRouting(NodeFS.readFileSync(gatewayPath, "utf8"));
+  }
+  const path = process.env.T3_HARNESS_DEFAULTS_FILE;
+  return harnessDefaults(path ? NodeFS.readFileSync(path, "utf8") : undefined);
 }
 
 export function sandboxPolicy(

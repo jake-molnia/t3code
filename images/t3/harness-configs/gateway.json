@@ -62,7 +62,6 @@
   },
   "opencode": {
     "config": {
-      "binaryPath": "opencode2",
       "serverUrl": ""
     },
     "environment": [
