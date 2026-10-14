@@ -131,7 +131,7 @@ const settlementAt = (snapshot: LifecycleSnapshot) => {
 };
 const decodeScriptResult = Schema.decodeUnknownEffect(Protocol.ScriptResult);
 const decodeStopReceipt = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(RuntimeClient.LifecycleStopRequest),
+  Schema.fromJsonString(RuntimeClient.LifecycleStopReceipt),
 );
 const failure = (operation: string) => (cause: unknown) =>
   new LifecyclePolicyError({ operation, cause });
@@ -151,7 +151,11 @@ export interface LifecyclePolicyPorts {
   ) => Effect.Effect<LifecycleSnapshot | null, LifecyclePolicyError>;
   readonly observe: (
     workspaceId: string,
-  ) => Effect.Effect<RuntimeClient.RuntimeObservation, LifecyclePolicyError>;
+  ) => Effect.Effect<
+    | RuntimeClient.RuntimeObservation
+    | { kind: "failed-stop"; failure: RuntimeClient.RuntimeStopFailed },
+    LifecyclePolicyError
+  >;
   readonly resume: (workspaceId: string) => Effect.Effect<ExecutionClient, LifecyclePolicyError>;
   readonly collectUsage: (
     client: ExecutionClient,
@@ -248,6 +252,30 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
         );
     const initialActivity = yield* activityGuard(snapshot);
     if (initialActivity !== null) return initialActivity;
+    if (observed.kind === "failed-stop") {
+      if (deferredDecision) return deferredDecision;
+      const { receipt } = observed.failure;
+      const fresh = yield* ports.read(threadId);
+      if (
+        !fresh ||
+        fresh.revision !== receipt.revision ||
+        fresh.revision !== snapshot.revision ||
+        fresh.pendingEffects ||
+        fresh.members.some(memberIsBusy) ||
+        settlementAt(fresh) !== settlementAt(snapshot)
+      )
+        return "stale" as const;
+      const action = settlementAt(fresh) === null ? "suspend" : "release_compute";
+      if (
+        receipt.action !== action ||
+        (action === "release_compute" && fresh.settleScript && !fresh.settlementProven)
+      )
+        return "stale" as const;
+      const beforeRetry = yield* activityGuard(fresh);
+      if (beforeRetry !== null) return beforeRetry;
+      yield* ports.stop(fresh, action, receipt.operationId, receipt.expectedIdentity);
+      return action === "suspend" ? ("suspend-submitted" as const) : ("release-submitted" as const);
+    }
     if (observed.kind === "stopped") {
       utilities.delete(snapshot.workspaceId);
       const settledAt = settlementAt(snapshot);
@@ -387,6 +415,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
       return "stale" as const;
     const latest = yield* ports.observe(snapshot.workspaceId);
     if (latest.kind === "stopped") return "stopped" as const;
+    if (latest.kind === "failed-stop") return "stale" as const;
     if (!sameIdentity(client.identity, latest.client.identity)) return "stale" as const;
     const action = settledAt === null ? "suspend" : "release_compute";
     const operationId =
@@ -566,12 +595,7 @@ export const make = Effect.gen(function* () {
         revision: number;
       }>`SELECT admission_revision AS revision FROM agent_runtime_workspaces WHERE workspace_id=${first.workspaceId}`;
       if (current[0]?.revision !== first.revision) return null;
-      const receipt =
-        first.receipt === null
-          ? null
-          : yield* Schema.decodeUnknownEffect(
-              Schema.fromJsonString(RuntimeClient.LifecycleStopRequest),
-            )(first.receipt);
+      const receipt = first.receipt === null ? null : yield* decodeStopReceipt(first.receipt);
       const settledAt =
         root.thread.settledOverride === "settled" ? millis(root.thread.settledAt) : null;
       const settlementProven =
@@ -628,7 +652,17 @@ export const make = Effect.gen(function* () {
         )
         .pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.mapError(failure("retire"))),
     observe: (workspaceId) =>
-      runtime.observeWorkspace(workspaceId).pipe(Effect.mapError(failure("observe"))),
+      runtime.observeWorkspace(workspaceId).pipe(
+        Effect.catchTags({
+          AgentRuntimeClientError: (error) => {
+            const failed = RuntimeClient.failedStop(error);
+            return failed
+              ? Effect.succeed({ kind: "failed-stop" as const, failure: failed })
+              : Effect.fail(error);
+          },
+        }),
+        Effect.mapError(failure("observe")),
+      ),
     resume: (workspaceId) =>
       runtime.forWorkspace(workspaceId).pipe(Effect.mapError(failure("resume-cleanup"))),
     collectUsage: (client, force) =>
