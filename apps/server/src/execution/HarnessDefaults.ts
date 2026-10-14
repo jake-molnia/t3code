@@ -1,10 +1,3 @@
-// @effect-diagnostics globalFetch:off -- Bounded bootstrap HTTP before provider service startup.
-import {
-  Catalog,
-  managedApertureCatalog,
-  nativeApertureConfigs,
-  setApertureCatalog,
-} from "./ApertureCatalog.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Worker deployment configuration boundary.
 import * as NodeFS from "node:fs";
 import type { ProviderInstanceConfig } from "@t3tools/contracts";
@@ -52,39 +45,29 @@ export function harnessDefaults(
   };
   return (instance) => {
     const override = defaults[instance.driver];
-    if (!override) return instance;
+    if (!override || instance.enabled === false) return instance;
     const variables = new Map((instance.environment ?? []).map((entry) => [entry.name, entry]));
     for (const entry of override.environment ?? [])
-      variables.set(entry.name, { ...entry, value: expand(entry.value) });
+      if (!variables.has(entry.name))
+        variables.set(entry.name, { ...entry, value: expand(entry.value) });
+    const config = decodeConfig(instance.config ?? {});
     return {
       ...instance,
       ...(override.config
         ? {
             config: {
-              ...decodeConfig(instance.config ?? {}),
-              ...decodeConfig(expandConfig(override.config)),
+              ...Object.fromEntries(
+                Object.entries(override.config)
+                  .filter(([key]) => !(key in config))
+                  .map(([key, value]) => [key, expandConfig(value)]),
+              ),
+              ...config,
             },
           }
         : {}),
       environment: [...variables.values()],
     };
   };
-}
-
-/** Launch eligibility is separate from configuration: disabled providers can retain history. */
-export function validateHarnessLaunch(
-  instance: ProviderInstanceConfig,
-  environment: NodeJS.ProcessEnv = process.env,
-) {
-  if (
-    instance.enabled !== false &&
-    environment.APERTURE_UPSTREAM &&
-    ["cursor", "muse"].includes(instance.driver)
-  ) {
-    throw new Error(
-      `${instance.driver} requires native provider authentication and cannot use Aperture model credentials`,
-    );
-  }
 }
 
 export function deploymentHarnessDefaults() {
@@ -104,41 +87,4 @@ export function sandboxInput<T extends { readonly runtimePolicy?: ProviderAdapte
   return input.runtimePolicy
     ? { ...input, runtimePolicy: sandboxPolicy(input.runtimePolicy) }
     : input;
-}
-
-/** Pi resolves model keys from its environment; the published file contains no credential. */
-export async function prepareHarnessState(stateDir: string) {
-  process.env.T3_HARNESS_STATE_DIR = `${stateDir}/harnesses`;
-  const aperture = process.env.APERTURE_UPSTREAM;
-  if (!aperture) return;
-  const url = new URL(aperture);
-  if (
-    !["http:", "https:"].includes(url.protocol) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash
-  )
-    throw new Error("Invalid Aperture upstream");
-  const base = aperture.replace(/\/$/, "");
-  const directory = `${stateDir}/harnesses/pi`;
-  NodeFS.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const response = await fetch(`${base}/v1/models`, {
-    headers: { Authorization: `Bearer ${process.env.APERTURE_API_KEY ?? "-"}` },
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!response.ok) throw new Error(`Aperture catalog unavailable (HTTP ${response.status})`);
-  const catalog = managedApertureCatalog(Schema.decodeUnknownSync(Catalog)(await response.json()));
-  setApertureCatalog(catalog);
-  const configs = nativeApertureConfigs(catalog, base);
-  NodeFS.writeFileSync(`${directory}/models.json`, JSON.stringify(configs.pi, null, 2), {
-    mode: 0o600,
-  });
-  NodeFS.writeFileSync(
-    `${stateDir}/harnesses/opencode2.json`,
-    JSON.stringify(configs.opencode, null, 2),
-    {
-      mode: 0o600,
-    },
-  );
 }
