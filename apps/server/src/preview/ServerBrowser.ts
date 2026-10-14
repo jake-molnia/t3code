@@ -2265,6 +2265,7 @@ const make = Effect.gen(function* () {
       );
       if (input.canOperate && tab.control.agentId === null && tab.control.controller === null) {
         yield* Effect.promise(() => tab.control.take(viewer.id));
+        if (!tab.desktop) yield* Effect.promise(() => tab.page.bringToFront());
       }
       broadcastControl(tab);
       pushFileChooser(tab);
@@ -2336,7 +2337,7 @@ const make = Effect.gen(function* () {
       yield* Effect.promise(() => startScreencast(1));
       // An idle page does not repaint for a new screencast, so the viewer
       // starts from a still unless a live frame beat it.
-      if (!screencastStarted) yield* Effect.promise(pushStill);
+      if (!screencastStarted) yield* Effect.promise(pushStill).pipe(Effect.forkScoped);
       return {
         output,
         input: (raw: unknown) =>
@@ -2349,6 +2350,7 @@ const make = Effect.gen(function* () {
                 const taking = tab.control.take(viewer.id);
                 broadcastControl(tab);
                 await taking;
+                if (!tab.desktop) await tab.page.bringToFront();
                 pushFileChooser(tab);
               } else if (message.type === "releaseControl") {
                 const releasing = tab.control.release(viewer.id, () =>

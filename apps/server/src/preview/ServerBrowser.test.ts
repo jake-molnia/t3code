@@ -118,6 +118,7 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
       throw new Error("Unexpected locator action");
     }),
     isClosed: () => closed,
+    bringToFront: vi.fn(async () => {}),
     close: vi.fn(async () => {
       if (!closed) {
         closed = true;
@@ -453,6 +454,43 @@ it.live("enforces provider ownership and explicit targets when a session has mul
   ).pipe(Effect.provide(layer)),
 );
 
+it.live("returns viewer control while a still is pending and activates only after takeover", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const context = contexts[0]!;
+      const painting = Promise.withResolvers<void>();
+      context.page.bringToFront.mockImplementation(async () => {
+        painting.resolve();
+      });
+      const createSession = context.newCDPSession;
+      context.newCDPSession = async () => {
+        const session = await createSession();
+        const send = session.send.getMockImplementation()!;
+        session.send.mockImplementation(async (method, input) => {
+          if (method === "Page.captureScreenshot") await painting.promise;
+          return send(method, input);
+        });
+        return session;
+      };
+      const watcher = yield* browser.attachViewer(viewerInput(tabId, false));
+      expect(yield* Queue.takeAll(watcher.output)).toContainEqual(
+        expect.objectContaining({ _tag: "control", controller: "agent", canOperate: false }),
+      );
+      expect(context.page.bringToFront).not.toHaveBeenCalled();
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      expect(yield* Queue.takeAll(viewer.output)).toContainEqual(
+        expect.objectContaining({ _tag: "control", controller: "agent", canOperate: true }),
+      );
+      expect(context.page.bringToFront).not.toHaveBeenCalled();
+      yield* viewer.input({ type: "takeControl" });
+      let item = yield* Queue.take(viewer.output);
+      while (item._tag !== "frame") item = yield* Queue.take(viewer.output);
+      expect(item.data).toEqual(Buffer.from("frame"));
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("streams to a read-only viewer without allowing takeover, input, or viewport changes", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -471,7 +509,9 @@ it.live("streams to a read-only viewer without allowing takeover, input, or view
         yield* viewer.input(message);
       expect(page.setViewportSize).not.toHaveBeenCalled();
       expect(session.send.mock.calls.some(([method]) => method.startsWith("Input."))).toBe(false);
-      const outputs = yield* Queue.takeAll(viewer.output);
+      const outputs = [yield* Queue.take(viewer.output)];
+      while (!outputs.some((item) => item._tag === "frame"))
+        outputs.push(yield* Queue.take(viewer.output));
       expect(outputs).toContainEqual(
         expect.objectContaining({ _tag: "frame", data: Buffer.from("frame") }),
       );
@@ -1162,6 +1202,8 @@ it.live("a file picker replaces a stalled viewer backlog instead of being droppe
       const page = contexts[0]!.page;
       const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
       yield* viewer.input({ type: "takeControl" });
+      let initial = yield* Queue.take(viewer.output);
+      while (initial._tag !== "frame") initial = yield* Queue.take(viewer.output);
       const accept = Promise.withResolvers<string>();
       page.emit("filechooser", {
         isMultiple: () => false,
