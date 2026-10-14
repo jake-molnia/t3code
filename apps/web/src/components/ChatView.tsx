@@ -481,6 +481,7 @@ import {
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveComposerInteractionMode,
+  getAntigravitySendBlockReason,
   resolveComposerProviderSelection,
   resolveFileAttachmentUrl,
   resolveProactiveTurnDiffAction,
@@ -9081,6 +9082,11 @@ export default function ChatView(props: ChatViewProps) {
         );
         return;
       }
+      const providerBlockReason = getAntigravitySendBlockReason(provider.snapshot, selection.model);
+      if (providerBlockReason) {
+        setThreadError(threadIdForSend, providerBlockReason);
+        return;
+      }
       const providerState = getComposerProviderState({
         provider: provider.driverKind,
         model: selection.model,
@@ -9231,7 +9237,6 @@ export default function ChatView(props: ChatViewProps) {
           mimeType: attachment.mimeType,
           sizeBytes: attachment.sizeBytes,
           dataUrl: await readFileAsDataUrl(attachment.file),
-          ...(attachment.source ? { source: attachment.source } : {}),
         };
       }),
     );
@@ -9506,7 +9511,6 @@ export default function ChatView(props: ChatViewProps) {
             mimeType: attachment.mimeType,
             sizeBytes: attachment.sizeBytes,
             previewUrl: attachment.previewUrl,
-            ...(attachment.source ? { source: attachment.source } : {}),
           }
         : {
             type: "file" as const,

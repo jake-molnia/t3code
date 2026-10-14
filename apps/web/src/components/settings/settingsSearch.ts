@@ -556,7 +556,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "privacy-policy",
     title: "Privacy policy",
     to: "/settings/general",
-    searchTerms: ["telemetry analytics usage data tracking legal opt out"],
+    searchTerms: ["privacy legal policy"],
   },
   {
     id: "telemetry-export",
@@ -607,7 +607,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Providers",
     to: "/settings/providers",
     searchTerms: [
-      "agents cli codex claude cursor grok opencode sign in sign out instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
+      "agents cli codex claude cursor grok opencode antigravity google gemini sign in sign out instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
     ],
   },
   {

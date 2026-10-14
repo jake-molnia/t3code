@@ -1,3 +1,4 @@
+import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import * as RemoteUsageHistory from "./agentRuntime/UsageHistory.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as RemoteProjectMetadata from "./agentRuntime/RemoteProjectMetadata.ts";
@@ -59,8 +60,6 @@ import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
-import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-import * as ProviderEventIngestor from "./orchestration-v2/ProviderEventIngestor.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
@@ -133,7 +132,6 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as CloudHttp from "./cloud/http.ts";
 import * as CloudLink from "./cloud/CloudLink.ts";
 import { pendingServiceUpdateExists } from "./cloud/updateHandoff.ts";
-import * as RelayTracing from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import {
   MANAGED_TUNNEL_FIRST_REGISTRATION_JITTER,
@@ -287,6 +285,7 @@ const layerUsageHistory = RemoteUsageHistory.layer.pipe(Layer.provide(layerPersi
 const layerUsage = UsageService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      AntigravityUsage.layer,
       CursorUsageAccounts.layer.pipe(
         Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
       ),
@@ -468,7 +467,6 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
 
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(layerScheduledTaskWebhookOrigin),
-  Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerGitWorkflow),
   Layer.provide(ResourceCleanupService.layer),
@@ -616,7 +614,6 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(layerBackground),
   Layer.provideMerge(layerResourceDiagnostics),
   Layer.provideMerge(TraceDiagnostics.layer),
-  Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(SandboxIde.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
@@ -1057,7 +1054,6 @@ const layerMakeServer = Layer.unwrap(
         ),
       ),
       Layer.provide(layerActivation),
-      Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),
       Layer.provide(layerApplicationObservability),
       Layer.provide(layerRemoteVcsProcess),

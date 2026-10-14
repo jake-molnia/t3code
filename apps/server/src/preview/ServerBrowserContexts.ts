@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Owns Playwright resources outside the Effect runtime.
-import { INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
+import { DEFAULT_BROWSER_PROFILE_ID, INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
 import { constVoid } from "effect/Function";
+import * as Schema from "effect/Schema";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
@@ -8,6 +9,11 @@ import * as NodePath from "node:path";
 import type { Browser, BrowserContext, CDPSession } from "playwright-core";
 
 import { sandboxDisabled } from "./PreviewBrowserHost.ts";
+import { waitForService } from "../execution/ServiceReadiness.ts";
+
+const decodeBrowserVersion = Schema.decodeUnknownSync(
+  Schema.Struct({ webSocketDebuggerUrl: Schema.String }),
+);
 
 // Playwright needs its files on disk. createRequire also resolves it from a Node SEA executable.
 const requirePlaywright = NodeModule.createRequire(import.meta.url);
@@ -89,9 +95,16 @@ export class ServerBrowserContexts {
   private readonly clearing = new Map<string, Promise<void>>();
   private browser: Promise<Browser> | undefined;
   private closing: Promise<void> | undefined;
+  private readonly runtimeContexts = new WeakSet<BrowserContext>();
+  private readonly readinessAbort = new AbortController();
+  private readonly headfulContexts = new WeakSet<BrowserContext>();
 
   constructor(options: Options) {
     this.options = options;
+  }
+
+  isHeadfulContext(context: BrowserContext) {
+    return this.headfulContexts.has(context);
   }
 
   private async launchOptions() {
@@ -125,6 +138,15 @@ export class ServerBrowserContexts {
     if (!this.browser) {
       const launched = (async () => {
         const { chromium } = loadPlaywright();
+        if (this.options.cdpEndpoint) {
+          await waitForService(new URL("/json/version", this.options.cdpEndpoint), {
+            signal: this.readinessAbort.signal,
+            accept: async (response) => {
+              decodeBrowserVersion(await response.json());
+              return true;
+            },
+          });
+        }
         const browser = this.options.cdpEndpoint
           ? await chromium.connectOverCDP(this.options.cdpEndpoint, { timeout: 15_000 })
           : await this.launchOptions().then((options) =>
@@ -156,10 +178,10 @@ export class ServerBrowserContexts {
           if (this.contexts.get(key) === pending) this.contexts.delete(key);
           this.options.onContextClose?.(context);
         });
-        if (!this.options.cdpEndpoint)
+        if (!this.runtimeContexts.has(context))
           for (const page of context.pages()) await page.close().catch(constVoid);
         if (this.closing) {
-          if (!this.options.cdpEndpoint) await context.close().catch(constVoid);
+          if (!this.runtimeContexts.has(context)) await context.close().catch(constVoid);
           throw new Error("The preview browser is closed.");
         }
         return context;
@@ -172,15 +194,19 @@ export class ServerBrowserContexts {
   }
 
   private async createContext(profileId: string, isolationKey?: string) {
-    if (this.options.cdpEndpoint) {
+    if (this.options.cdpEndpoint && profileId === DEFAULT_BROWSER_PROFILE_ID) {
       const context = (await this.sharedBrowser()).contexts()[0];
       if (!context) throw new Error("The sandbox desktop browser has no default context.");
+      this.headfulContexts.add(context);
+      this.runtimeContexts.add(context);
       return context;
     }
     const contextOptions = { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 };
     if (isolationKey !== undefined || profileId === INCOGNITO_BROWSER_PROFILE_ID) {
       const browser = await this.sharedBrowser();
-      return browser.newContext(contextOptions);
+      const context = await browser.newContext(contextOptions);
+      if (this.options.cdpEndpoint) this.headfulContexts.add(context);
+      return context;
     }
     const directory = this.profileDirectory(profileId);
     const options = await this.launchOptions();
@@ -208,24 +234,9 @@ export class ServerBrowserContexts {
     return page;
   }
 
-  /**
-   * Drives a page the desktop app renders, through the CDP endpoint its relay
-   * serves. The page keeps the desktop's storage, size, and window.
-   */
-  async connectDesktopPage(endpoint: string) {
-    const { chromium } = loadPlaywright();
-    const browser = await chromium.connectOverCDP(endpoint, { timeout: 15_000 });
-    const page = browser.contexts().flatMap((context) => context.pages())[0];
-    if (!page) {
-      await browser.close().catch(constVoid);
-      throw new Error("The desktop tab has no page.");
-    }
-    return { browser, page };
-  }
-
   /** Closes a human profile's persistent context, ending its tabs, then deletes its storage. */
   async clearProfile(profileId: string) {
-    if (this.options.cdpEndpoint)
+    if (this.options.cdpEndpoint && profileId === DEFAULT_BROWSER_PROFILE_ID)
       throw new Error("The sandbox runtime owns the desktop browser profile.");
     if (profileId === INCOGNITO_BROWSER_PROFILE_ID) return;
     const key = JSON.stringify([profileId, null]);
@@ -247,6 +258,7 @@ export class ServerBrowserContexts {
   }
 
   close() {
+    this.readinessAbort.abort(new Error("The preview browser is closed."));
     this.closing ??= this.dispose();
     return this.closing;
   }
@@ -255,7 +267,7 @@ export class ServerBrowserContexts {
     await Promise.allSettled(
       [...this.contexts.values()].map(async (pending) => {
         const context = await pending;
-        if (!this.options.cdpEndpoint) await context.close();
+        if (!this.runtimeContexts.has(context)) await context.close();
       }),
     );
     const browser = await this.browser?.catch(() => undefined);

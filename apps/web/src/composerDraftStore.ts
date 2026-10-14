@@ -24,7 +24,6 @@ import {
   type ScopedProjectRef,
   type ScopedThreadRef,
   ThreadId,
-  SnapShotSource,
 } from "@t3tools/contracts";
 import {
   parseScopedProjectKey,
@@ -85,7 +84,6 @@ const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
 const isThreadContextRecord = Schema.is(ThreadContextRecord);
-const isSnapShotSource = Schema.is(SnapShotSource);
 const isPreviewAnnotationPayload = Schema.is(PreviewAnnotationPayloadSchema);
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
@@ -143,7 +141,6 @@ export const PersistedComposerImageAttachment = Schema.Struct({
   name: Schema.String,
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
-  source: Schema.optional(SnapShotSource),
   dataUrl: Schema.String,
 });
 export type PersistedComposerImageAttachment = typeof PersistedComposerImageAttachment.Type;
@@ -1292,6 +1289,8 @@ export function deriveEffectiveComposerModelState(input: {
           { preserveUnavailableSelection: preserveThreadModel },
         )
       : null) ??
+    // Antigravity has no static model or cross-account catalog fallback.
+    (input.selectedProvider === "antigravity" && input.selectedInstanceId ? "" : null) ??
     resolveAppModelSelection(
       input.selectedProvider,
       input.settings,
@@ -1325,6 +1324,7 @@ export function deriveEffectiveComposerModelState(input: {
         activeSelection.model,
         { preserveUnavailableSelection: true },
       ) ??
+      (input.selectedProvider === "antigravity" ? "" : null) ??
       resolveAppModelSelection(
         input.selectedProvider,
         input.settings,
@@ -1391,7 +1391,6 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
     mimeType,
     sizeBytes,
     dataUrl,
-    ...(isSnapShotSource(candidate.source) ? { source: candidate.source } : {}),
   };
 }
 
@@ -2539,7 +2538,6 @@ export function hydrateImagesFromPersisted(
         sizeBytes: attachment.sizeBytes,
         previewUrl: attachment.dataUrl,
         file,
-        ...(attachment.source ? { source: attachment.source } : {}),
       } satisfies ComposerImageAttachment,
     ];
   });

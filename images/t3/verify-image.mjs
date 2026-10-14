@@ -18,7 +18,21 @@ function probe(name, binary, args, expected) {
   return output;
 }
 for (const [driver, spec] of Object.entries(manifest.harnesses)) {
-  if (spec.kind === "sdk") {
+  if (driver === "antigravity") {
+    const result = NodeChildProcess.spawnSync(
+      "python3",
+      ["/opt/t3/probe-antigravity.py", `/opt/native/bin/${spec.binary}`, spec.version],
+      { timeout: 100_000, encoding: "utf8" },
+    );
+    if (result.status !== 0)
+      throw new Error(`Antigravity native protocol probe failed: ${result.stderr}`);
+    results.push({
+      driver,
+      version: spec.version,
+      verified: "native-protocol",
+      ...JSON.parse(result.stdout),
+    });
+  } else if (spec.kind === "sdk") {
     const installed = JSON.parse(
       NodeFS.readFileSync(
         NodePath.join("/opt/t3/node_modules", spec.package, "package.json"),

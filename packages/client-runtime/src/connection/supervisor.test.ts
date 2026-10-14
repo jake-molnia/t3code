@@ -1,5 +1,4 @@
 import { AuthStandardClientScopes, EnvironmentId, type ServerConfig } from "@t3tools/contracts";
-import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -295,7 +294,7 @@ describe("retryDelayMs", () => {
 });
 
 describe("EnvironmentSupervisor", () => {
-  it.effect("exports each relay setup as a standalone linked trace that ends at readiness", () =>
+  it.effect("keeps each relay setup as a local linked trace that ends at readiness", () =>
     Effect.gen(function* () {
       const spans: Array<Tracer.NativeSpan> = [];
       const tracer = Tracer.make({
@@ -315,10 +314,7 @@ describe("EnvironmentSupervisor", () => {
       });
       const supervisor = yield* EnvironmentSupervisor.make(RELAY_ENTRY, {
         initiallyDesired: true,
-      }).pipe(
-        Effect.provide(harness.dependencies),
-        Effect.provideService(RelayClientTracer, Option.some(tracer)),
-      );
+      }).pipe(Effect.provide(harness.dependencies), Effect.withTracer(tracer));
 
       yield* awaitState(
         supervisor.state,
