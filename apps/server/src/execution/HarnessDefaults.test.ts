@@ -7,11 +7,13 @@ describe("sandbox harness defaults", () => {
     const apply = harnessDefaults(
       JSON.stringify({
         codex: {
-          config: { setupMode: "existing", launchArgs: "${APERTURE_UPSTREAM}/v1" },
-          environment: [{ name: "OPENAI_API_KEY", value: "${APERTURE_API_KEY}", sensitive: true }],
+          config: { setupMode: "existing", launchArgs: "${T3_GATEWAY_URL}/v1" },
+          environment: [
+            { name: "OPENAI_API_KEY", value: "${T3_GATEWAY_API_KEY}", sensitive: true },
+          ],
         },
       }),
-      { APERTURE_UPSTREAM: "http://aperture", APERTURE_API_KEY: "private" },
+      { T3_GATEWAY_URL: "http://gateway", T3_GATEWAY_API_KEY: "private" },
     );
     const input = {
       driver: ProviderDriverKind.make("codex"),
@@ -21,7 +23,7 @@ describe("sandbox harness defaults", () => {
     expect(result.config).toEqual({
       binaryPath: "/opt/codex",
       setupMode: "existing",
-      launchArgs: "http://aperture/v1",
+      launchArgs: "http://gateway/v1",
     });
     expect(result.environment).toEqual([
       { name: "OPENAI_API_KEY", value: "private", sensitive: true },
@@ -33,21 +35,21 @@ describe("sandbox harness defaults", () => {
       JSON.stringify({
         codex: { environment: [{ name: "OPENAI_API_KEY", value: "${MISSING}", sensitive: true }] },
       }),
-      { APERTURE_UPSTREAM: "http://aperture" },
+      { T3_GATEWAY_URL: "http://gateway" },
     );
     expect(() => apply({ driver: ProviderDriverKind.make("codex") })).toThrow("requires MISSING");
     expect(() =>
       validateHarnessLaunch(
         { driver: ProviderDriverKind.make("cursor") },
-        { APERTURE_UPSTREAM: "http://aperture" },
+        { T3_GATEWAY_URL: "http://gateway" },
       ),
-    ).toThrow("cannot use Aperture");
+    ).toThrow("cannot use model gateway");
     expect(() =>
       validateHarnessLaunch(
         { driver: ProviderDriverKind.make("muse") },
-        { APERTURE_UPSTREAM: "http://aperture" },
+        { T3_GATEWAY_URL: "http://gateway" },
       ),
-    ).toThrow("cannot use Aperture");
+    ).toThrow("cannot use model gateway");
     expect(apply({ driver: ProviderDriverKind.make("cursor") }).driver).toBe("cursor");
     expect(apply({ driver: ProviderDriverKind.make("cursor"), enabled: false }).enabled).toBe(
       false,

@@ -1,3 +1,4 @@
+import * as ModelGateway from "./modelGateway/ModelGateway.ts";
 import * as ExecutionPools from "./agentRuntime/ExecutionPools.ts";
 import * as AgentRuntimeClient from "./agentRuntime/RuntimeClient.ts";
 import * as RuntimeContracts from "@t3tools/contracts";
@@ -1289,6 +1290,7 @@ const layerWsRpc = (
       const acpRegistryCatalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
       const acpRegistryRuntimeCoordinator =
         yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
+      const modelGateway = yield* ModelGateway.ModelGateway;
       const providerAuth = yield* ProviderAuthService.ProviderAuthService;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -2404,6 +2406,15 @@ const layerWsRpc = (
             );
             return { outcome };
           }),
+        [WS_METHODS.modelGatewaySnapshot]: () => modelGateway.snapshot(),
+        [WS_METHODS.modelGatewayAddEndpoint]: (input) => modelGateway.addEndpoint(input),
+        [WS_METHODS.modelGatewayStart]: (input) => modelGateway.start(input, currentSessionId),
+        [WS_METHODS.modelGatewayStatus]: (input) => modelGateway.status(input, currentSessionId),
+        [WS_METHODS.modelGatewayComplete]: (input) =>
+          modelGateway.complete(input, currentSessionId),
+        [WS_METHODS.modelGatewayCancel]: (input) => modelGateway.cancel(input, currentSessionId),
+        [WS_METHODS.modelGatewaySetEnabled]: (input) => modelGateway.setEnabled(input),
+        [WS_METHODS.modelGatewayRemove]: (input) => modelGateway.remove(input),
         [WS_METHODS.providerAuthStart]: (input) => providerAuth.start(input, currentSessionId),
         [WS_METHODS.providerAuthRespond]: (input) =>
           Effect.annotateCurrentSpan({ instanceId: input.instanceId }).pipe(

@@ -958,6 +958,41 @@ export function createServerEnvironmentAtoms<R, E>(
     updateStateAtom,
     settingsValueAtom,
     providersValueAtom,
+    modelGatewaySnapshot: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:gateway:snapshot",
+      tag: WS_METHODS.modelGatewaySnapshot,
+      staleTimeMs: 0,
+      idleTtlMs: 0,
+      refreshIntervalMs: 30_000,
+    }),
+    modelGatewayAddEndpoint: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:gateway:add-endpoint",
+      tag: WS_METHODS.modelGatewayAddEndpoint,
+    }),
+    modelGatewayStart: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:gateway:start",
+      tag: WS_METHODS.modelGatewayStart,
+    }),
+    modelGatewayStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:gateway:status",
+      tag: WS_METHODS.modelGatewayStatus,
+    }),
+    modelGatewayComplete: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:gateway:complete",
+      tag: WS_METHODS.modelGatewayComplete,
+    }),
+    modelGatewayCancel: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:gateway:cancel",
+      tag: WS_METHODS.modelGatewayCancel,
+    }),
+    modelGatewaySetEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:gateway:setenabled",
+      tag: WS_METHODS.modelGatewaySetEnabled,
+    }),
+    modelGatewayRemove: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:gateway:remove",
+      tag: WS_METHODS.modelGatewayRemove,
+    }),
     providerAuthState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:provider:auth-state",
       tag: WS_METHODS.providerAuthSubscribe,

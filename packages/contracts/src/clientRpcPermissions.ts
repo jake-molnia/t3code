@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput } from "./git.ts";
 import {
+  AuthProvidersManageScope,
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
@@ -11,6 +12,13 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.modelGatewayAddEndpoint]: AuthProvidersManageScope,
+  [WS_METHODS.modelGatewayStart]: AuthProvidersManageScope,
+  [WS_METHODS.modelGatewayStatus]: AuthProvidersManageScope,
+  [WS_METHODS.modelGatewayComplete]: AuthProvidersManageScope,
+  [WS_METHODS.modelGatewayCancel]: AuthProvidersManageScope,
+  [WS_METHODS.modelGatewaySetEnabled]: AuthProvidersManageScope,
+  [WS_METHODS.modelGatewayRemove]: AuthProvidersManageScope,
   [WS_METHODS.sandboxIdeOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   // Endpoint checks exist to configure exports, so they need the same grant as saving them.

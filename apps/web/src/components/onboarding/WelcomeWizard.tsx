@@ -1,3 +1,4 @@
+import { GatewayAccountsSection } from "../settings/GatewayAccountsSection";
 import { useAuth } from "@clerk/react";
 import { useAtomValue } from "@effect/atom-react";
 import type {
@@ -753,6 +754,10 @@ function ConnectedAgentsStep({
       },
     );
   }
+  if (serverConfig?.environment.capabilities.modelGateway) {
+    return <GatewayAccountsSection key={environmentId} environmentId={environmentId} />;
+  }
+
   return (
     <section>
       <h2 className="mb-2 text-sm font-medium">{machineLabel}</h2>

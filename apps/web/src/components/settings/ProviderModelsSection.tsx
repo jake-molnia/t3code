@@ -552,7 +552,7 @@ export function ProviderModelsSection({
             {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
           </span>
         </div>
-        {!isAdding ? (
+        {canManageCustomModels && !isAdding ? (
           <Button
             type="button"
             size="xs"

@@ -1,3 +1,14 @@
+import {
+  GatewayAddEndpointInput,
+  GatewaySnapshot,
+  GatewayAuth,
+  GatewayStartInput,
+  GatewayFlowInput,
+  GatewayCompleteInput,
+  GatewayAccountInput,
+  GatewaySetEnabledInput,
+  ModelGatewayError,
+} from "./modelGateway.ts";
 import { ExecutionPoolsSnapshot } from "./executionPools.ts";
 import { SandboxIdeOpenInput, SandboxIdeOpenResult, SandboxIdeError } from "./sandboxIde.ts";
 import {
@@ -398,6 +409,14 @@ export const WS_METHODS = {
 
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
+  modelGatewaySnapshot: "modelGateway.snapshot",
+  modelGatewayAddEndpoint: "modelGateway.addEndpoint",
+  modelGatewayStart: "modelGateway.start",
+  modelGatewayStatus: "modelGateway.status",
+  modelGatewayComplete: "modelGateway.complete",
+  modelGatewayCancel: "modelGateway.cancel",
+  modelGatewaySetEnabled: "modelGateway.setEnabled",
+  modelGatewayRemove: "modelGateway.remove",
   providerAuthStart: "provider.auth.start",
   providerConsumeResetCredit: "provider.consumeResetCredit",
   providerAuthComplete: "provider.auth.complete",
@@ -630,6 +649,46 @@ const WsProviderConsumeResetCreditRpc = Rpc.make(WS_METHODS.providerConsumeReset
   payload: ProviderConsumeResetCreditInput,
   success: ProviderConsumeResetCreditResult,
   error: Schema.Union([ProviderSetupError, UsageLimitSourceError, EnvironmentAuthorizationError]),
+});
+
+const WsModelGatewaySnapshotRpc = Rpc.make(WS_METHODS.modelGatewaySnapshot, {
+  success: GatewaySnapshot,
+  error: Schema.Union([ModelGatewayError, EnvironmentAuthorizationError]),
+});
+const WsModelGatewayAddEndpointRpc = Rpc.make(WS_METHODS.modelGatewayAddEndpoint, {
+  payload: GatewayAddEndpointInput,
+  success: GatewaySnapshot,
+  error: Schema.Union([ModelGatewayError, EnvironmentAuthorizationError]),
+});
+const WsModelGatewayStartRpc = Rpc.make(WS_METHODS.modelGatewayStart, {
+  payload: GatewayStartInput,
+  success: GatewayAuth,
+  error: Schema.Union([ModelGatewayError, EnvironmentAuthorizationError]),
+});
+const WsModelGatewayStatusRpc = Rpc.make(WS_METHODS.modelGatewayStatus, {
+  payload: GatewayFlowInput,
+  success: GatewayAuth,
+  error: Schema.Union([ModelGatewayError, EnvironmentAuthorizationError]),
+});
+const WsModelGatewayCompleteRpc = Rpc.make(WS_METHODS.modelGatewayComplete, {
+  payload: GatewayCompleteInput,
+  success: GatewayAuth,
+  error: Schema.Union([ModelGatewayError, EnvironmentAuthorizationError]),
+});
+const WsModelGatewayCancelRpc = Rpc.make(WS_METHODS.modelGatewayCancel, {
+  payload: GatewayFlowInput,
+  success: GatewayAuth,
+  error: Schema.Union([ModelGatewayError, EnvironmentAuthorizationError]),
+});
+const WsModelGatewaySetEnabledRpc = Rpc.make(WS_METHODS.modelGatewaySetEnabled, {
+  payload: GatewaySetEnabledInput,
+  success: GatewaySnapshot,
+  error: Schema.Union([ModelGatewayError, EnvironmentAuthorizationError]),
+});
+const WsModelGatewayRemoveRpc = Rpc.make(WS_METHODS.modelGatewayRemove, {
+  payload: GatewayAccountInput,
+  success: GatewaySnapshot,
+  error: Schema.Union([ModelGatewayError, EnvironmentAuthorizationError]),
 });
 
 const WsProviderAuthStartRpc = Rpc.make(WS_METHODS.providerAuthStart, {
@@ -1829,6 +1888,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerExecutionPoolsRpc,
   WsServerRefreshProvidersRpc,
   WsProviderConsumeResetCreditRpc,
+  WsModelGatewaySnapshotRpc,
+  WsModelGatewayAddEndpointRpc,
+  WsModelGatewayStartRpc,
+  WsModelGatewayStatusRpc,
+  WsModelGatewayCompleteRpc,
+  WsModelGatewayCancelRpc,
+  WsModelGatewaySetEnabledRpc,
+  WsModelGatewayRemoveRpc,
   WsProviderAuthStartRpc,
   WsProviderAuthCompleteRpc,
   WsChatGptReconnectProfileRpc,

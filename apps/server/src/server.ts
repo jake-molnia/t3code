@@ -1,3 +1,5 @@
+import * as InferenceProxy from "./modelGateway/InferenceProxy.ts";
+import * as ModelGateway from "./modelGateway/ModelGateway.ts";
 import * as RemoteUsageHistory from "./agentRuntime/UsageHistory.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as RemoteProjectMetadata from "./agentRuntime/RemoteProjectMetadata.ts";
@@ -652,6 +654,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
+    InferenceProxy.layer,
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
@@ -1045,6 +1048,7 @@ const layerMakeServer = Layer.unwrap(
     );
 
     return layerServerApplication.pipe(
+      Layer.provide(ModelGateway.layer),
       // The connect routes and the startup/shutdown link work share one instance.
       Layer.provide(CloudLink.layer),
       Layer.provideMerge(layerRuntimeServices),

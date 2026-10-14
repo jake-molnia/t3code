@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Run the bundled account gateway and central T3 server as one supervised unit."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import secrets
+import signal
+import subprocess
+import sys
+import time
+import urllib.request
+
+
+def configure(environment):
+    directory = Path(environment.get('T3CODE_HOME', '/data/t3')) / 'model-gateway'
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock = (directory / 'supervisor.lock').open('a')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        credentials_path = directory / 'keys.json'
+        if credentials_path.exists():
+            credentials = json.loads(credentials_path.read_text())
+        else:
+            credentials = {'management': secrets.token_urlsafe(48), 'inference': secrets.token_urlsafe(48),
+                           'port': int(environment.get('T3_CLIPROXY_PORT', '8317'))}
+            for key, variable in [('management', 'T3_GATEWAY_MANAGEMENT_KEY'), ('inference', 'T3_GATEWAY_API_KEY')]:
+                credentials[key] = environment.get(variable) or credentials[key]
+            temporary = directory / 'keys.json.tmp'
+            temporary.write_text(json.dumps(credentials))
+            temporary.chmod(0o600)
+            temporary.replace(credentials_path)
+        for key, variable in [('management', 'T3_GATEWAY_MANAGEMENT_KEY'), ('inference', 'T3_GATEWAY_API_KEY')]:
+            supplied = environment.get(variable)
+            if supplied and supplied != credentials[key]:
+                raise ValueError(f'{variable} differs from the persisted gateway key')
+            environment[variable] = credentials[key]
+        port = credentials['port']
+        if 'T3_CLIPROXY_PORT' in environment and int(environment['T3_CLIPROXY_PORT']) != port:
+            raise ValueError('T3_CLIPROXY_PORT differs from the persisted gateway port')
+        environment['T3_GATEWAY_MANAGEMENT_URL'] = f'http://127.0.0.1:{port}'
+        config = {
+            'server': {'host': '127.0.0.1', 'port': port},
+            'management': {'allow-remote': False, 'secret-key': credentials['management'],
+                           'disable-control-panel': True, 'disable-auto-update-panel': True},
+            'access': {'api-keys': [credentials['inference']]},
+            'oauth': {'auth-dir': str(directory / 'accounts')},
+        }
+        # CLIProxyAPI owns subsequent edits, including endpoint groups and hashed keys.
+        # JSON is valid YAML for the initial configuration.
+        config_path = directory / 'config.yaml'
+        if not config_path.exists():
+            temporary = directory / 'config.yaml.tmp'
+            temporary.write_text(json.dumps(config))
+            temporary.chmod(0o600)
+            temporary.replace(config_path)
+        return config_path, lock
+    except BaseException:
+        lock.close()
+        raise
+
+
+def run(arguments):
+    os.umask(0o077)
+    environment = dict(os.environ)
+    config, lock = configure(environment)
+    children = []
+    stopping = False
+
+    def stop(_signal, _frame):
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    try:
+        proxy = subprocess.Popen([environment.get('T3_CLIPROXY_BINARY', '/usr/local/bin/cliproxyapi'),
+                                  '-config', str(config)], env=environment)
+        children.append(proxy)
+        deadline = time.monotonic() + 30
+        while not stopping:
+            if proxy.poll() is not None:
+                raise RuntimeError('Account gateway exited before becoming ready')
+            try:
+                request = urllib.request.Request(environment['T3_GATEWAY_MANAGEMENT_URL'] + '/v8/management/credentials',
+                                                 headers={'Authorization': 'Bearer ' + environment['T3_GATEWAY_MANAGEMENT_KEY']})
+                with urllib.request.urlopen(request, timeout=1) as response:
+                    if response.status == 200:
+                        break
+            except OSError:
+                pass
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Account gateway did not become ready')
+            time.sleep(0.05)
+        if stopping:
+            return 0
+        server = subprocess.Popen(arguments, env=environment)
+        children.append(server)
+        while not stopping:
+            for child in children:
+                code = child.poll()
+                if code is not None:
+                    # A clean gateway exit still means the head cannot serve requests.
+                    return code if code > 0 else 1
+            time.sleep(0.05)
+        return 0
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.terminate()
+        deadline = time.monotonic() + 10
+        for child in children:
+            try:
+                child.wait(timeout=max(0.01, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+        lock.close()
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(run(sys.argv[1:] or ['node', '/opt/t3/dist/bin.mjs']))
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f't3 head: {error}', file=sys.stderr)
+        sys.exit(1)

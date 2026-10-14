@@ -46,7 +46,7 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
         paths.providerLogsDir,
       ])
         yield* fs.makeDirectory(directory, { recursive: true });
-      yield* Effect.tryPromise(() => prepareHarnessState(options.stateDir));
+      yield* Effect.sync(() => prepareHarnessState(options.stateDir));
       return ServerConfig.make({
         ...paths,
         cwd: options.cwd,

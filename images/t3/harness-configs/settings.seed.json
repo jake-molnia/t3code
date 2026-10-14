@@ -1,12 +1,9 @@
 {
-  "defaultModelSelection": {
-    "instanceId": "codex",
-    "model": "gpt-6-luna"
-  },
+  "defaultModelSelection": null,
   "providerInstances": {
     "codex": {
       "driver": "codex",
-      "displayName": "Codex \u00b7 Aperture",
+      "displayName": "Codex",
       "enabled": true,
       "config": {
         "setupMode": "existing"
@@ -14,17 +11,17 @@
     },
     "claudeAgent": {
       "driver": "claudeAgent",
-      "displayName": "Claude (requires managed Aperture Messages route)",
-      "enabled": false
+      "displayName": "Claude",
+      "enabled": true
     },
     "grok": {
       "driver": "grok",
-      "displayName": "Grok \u00b7 Aperture",
+      "displayName": "Grok",
       "enabled": true
     },
     "opencode": {
       "driver": "opencode",
-      "displayName": "OpenCode \u00b7 Aperture",
+      "displayName": "OpenCode",
       "enabled": true,
       "config": {
         "binaryPath": "opencode2"
@@ -32,7 +29,7 @@
     },
     "pi": {
       "driver": "pi",
-      "displayName": "Pi \u00b7 Aperture",
+      "displayName": "Pi",
       "enabled": true
     },
     "cursor": {

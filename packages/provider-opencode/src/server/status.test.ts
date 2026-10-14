@@ -828,32 +828,32 @@ const bigPickle: OpenCode2Model = {
 it.effect("waits past builtin models until configured providers are discovered", () =>
   Effect.gen(function* () {
     const configured = decodeOpenCodeConfigEntries([
-      { type: "document", info: { providers: { aperture: { models: { "gpt-6-luna": {} } } } } },
+      { type: "document", info: { providers: { gateway: { models: { "gpt-6-luna": {} } } } } },
     ]);
-    const aperture: OpenCode2Model = {
-      providerID: "aperture",
+    const gateway: OpenCode2Model = {
+      providerID: "gateway",
       id: "gpt-6-luna",
       name: "GPT-6 Luna",
       variants: [],
     };
-    const replies = [[bigPickle], [bigPickle], [bigPickle, aperture]];
+    const replies = [[bigPickle], [bigPickle], [bigPickle, gateway]];
     const load = yield* makeOpenCode2ModelLoader(
       Effect.sync(() =>
-        openCode2ModelsAfterConfiguration(replies.shift() ?? [bigPickle, aperture], configured),
+        openCode2ModelsAfterConfiguration(replies.shift() ?? [bigPickle, gateway], configured),
       ),
     );
     const fiber = yield* load.pipe(Effect.forkChild);
     yield* TestClock.adjust("1 second");
-    NodeAssert.deepEqual(yield* Fiber.join(fiber), [bigPickle, aperture]);
+    NodeAssert.deepEqual(yield* Fiber.join(fiber), [bigPickle, gateway]);
   }).pipe(Effect.provide(TestClock.layer())),
 );
 
 it("does not wait for models disabled by a higher-priority config entry", () => {
   const entries = decodeOpenCodeConfigEntries([
-    { type: "document", info: { providers: { aperture: { models: { missing: {} } } } } },
+    { type: "document", info: { providers: { gateway: { models: { missing: {} } } } } },
     {
       type: "document",
-      info: { providers: { aperture: { models: { missing: { disabled: true } } } } },
+      info: { providers: { gateway: { models: { missing: { disabled: true } } } } },
     },
   ]);
   NodeAssert.deepEqual(openCode2ModelsAfterConfiguration([bigPickle], entries), [bigPickle]);

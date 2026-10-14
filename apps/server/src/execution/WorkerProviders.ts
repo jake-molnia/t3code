@@ -1,6 +1,7 @@
 import { resolveModelPreferences } from "@t3tools/shared/serverSettings";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
-import { filterApertureSnapshot } from "./ApertureCatalog.ts";
+import { createModelGatewayCatalog } from "./ModelGatewayCatalog.ts";
+import * as ServerConfig from "../config.ts";
 import { validateHarnessLaunch } from "./HarnessDefaults.ts";
 import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
 import * as Crypto from "effect/Crypto";
@@ -29,6 +30,9 @@ export const ProviderRequest = Schema.Struct({
   instanceId: C.ProviderInstanceId,
   input: Schema.Unknown,
 });
+const decodeInferenceSelection = Schema.decodeUnknownEffect(
+  Schema.Struct({ modelSelection: C.ModelSelection }),
+);
 const common = { cwd: Schema.String, modelSelection: C.ModelSelection };
 export const CommitInput = Schema.Struct({
   ...common,
@@ -114,6 +118,9 @@ export class WorkerProviderError extends Schema.TaggedError<WorkerProviderError>
 
 export const make = Effect.gen(function* () {
   const providerHost = yield* ProviderHost.ProviderHost;
+  const config = yield* ServerConfig.ServerConfig;
+  const gateway = createModelGatewayCatalog({ directory: `${config.baseDir}/harnesses` });
+  const refreshGateway = Effect.tryPromise(() => gateway.refresh());
   const credentialContext = yield* Effect.context<
     Crypto.Crypto | FileSystem.FileSystem | ServerSecretStore.ServerSecretStore
   >();
@@ -130,6 +137,7 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (method === "configureProvider") {
         const input = yield* decodeRpcValue(raw);
+        yield* refreshGateway;
         yield* lock.withPermits(1)(
           Effect.gen(function* () {
             yield* settings.updateSettings({
@@ -143,7 +151,19 @@ export const make = Effect.gen(function* () {
             yield* mutator.reconcile(configurations);
             const instance = yield* registry.getInstance(input.instanceId);
             if (!instance) return yield* new WorkerProviderError({ operation: "configure" });
-            adapters.set(input.instanceId, instance.orchestrationAdapter);
+            const adapter = instance.orchestrationAdapter;
+            adapters.set(
+              input.instanceId,
+              gateway.requiresSessionRestart(instance.driverKind)
+                ? {
+                    ...adapter,
+                    planSelectionTransition: (selection) =>
+                      selection.current.model !== selection.target.model
+                        ? Effect.succeed({ type: "restart_session" as const })
+                        : adapter.planSelectionTransition(selection),
+                  }
+                : adapter,
+            );
           }),
         );
         return null;
@@ -151,6 +171,12 @@ export const make = Effect.gen(function* () {
       const command = yield* Schema.decodeUnknownEffect(ProviderRequest)(raw);
       const instance = yield* registry.getInstance(command.instanceId);
       if (!instance) return yield* new WorkerProviderError({ operation: "lookup" });
+      const normalizeInput = <T extends { readonly modelSelection: C.ModelSelection }>(
+        input: T,
+      ): T => ({
+        ...input,
+        modelSelection: gateway.normalizeSelection(instance.driverKind, input.modelSelection),
+      });
       if (method === "auth.configureSource") {
         sources.configure(
           command.instanceId,
@@ -238,6 +264,16 @@ export const make = Effect.gen(function* () {
         }
         return yield* new WorkerProviderError({ operation: "invalid_auth_request" });
       }
+      if (method.startsWith("provider.")) yield* refreshGateway;
+      if (method.startsWith("text.")) {
+        const selection = yield* decodeInferenceSelection(command.input);
+        yield* Effect.tryPromise(() =>
+          gateway.prepareInference(
+            instance.driverKind,
+            normalizeInput(selection).modelSelection.model,
+          ),
+        );
+      }
       switch (method) {
         case "provider.applyUsageLimits": {
           const input = yield* decodeProviderUsageLimitsUpdate(command.input);
@@ -246,38 +282,36 @@ export const make = Effect.gen(function* () {
         }
         case "provider.snapshot":
           return yield* encodeServerProvider(
-            filterApertureSnapshot(yield* instance.snapshot.getSnapshot),
+            gateway.snapshot(yield* instance.snapshot.getSnapshot),
           );
         case "provider.refresh":
-          return yield* encodeServerProvider(
-            filterApertureSnapshot(yield* instance.snapshot.refresh),
-          );
+          return yield* encodeServerProvider(gateway.snapshot(yield* instance.snapshot.refresh));
         case "provider.snapshotForCwd": {
           const cwd = yield* decodeRpcValue2(command.input);
           const snapshot = instance.snapshotForCwd
             ? yield* instance.snapshotForCwd(cwd)
             : yield* instance.snapshot.getSnapshot;
-          return yield* encodeServerProvider(filterApertureSnapshot(snapshot));
+          return yield* encodeServerProvider(gateway.snapshot(snapshot));
         }
         case "text.commit":
           return yield* instance.textGeneration.generateCommitMessage(
-            yield* decodeRpcValue3(command.input),
+            normalizeInput(yield* decodeRpcValue3(command.input)),
           );
         case "text.pr":
           return yield* instance.textGeneration.generatePrContent(
-            yield* decodeRpcValue4(command.input),
+            normalizeInput(yield* decodeRpcValue4(command.input)),
           );
         case "text.branch":
           return yield* instance.textGeneration.generateBranchName(
-            yield* decodeRpcValue5(command.input),
+            normalizeInput(yield* decodeRpcValue5(command.input)),
           );
         case "text.reviewGuide":
           return yield* instance.textGeneration.generateReviewGuide(
-            yield* decodeReviewGuideInput(command.input),
+            normalizeInput(yield* decodeReviewGuideInput(command.input)),
           );
         case "text.title":
           return yield* instance.textGeneration.generateThreadTitle(
-            yield* decodeRpcValue6(command.input),
+            normalizeInput(yield* decodeRpcValue6(command.input)),
           );
         default:
           return yield* new WorkerProviderError({ operation: "unsupported" });
@@ -303,5 +337,12 @@ export const make = Effect.gen(function* () {
     }
     return { pendingCallbacks, activeOperations: 0 };
   });
-  return { adapters, execute, activity, configureCredentialBroker: sources.configureBroker };
+  return {
+    adapters,
+    execute,
+    activity,
+    prepareInference: gateway.prepareInference,
+    normalizeSelection: gateway.normalizeSelection,
+    configureCredentialBroker: sources.configureBroker,
+  };
 });

@@ -74,3 +74,37 @@ config repository. The controller uses the ordinary agent-runtime worker image
 with its T3 controller command. There is no separate T3 controller image here.
 The profile migration script is bundled in the web image because it migrates
 T3's SQLite bindings; config retains its migration ledgers and controls when it runs.
+
+### Configure the bundled model gateway
+
+The web image includes `jake-molnia/CLIProxyAPI` at
+`bf9341629ef2300ac9d846a2e80fe2756f63a671`. The Dockerfile verifies the source
+archive checksum and applies `cliproxy-device.patch` to expose the existing Codex
+device sign-in through the management API. The patch also serializes account
+persistence with cancellation for the supported sign-in flows.
+
+Before the first head startup, set `T3_GATEWAY_API_KEY` to a random secret shared
+with execution workers. Set each worker's `T3_GATEWAY_URL` to the head's reachable
+URL ending in `/api/model-gateway`, without `/v1`. Give workers the same
+`T3_GATEWAY_API_KEY`. The head forwards authenticated inference requests to its
+loopback proxy. Keep the proxy management port private.
+
+Persist `/data/t3`, including its `model-gateway` directory. That directory holds
+account credentials, gateway configuration, and `keys.json`. The head generates
+the management key and retains both keys across restarts. A supplied key that
+differs from the saved key prevents startup. Management changes, including API
+endpoints added in T3, survive restarts.
+
+The supervisor starts T3 after the proxy's authenticated management API is ready.
+If either process exits, the supervisor stops the other. A head restart interrupts
+active model requests, even when execution workers remain alive.
+
+To run the focused deployment checks against a built proxy, use:
+
+```sh
+T3_CLIPROXY_BINARY=/path/to/cliproxyapi python3 images/t3/test_head_entrypoint.py
+```
+
+These checks also run during the web image build. They cover process shutdown,
+startup failure, stable credentials, and API endpoint persistence across a real
+proxy restart.

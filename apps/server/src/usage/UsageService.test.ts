@@ -575,13 +575,13 @@ describe("UsageService", () => {
                   }),
               codex: {
                 environment: [
-                  { name: "OPENAI_API_KEY", value: "${APERTURE_API_KEY}", sensitive: true },
+                  { name: "OPENAI_API_KEY", value: "${T3_GATEWAY_API_KEY}", sensitive: true },
                 ],
               },
             }),
             {
-              APERTURE_UPSTREAM: "http://aperture",
-              APERTURE_API_KEY: secret,
+              T3_GATEWAY_URL: "http://gateway",
+              T3_GATEWAY_API_KEY: secret,
               T3_HARNESS_STATE_DIR: NodePath.join(stateDir, "harnesses"),
             },
           );
@@ -597,7 +597,7 @@ describe("UsageService", () => {
                   type: "usage",
                   id: scenario,
                   timestamp: "2026-08-01T10:00:00Z",
-                  provider: "aperture",
+                  provider: "gateway",
                   model: "gpt-6-luna",
                   usage: { input: 123, output: 7 },
                 },
@@ -623,7 +623,7 @@ describe("UsageService", () => {
                 home,
                 settings: { ...settings, providerInstances: instances },
                 environment: {
-                  APERTURE_UPSTREAM: "http://aperture",
+                  T3_GATEWAY_URL: "http://gateway",
                   PI_CODING_AGENT_DIR: NodePath.join(home, "wrong-host-dir"),
                 },
               }),

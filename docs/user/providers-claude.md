@@ -1,45 +1,19 @@
 # Claude
 
-T3 Code uses Claude Code's login and configuration. Start with the default provider
-for one account; [provider setup](./install.md#providers) covers installation and
-shared provider settings.
+Claude Code runs in the deployment's execution workspace. Connect model accounts
+in **Settings → Providers → Accounts**, then choose Claude and an available model
+in the composer.
 
-## Separate accounts or configurations
+## Connect an account
 
-Use a separate Claude config directory for each account. This also works for named
-presets that need different Claude settings or a router connection.
+Choose **Claude** in **Accounts** and complete the browser sign-in. Paste the
+final redirect URL into T3 if prompted, even if the localhost page cannot load.
+Connect additional accounts through the same flow. You do not need separate
+Claude configuration directories.
 
-Keep your existing account in the default directory. On the environment's machine,
-create the second login:
-
-```bash
-mkdir -p ~/.claude_personal
-CLAUDE_CONFIG_DIR=~/.claude_personal claude auth login
-```
-
-Add another Claude instance in **Settings > Providers**:
-
-| Instance        | Binary path | CLAUDE_CONFIG_DIR path |
-| --------------- | ----------- | ---------------------- |
-| Claude Work     | `claude`    | Leave empty            |
-| Claude Personal | `claude`    | `~/.claude_personal`   |
-
-An empty config-directory setting uses Claude Code's normal configuration. The
-custom setting changes `CLAUDE_CONFIG_DIR`, leaving `HOME` and the system keychain
-location intact. Use the same variable for the login command. Setting `HOME`
-instead can put credentials where this provider will not find them.
-
-Check the account reported in provider settings after signing in. Existing
-threads can switch only between Claude instances with the same config directory.
-Separate account directories stay isolated, including their local conversation
-state. Claude does not have Codex's shared-home and shadow-home arrangement.
-
-For presets that differ only in API keys or endpoints, use the instance's
-**Environment variables**. Variable assignments do not belong in **Launch arguments**.
-
-Claude Code's verbose mode can stay enabled when you use Claude for text generation, including
-thread titles, branch names, commit messages, and pull request descriptions. On a remote connection,
-T3 Code uses the Claude configuration on the connected server.
+To use an OpenAI-compatible model service, add an **API endpoint** in **Accounts**.
+The gateway translates requests for compatible models. See
+[account and harness setup](./install.md#connect-a-provider-account).
 
 ## Compact long conversations
 
@@ -48,7 +22,7 @@ Set **Auto-compact after** in the Claude provider settings to an integer between
 300,000 tokens. This changes when compaction happens, not the model's context
 window. Leave it empty for Claude Code's default.
 
-You can also send `/compact` in an existing conversation. Web and desktop offer
+You can also send `/compact` in an existing conversation. T3 offers
 **Compact context** from the context meter. When you return to a large thread
 after Claude's prompt cache expires, a **Compact** chip with the thread's token count shows
 next to the send button. While it is on, Enter summarizes the history first, then
@@ -76,37 +50,9 @@ can still be started by you. Invoke those one per message: Claude directly runs
 only the last named skill and may try to start earlier ones through its Skill
 tool, which refuses skills reserved for manual invocation.
 
-## OpenRouter
+## OpenRouter and other model services
 
-Create a Claude instance with its own config directory, such as
-`~/.claude_openrouter`, and keep **Binary path** set to `claude`. In that instance's
-**Environment variables**, use:
-
-| Variable               | Value                                     |
-| ---------------------- | ----------------------------------------- |
-| `ANTHROPIC_BASE_URL`   | `https://openrouter.ai/api`               |
-| `ANTHROPIC_AUTH_TOKEN` | Your OpenRouter API key, marked Sensitive |
-| `ANTHROPIC_API_KEY`    | An explicitly empty value                 |
-
-If that Claude config directory has a cached Anthropic login, run `/logout` in a
-Claude Code session using that directory before starting the router setup. Cached
-login credentials can conflict with the router token.
-
-Select the model you want in T3 Code. For an OpenRouter model outside the built-in
-list, open that Claude instance in **Settings > Providers** and add its full model
-ID with **Add custom model**. Then select it in the chat model picker.
-`ANTHROPIC_DEFAULT_*_MODEL` variables map Claude Code aliases such as `sonnet`; they
-do not replace the explicit model ID selected in T3 Code. Custom models may have
-fewer effort, thinking, or context controls than built-in models.
-
-Verify the model used in OpenRouter's activity dashboard. For current compatibility
-requirements, use the
-[OpenRouter Claude Code guide](https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration).
-
-## Other routers
-
-A local router uses an ordinary Claude provider instance. Give it a separate
-config directory and put the router's endpoint and credential variables in that
-instance's **Environment variables**. The router must run where the environment
-can reach it. Follow the [Claude Code Router instructions](https://github.com/musistudio/claude-code-router)
-for its installation and routing configuration.
+In **Settings → Providers → Accounts**, add an **API endpoint** with your service's
+OpenAI-compatible base URL, API key, and full model IDs. For OpenRouter, use
+`https://openrouter.ai/api/v1`. Select Claude and the connected model in the
+composer. Models may offer different thinking or context controls.
