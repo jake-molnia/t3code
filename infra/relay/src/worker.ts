@@ -1,5 +1,4 @@
 import * as Alchemy from "alchemy";
-import * as Axiom from "alchemy/Axiom";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle/Postgres";
 import * as Config from "effect/Config";
@@ -27,7 +26,6 @@ import {
 } from "./http/Api.ts";
 import * as RelayHttpApi from "./http/Api.ts";
 import { ManagedEndpointZone, RelayApiZone, RelayDeploymentConfig } from "./zone.ts";
-import { RelayObservability } from "./observability.ts";
 import * as Observability from "./observability.ts";
 import * as DeliveryAttempts from "./agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "./agentActivity/AgentActivityRows.ts";
@@ -134,7 +132,6 @@ export const layer = Api.make(
     const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
     const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
-    yield* RelayObservability;
 
     //
     // 2. Create bindings
@@ -477,19 +474,6 @@ export const layer = Api.make(
         // are built into it.
         Layer.provideMerge(
           Alchemy.Telemetry.layer(Layer.succeed(HttpMiddleware.TracerDisabledWhen)(() => true)),
-        ),
-        // The Worker's only trace exporter: every event (fetch, queue, cron,
-        // HookInboxObject calls and alarms) exports through it to Axiom.
-        Layer.provideMerge(
-          Layer.unwrap(
-            Effect.map(RelayObservability, (observability) =>
-              Axiom.Telemetry({
-                serviceName: "t3code-relay",
-                token: observability.workerIngestToken,
-                traces: observability.traces,
-              }),
-            ),
-          ),
         ),
       ),
     ),

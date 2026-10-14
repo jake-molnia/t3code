@@ -30,7 +30,6 @@ import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
-import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 
 it.effect("parks automatic pull until activation without delaying command readiness", () =>
@@ -161,7 +160,6 @@ it.effect("parks automatic pull until activation without delaying command readin
               Effect.onInterrupt(() => Deferred.succeed(statusInterrupted, undefined)),
             ),
         }),
-        Layer.mock(AnalyticsService.AnalyticsService)({ record: () => Effect.void }),
         NodeCrypto.layer,
         Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
         Layer.mock(ExternalLauncher.ExternalLauncher)({}),
