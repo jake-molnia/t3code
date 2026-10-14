@@ -3015,63 +3015,6 @@ const layerWsRpc = (
         [WS_METHODS.previewReportProfiles]: (input) => serverBrowser.reportProfiles(input),
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),
         [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
-        [WS_METHODS.deviceConfigure]: () =>
-          Effect.fail(
-            new RuntimeContracts.DeviceHostUnavailableError({
-              hostId: "local",
-              reason: "Native device control is unavailable in the web deployment.",
-            }),
-          ),
-        [WS_METHODS.deviceTestHost]: () =>
-          Effect.fail(
-            new RuntimeContracts.DeviceHostUnavailableError({
-              hostId: "local",
-              reason: "Native device control is unavailable in the web deployment.",
-            }),
-          ),
-        [WS_METHODS.deviceList]: () =>
-          Effect.fail(
-            new RuntimeContracts.DeviceHostUnavailableError({
-              hostId: "local",
-              reason: "Native device control is unavailable in the web deployment.",
-            }),
-          ),
-        [WS_METHODS.deviceOpen]: () =>
-          Effect.fail(
-            new RuntimeContracts.DeviceHostUnavailableError({
-              hostId: "local",
-              reason: "Native device control is unavailable in the web deployment.",
-            }),
-          ),
-        [WS_METHODS.deviceClose]: () =>
-          Effect.fail(
-            new RuntimeContracts.DeviceHostUnavailableError({
-              hostId: "local",
-              reason: "Native device control is unavailable in the web deployment.",
-            }),
-          ),
-        [WS_METHODS.deviceShutdown]: () =>
-          Effect.fail(
-            new RuntimeContracts.DeviceHostUnavailableError({
-              hostId: "local",
-              reason: "Native device control is unavailable in the web deployment.",
-            }),
-          ),
-        [WS_METHODS.deviceDetail]: () =>
-          Effect.fail(
-            new RuntimeContracts.DeviceHostUnavailableError({
-              hostId: "local",
-              reason: "Native device control is unavailable in the web deployment.",
-            }),
-          ),
-        [WS_METHODS.deviceAction]: () =>
-          Effect.fail(
-            new RuntimeContracts.DeviceHostUnavailableError({
-              hostId: "local",
-              reason: "Native device control is unavailable in the web deployment.",
-            }),
-          ),
-        [WS_METHODS.subscribeDeviceState]: () => Stream.empty,
         [WS_METHODS.subscribeDiscoveredLocalServers]: (input) => {
           let first = true;
           return Stream.fromEffectRepeat(

@@ -359,10 +359,6 @@
       "types": "./src/usageLimits.ts",
       "import": "./src/usageLimits.ts"
     },
-    "./desktopAppControl": {
-      "types": "./src/desktopAppControl.ts",
-      "import": "./src/desktopAppControl.ts"
-    },
     "./thirdPartyLicenses": {
       "types": "./src/thirdPartyLicenses.ts",
       "import": "./src/thirdPartyLicenses.ts"

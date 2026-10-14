@@ -1,4 +1,3 @@
-import { SshDeviceHostConfigs } from "./device.ts";
 import {
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
@@ -230,22 +229,6 @@ export const NotificationMode = Schema.Literals([
 ]);
 export type NotificationMode = typeof NotificationMode.Type;
 
-export const QuitConfirmationMode = Schema.Literals(["direct", "hold", "double-click"]);
-export type QuitConfirmationMode = typeof QuitConfirmationMode.Type;
-const DEFAULT_QUIT_CONFIRMATION_MODE: QuitConfirmationMode = "hold";
-
-const LegacyConfirmQuit = Schema.Boolean.pipe(
-  Schema.decodeTo(
-    QuitConfirmationMode,
-    SchemaTransformation.transform({
-      decode: (confirmQuit): QuitConfirmationMode => (confirmQuit ? "hold" : "direct"),
-      encode: (mode) => mode === "hold",
-    }),
-  ),
-);
-
-const QuitConfirmationModeSetting = Schema.Union([QuitConfirmationMode, LegacyConfirmQuit]);
-
 /**
  * A user-chosen font family (a single name or a comma-separated list). Empty
  * means "use the app default"; clients compose their own fallback stacks.
@@ -382,11 +365,6 @@ export const ClientSettingsSchema = Schema.Struct({
   /** Profile new tabs open under. Falls back to Default if it no longer exists. */
   browserDefaultProfileId: BrowserProfileId.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_PROFILE_ID)),
-  ),
-  // Desktop-only. Boolean values from older settings files decode to their
-  // equivalent mode and encode back as the canonical string value.
-  confirmQuit: QuitConfirmationModeSetting.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_QUIT_CONFIRMATION_MODE)),
   ),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -845,7 +823,7 @@ export type ResponseStreamingMode = typeof ResponseStreamingMode.Type;
 
 /**
  * Server settings a project may override. Every other server setting is
- * environment-wide: providers, keybindings, observability, device hosts,
+ * environment-wide: providers, keybindings, observability,
  * background activity, theme. UI, search and the write planner derive
  * eligibility from this list, so adding a key here is the whole opt-in.
  */
@@ -889,7 +867,6 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "defaultAutoPull",
   "defaultProjectScripts",
   "enableAgentBrowserAccess",
-  "enableAgentDeviceAccess",
   "textGenerationModelSelection",
   "sourceControlWriterModelSelection",
   "reviewGuideModelSelection",
@@ -936,7 +913,6 @@ export const ProjectSettingsOverrides = Schema.Struct({
   defaultAutoPull: Schema.optionalKey(Schema.Boolean),
   defaultProjectScripts: Schema.optionalKey(Schema.Array(ProjectScript)),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
-  enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelection),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   reviewGuideModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
@@ -1094,23 +1070,6 @@ export const ServerSettings = Schema.Struct({
    * settings UI is not undone by the next server start.
    */
   projectSettingsFolded: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  /**
-   * Whether agents may drive simulators and emulators. Gates the `device_*`
-   * MCP tools and the preconfigured `agent-device` CLI the same way
-   * `enableAgentBrowserAccess` gates the browser: server-authoritative, applied
-   * when the provider session is prepared. The user's own Device panel is
-   * unaffected.
-   */
-  enableAgentDeviceAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  /**
-   * Whether this server may install and run T3's device helper processes.
-   * Kept separate from agent access so enabling the user's Device panel does
-   * not also grant providers control of simulators and emulators.
-   */
-  enableDeviceSupport: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  /** Whether the server-local Device panel setup flow has been completed. */
-  deviceOnboardingCompleted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  deviceHosts: SshDeviceHostConfigs.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -1483,10 +1442,6 @@ export const ServerSettingsPatch = Schema.Struct({
   projectSettingsOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(ProjectSettingsOverrides)),
   ),
-  enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
-  enableDeviceSupport: Schema.optionalKey(Schema.Boolean),
-  deviceOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
-  deviceHosts: Schema.optionalKey(SshDeviceHostConfigs),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
@@ -1616,7 +1571,6 @@ export const ClientSettingsPatch = Schema.Struct({
   browserAutoShowFloatingPreview: Schema.optionalKey(Schema.Boolean),
   browserProfiles: Schema.optionalKey(Schema.Array(BrowserProfile)),
   browserDefaultProfileId: Schema.optionalKey(BrowserProfileId),
-  confirmQuit: Schema.optionalKey(QuitConfirmationMode),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   confirmThreadUnpin: Schema.optionalKey(Schema.Boolean),

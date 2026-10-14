@@ -33,7 +33,6 @@ import {
   Files,
   Globe2,
   Plus,
-  Smartphone,
   TerminalSquare,
 } from "lucide-react";
 import {
@@ -52,7 +51,6 @@ import {
 import { useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
 
 import { useBrowserDefaults } from "~/browser/browserDefaults";
-import { AndroidIcon, AppleIcon } from "~/components/Icons";
 import { MorphIcon } from "~/components/MorphIcon";
 import { Button } from "~/components/ui/button";
 import { Kbd } from "~/components/ui/kbd";
@@ -121,7 +119,6 @@ interface RightPanelTabsProps {
   previewRuntimeTabId?: ((tabId: string) => string) | undefined;
   terminalLabelsById: ReadonlyMap<string, string>;
   onActivate: (surface: RightPanelSurface) => void;
-  onRenameDevice?: (surfaceId: string, title: string) => void;
   onCloseSurface: (surface: RightPanelSurface) => void;
   onCloseOtherSurfaces: (surface: RightPanelSurface) => void;
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
@@ -141,14 +138,12 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
-  onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
-  deviceAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -176,7 +171,6 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   pullRequests: "No linked pull requests are available for this thread.",
-  device: "Devices are only available from a thread.",
 } as const;
 
 /** Overlays that must win over the launcher's letter shortcuts. */
@@ -199,11 +193,9 @@ const SURFACE_UNAVAILABLE_HINTS = {
   diff: "Available for Git repositories.",
   pullRequest: "No pull request on this branch yet.",
   pullRequests: "No linked pull requests available.",
-  device: "Available from a thread.",
 } as const;
 
 type TabContextMenuAction =
-  | "rename"
   | "copy-path"
   | "toggle-mute"
   | "close"
@@ -339,14 +331,12 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
-  onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
-  deviceAvailable: boolean;
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
   const [highlight, setHighlight] = useState(-1);
@@ -608,8 +598,6 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "pull-requests":
       return "Pull requests";
-    case "device":
-      return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -691,14 +679,6 @@ function SurfaceIcon({
       );
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
-    case "device":
-      return surface.target?.platform === "ios" ? (
-        <AppleIcon className="size-3 shrink-0" />
-      ) : surface.target?.platform === "android" ? (
-        <AndroidIcon className="size-3 shrink-0" />
-      ) : (
-        <Smartphone className="size-3 shrink-0" />
-      );
   }
 }
 
@@ -861,7 +841,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
   const addSurfaceTriggerRef = useRef<HTMLButtonElement>(null);
-  const [renamingDevice, setRenamingDevice] = useState<string | null>(null);
   const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
   const [tabScrollState, setTabScrollState] = useState({
     hasOverflow: false,
@@ -996,8 +975,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       if (surfaceIndex < 0) return;
 
       const items: ContextMenuItem<TabContextMenuAction>[] = [];
-      if (surface.kind === "device" && props.onRenameDevice)
-        items.push({ id: "rename", label: "Rename" });
       if (surface.kind === "file" && surface.attachment === undefined) {
         items.push({ id: "copy-path", label: "Copy path" });
       }
@@ -1041,9 +1018,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
 
       const action = await api.contextMenu.show(items, { x: event.clientX, y: event.clientY });
       switch (action) {
-        case "rename":
-          setRenamingDevice(surface.id);
-          break;
         case "copy-path":
           if (surface.kind === "file" && surface.attachment === undefined) {
             props.onCopyFilePath(surface.relativePath);
@@ -1192,7 +1166,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   <SortableTab
                     key={surface.id}
                     surfaceId={surface.id}
-                    disabled={!props.onMoveSurface || renamingDevice === surface.id}
+                    disabled={!props.onMoveSurface}
                     data-active-tab={active}
                     onMouseDown={handleTabMouseDown}
                     onAuxClick={(event) => handleTabAuxClick(event, surface)}
@@ -1251,50 +1225,20 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                         <TooltipPopup>{audio === "muted" ? "Unmute tab" : "Mute tab"}</TooltipPopup>
                       </Tooltip>
                     )}
-                    {renamingDevice === surface.id ? (
-                      <input
-                        aria-label="Device tab name"
-                        className="w-24 min-w-0 rounded-sm bg-background px-1 outline-none ring-1 ring-inset ring-ring"
-                        defaultValue={title}
-                        ref={(element) => {
-                          element?.focus();
-                          element?.select();
-                        }}
-                        onBlur={(event) => {
-                          props.onRenameDevice?.(surface.id, event.currentTarget.value);
-                          setRenamingDevice(null);
-                        }}
-                        onKeyDown={(event) => {
-                          event.stopPropagation();
-                          if (event.key === "Enter") event.currentTarget.blur();
-                          if (event.key === "Escape") {
-                            event.currentTarget.value = title;
-                            event.currentTarget.blur();
-                          }
-                        }}
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            className="cursor-pointer flex min-w-0 items-center"
+                            onClick={() => props.onActivate(surface)}
+                          >
+                            <span className="truncate">{title}</span>
+                          </button>
+                        }
                       />
-                    ) : (
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <button
-                              type="button"
-                              onDoubleClick={() => {
-                                if (surface.kind === "device" && props.onRenameDevice)
-                                  setRenamingDevice(surface.id);
-                              }}
-                              className="cursor-pointer flex min-w-0 items-center"
-                              onClick={() => props.onActivate(surface)}
-                            >
-                              <span className="truncate">{title}</span>
-                            </button>
-                          }
-                        />
-                        <TooltipPopup>
-                          {title}
-                        </TooltipPopup>
-                      </Tooltip>
-                    )}
+                      <TooltipPopup>{title}</TooltipPopup>
+                    </Tooltip>
                   </SortableTab>
                 );
               })}
@@ -1456,14 +1400,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
-            onAddDevice={props.onAddDevice}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             pullRequestsAvailable={props.pullRequestsAvailable}
-            deviceAvailable={props.deviceAvailable}
           />
         ) : (
           props.children

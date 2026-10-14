@@ -378,7 +378,7 @@ export const layerWithOptions = (
       const agentScope = yield* AgentScope;
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
-          if (Option.isNone(serverSettings)) return { browser: true, device: false };
+          if (Option.isNone(serverSettings)) return { browser: true };
           return yield* Effect.gen(function* () {
             const settings = yield* serverSettings.value.getSettings;
             const thread = yield* projectionStore.getThread(threadId);
@@ -386,30 +386,25 @@ export const layerWithOptions = (
             const browserOverridden = entries.some(
               (entry) => entry.enableAgentBrowserAccess !== undefined,
             );
-            const deviceOverridden = entries.some(
-              (entry) => entry.enableAgentDeviceAccess !== undefined,
-            );
-            if (browserOverridden || deviceOverridden) {
+            if (browserOverridden) {
               const project = Option.isSome(projectService)
                 ? yield* projectService.value.getById(thread.projectId)
                 : Option.none();
               if (Option.isNone(project))
                 return {
                   browser: browserOverridden ? false : settings.enableAgentBrowserAccess,
-                  device: deviceOverridden ? false : settings.enableAgentDeviceAccess,
                 };
             }
             const effective = resolveProjectSettings(settings, thread.projectId).settings;
             return {
               browser: effective.enableAgentBrowserAccess,
-              device: effective.enableAgentDeviceAccess,
             };
           }).pipe(
             Effect.catch((cause) =>
-              Effect.logWarning(
-                "Could not resolve agent access; withholding browser and device tools.",
-                { threadId, cause },
-              ).pipe(Effect.as({ browser: false, device: false })),
+              Effect.logWarning("Could not resolve agent access; withholding browser tools.", {
+                threadId,
+                cause,
+              }).pipe(Effect.as({ browser: false })),
             ),
           );
         },
@@ -506,8 +501,7 @@ export const layerWithOptions = (
                 // the credential it started with, so a thread that detaches and
                 // re-attaches across a workspace handoff must come back to the
                 // same token or the process's tool calls fail auth.
-                const { browser: browserToolsAvailable, device: deviceToolsAvailable } =
-                  yield* agentAccessSettings(threadId);
+                const { browser: browserToolsAvailable } = yield* agentAccessSettings(threadId);
                 const capabilities = new Set<
                   import("../mcp/McpInvocationContext.ts").McpCapability
                 >(["orchestration", "worktree", "pull-requests"]);
@@ -515,7 +509,6 @@ export const layerWithOptions = (
                   capabilities.add("preview");
                   capabilities.add("computer");
                 }
-                if (deviceToolsAvailable) capabilities.add("device");
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
@@ -540,8 +533,7 @@ export const layerWithOptions = (
                     // A flipped browser-access setting must not survive through
                     // credential reuse: rotate so the new scope reflects it.
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
-                    resolved.capabilities.has("computer") === browserToolsAvailable &&
-                    resolved.capabilities.has("device") === deviceToolsAvailable
+                    resolved.capabilities.has("computer") === browserToolsAvailable
                   ) {
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }

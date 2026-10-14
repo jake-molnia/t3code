@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import type { CommandId, ProjectId } from "./baseSchemas.ts";
+import { type CommandId, ProjectId } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
   ClientSettingsSchema,
@@ -487,30 +487,19 @@ describe("ClientSettings proactive panels", () => {
   });
 });
 
-describe("ClientSettings quit confirmation", () => {
-  it("defaults to hold", () => {
-    expect(decodeClientSettings({}).confirmQuit).toBe("hold");
-  });
-
-  it.each(["direct", "hold", "double-click"] as const)("accepts the %s mode", (mode) => {
-    expect(decodeClientSettings({ confirmQuit: mode }).confirmQuit).toBe(mode);
-    expect(decodeClientSettingsPatch({ confirmQuit: mode }).confirmQuit).toBe(mode);
-  });
-
-  it.each([
-    [true, "hold"],
-    [false, "direct"],
-  ] as const)("migrates the legacy %s value to %s", (legacyValue, mode) => {
-    const settings = decodeClientSettings({ confirmQuit: legacyValue });
-
-    expect(settings.confirmQuit).toBe(mode);
-    expect(encodeClientSettings(settings).confirmQuit).toBe(mode);
-  });
-
-  it("rejects legacy booleans at the patch boundary", () => {
-    expect(() => decodeClientSettingsPatch({ confirmQuit: true })).toThrow();
-  });
-});
+it.each([true, false, "hold", "direct", "double-click"])(
+  "discards the obsolete quit preference %s while preserving browser settings",
+  (confirmQuit) => {
+    const legacy = { confirmQuit, confirmThreadDelete: false, browserRecordingFrameRate: 60 };
+    const settings = decodeClientSettings(legacy);
+    expect(settings).not.toHaveProperty("confirmQuit");
+    expect(decodeClientSettingsPatch(legacy)).toEqual({
+      confirmThreadDelete: false,
+      browserRecordingFrameRate: 60,
+    });
+    expect(decodeClientSettings(encodeClientSettings(settings))).toEqual(settings);
+  },
+);
 
 describe("ClientSettings browser recording frame rate", () => {
   it("defaults to 30 fps", () => {
@@ -1014,17 +1003,31 @@ describe("ServerSettings environment icon", () => {
   });
 });
 
-const decodeDeviceHostSettings = Schema.decodeSync(ServerSettings);
-
-it("validates remote device hosts and rejects ambiguous host ids", () => {
-  const host = { id: "mini", label: "Mac mini", target: "user@mini", port: 2222 };
-  expect(decodeDeviceHostSettings({ deviceHosts: [host] }).deviceHosts).toEqual([host]);
-  expect(() => decodeDeviceHostSettings({ deviceHosts: [host, host] })).toThrow();
-  expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, id: "local" }] })).toThrow();
-  expect(() =>
-    decodeDeviceHostSettings({ deviceHosts: [{ ...host, target: "-oProxyCommand=bad" }] }),
-  ).toThrow();
-  expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
+it("reads legacy device settings without exposing native device controls", () => {
+  const projectId = ProjectId.make("project-legacy-device");
+  const legacy = {
+    enableAgentDeviceAccess: true,
+    enableDeviceSupport: true,
+    deviceOnboardingCompleted: true,
+    deviceHosts: [{ id: "mini", label: "Mac mini", target: "user@mini" }],
+    enableAgentBrowserAccess: false,
+    projectSettingsOverrides: {
+      [projectId]: { enableAgentDeviceAccess: true, enableAgentBrowserAccess: true },
+    },
+  };
+  const settings = decodeServerSettings(legacy);
+  expect(settings.enableAgentBrowserAccess).toBe(false);
+  expect(settings.projectSettingsOverrides[projectId]).toEqual({ enableAgentBrowserAccess: true });
+  for (const key of [
+    "enableAgentDeviceAccess",
+    "enableDeviceSupport",
+    "deviceOnboardingCompleted",
+    "deviceHosts",
+  ]) {
+    expect(settings).not.toHaveProperty(key);
+    expect(decodeServerSettingsPatch(legacy)).not.toHaveProperty(key);
+  }
+  expect(decodeServerSettings(encodeServerSettings(settings))).toEqual(settings);
 });
 
 describe("branch naming settings", () => {
