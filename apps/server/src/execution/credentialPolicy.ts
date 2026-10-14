@@ -5,7 +5,7 @@ export function credentialPolicy(
   driver: C.ProviderDriverKind,
   config: unknown,
 ): { readonly kind: "controller" } | { readonly kind: "workspace" } {
-  if (driver === "cursor") return { kind: "controller" };
+  if (driver === "cursor" || driver === "antigravity") return { kind: "controller" };
   if (driver === "codex")
     return Schema.is(C.CodexSettings)(config) && config.setupMode === "managed"
       ? { kind: "controller" }
