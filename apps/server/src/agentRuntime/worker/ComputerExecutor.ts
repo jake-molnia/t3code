@@ -2,6 +2,8 @@ import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Schedule from "effect/Schedule";
+import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as C from "../../../../../packages/contracts/src/sandboxComputer.ts";
@@ -65,10 +67,40 @@ export const makeComputerExecutor = Effect.gen(function* () {
         ? HttpClientRequest.get(target)
         : yield* HttpClientRequest.bodyJson(HttpClientRequest.post(target), body);
     const response = yield* http.execute(outgoing);
+    if (path === "info" && response.status === 503)
+      return yield* new P.WorkspaceExecutionError({ code: "computer_backend_starting" });
     if (response.status < 200 || response.status >= 300)
       return yield* new P.WorkspaceExecutionError({ code: "computer_backend_failed" });
     return response;
   });
+  const readInfo = request("info").pipe(
+    Effect.flatMap((response) => response.json),
+    Effect.flatMap(decodeInfo),
+  );
+  const readinessLock = yield* Semaphore.make(1);
+  let ready = false;
+  const awaitReady = readinessLock.withPermit(
+    Effect.gen(function* () {
+      if (ready) return;
+      yield* readInfo.pipe(
+        Effect.flatMap(({ data }) =>
+          data.available
+            ? Effect.void
+            : Effect.fail(new P.WorkspaceExecutionError({ code: "computer_backend_starting" })),
+        ),
+        Effect.timeout("2 seconds"),
+        Effect.retry({
+          schedule: Schedule.spaced("250 millis"),
+          while: (error) =>
+            error._tag === "TimeoutError" ||
+            (error._tag === "HttpClientError" && error.reason._tag === "TransportError") ||
+            (error._tag === "WorkspaceExecutionError" &&
+              error.code === "computer_backend_starting"),
+        }),
+      );
+      ready = true;
+    }),
+  );
   let activeOperations = 0;
   const execute = (method: string, raw: unknown) =>
     Effect.acquireUseRelease(
@@ -79,8 +111,8 @@ export const makeComputerExecutor = Effect.gen(function* () {
         Effect.gen(function* () {
           switch (method) {
             case "computer.status": {
-              const response = yield* request("info");
-              const { data } = yield* response.json.pipe(Effect.flatMap(decodeInfo));
+              yield* awaitReady;
+              const { data } = yield* readInfo;
               return {
                 available: data.available,
                 display: data.display,
@@ -89,6 +121,7 @@ export const makeComputerExecutor = Effect.gen(function* () {
               };
             }
             case "computer.screenshot": {
+              yield* awaitReady;
               const response = yield* request("screenshot");
               const bytes = Buffer.from(yield* response.arrayBuffer);
               if (
@@ -111,6 +144,7 @@ export const makeComputerExecutor = Effect.gen(function* () {
             }
             case "computer.action": {
               const input = yield* decodeAction(raw);
+              yield* awaitReady;
               const response = yield* request("actions", backendAction(input));
               yield* response.json.pipe(Effect.flatMap(decodeActionResponse));
               return { ok: true };
