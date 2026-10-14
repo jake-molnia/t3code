@@ -2,6 +2,7 @@ import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as C from "../../../../../packages/contracts/src/sandboxComputer.ts";
@@ -70,6 +71,8 @@ export const makeComputerExecutor = Effect.gen(function* () {
     return response;
   });
   let activeOperations = 0;
+  // A worker has one display, shared by the root and its descendants.
+  const display = yield* Semaphore.make(1);
   const execute = (method: string, raw: unknown) =>
     Effect.acquireUseRelease(
       Effect.sync(() => {
@@ -118,7 +121,7 @@ export const makeComputerExecutor = Effect.gen(function* () {
             default:
               return yield* new P.WorkspaceExecutionError({ code: "unsupported_computer_method" });
           }
-        }).pipe(Effect.timeout("30 seconds")),
+        }).pipe(Effect.timeout("30 seconds"), display.withPermit),
       () =>
         Effect.sync(() => {
           activeOperations--;

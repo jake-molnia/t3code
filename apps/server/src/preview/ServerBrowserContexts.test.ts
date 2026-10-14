@@ -66,6 +66,33 @@ beforeEach(() => {
 });
 
 describe("ServerBrowserContexts", () => {
+  it("keeps incognito and named profiles separate from the runtime desktop", async () => {
+    const desktop = makeContext();
+    const privateContext = makeContext();
+    const work = makeContext();
+    const browser = {
+      contexts: () => [desktop],
+      newContext: vi.fn(async () => privateContext),
+      on: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    launches.connect.mockResolvedValue(browser as unknown as Browser);
+    launches.persistent.mockResolvedValue(work as unknown as BrowserContext);
+    const pool = new ServerBrowserContexts({ ...options(), cdpEndpoint: "http://127.0.0.1:9222" });
+    expect(await pool.contextFor("default")).toBe(desktop);
+    expect(await pool.contextFor(INCOGNITO_BROWSER_PROFILE_ID)).toBe(privateContext);
+    expect(await pool.contextFor("work")).toBe(work);
+    await pool.clearProfile("work");
+    expect(work.close).toHaveBeenCalledOnce();
+    expect(launches.rm).toHaveBeenCalledWith("/test/profiles/work", {
+      recursive: true,
+      force: true,
+    });
+    await pool.close();
+    expect(privateContext.close).toHaveBeenCalledOnce();
+    expect(desktop.close).not.toHaveBeenCalled();
+  });
+
   it("shares the runtime desktop without launching Chromium or closing its existing tabs", async () => {
     const context = makeContext();
     const existingPage = { close: vi.fn() };
