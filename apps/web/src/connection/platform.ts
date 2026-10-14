@@ -22,7 +22,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
-import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { APP_VERSION } from "../branding";
@@ -33,13 +32,13 @@ import {
   type PrimaryEnvironmentTarget,
 } from "../environments/primary/target";
 import { clearComposerDraftsEnvironment } from "../composerDraftStore";
-import { isHostedStaticApp } from "../hostedPairing";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { acknowledgeRpcRequest, trackRpcRequestSent } from "../rpc/requestLatencyState";
 
 import * as ConnectionStorage from "./storage";
 import { clientPresentationMetadata } from "./clientMetadata";
+import { makePrimaryConnectionDiscovery } from "./primaryDiscovery";
 
 let nextObservedRpcRequestId = 0;
 
@@ -236,16 +235,10 @@ const loadPrimaryConnectionRegistration = Effect.fn(
 const layerPlatformConnectionSource = Layer.effect(
   PlatformConnectionSource.PlatformConnectionSource,
   Effect.gen(function* () {
-    const cached = yield* Ref.make<ReadonlyArray<PrimaryConnectionRegistration>>([]);
-    const discover = Effect.gen(function* () {
-      const previous = yield* Ref.get(cached);
-      if (previous.length > 0) return previous;
-      const target = readPrimaryEnvironmentTarget();
-      if (target === null) return yield* Ref.get(cached);
-      const registrations = [yield* loadPrimaryConnectionRegistration(target)];
-      yield* Ref.set(cached, registrations);
-      return registrations;
-    }).pipe(Effect.catch(() => Ref.get(cached)));
+    const discover = yield* makePrimaryConnectionDiscovery({
+      readTarget: readPrimaryEnvironmentTarget,
+      load: loadPrimaryConnectionRegistration,
+    });
     return PlatformConnectionSource.PlatformConnectionSource.of({
       registrations: Stream.tick("3 seconds").pipe(Stream.mapEffect(() => discover)),
     });
