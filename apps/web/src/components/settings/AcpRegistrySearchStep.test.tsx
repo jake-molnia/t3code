@@ -93,7 +93,7 @@ function render(options?: {
       ? {
           acpRegistry_gemini: {
             driver: ProviderDriverKind.make("acpRegistry"),
-            config: { agentId: "gemini" },
+            config: { agentId: "gemini", commandPath: "/opt/agents/bin/gemini" },
           },
         }
       : {},

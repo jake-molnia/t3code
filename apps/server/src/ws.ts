@@ -2264,11 +2264,11 @@ const layerWsRpc = (
                 (instance) =>
                   Effect.gen(function* () {
                     yield* instance.invalidateCaches ?? Effect.void;
-                    const maintenance = yield* instance.snapshot.getVersionSource({
+                    const versionSource = yield* instance.snapshot.getVersionSource({
                       fresh: true,
                     });
-                    if (maintenance.packageName)
-                      yield* providerLatestVersions.invalidate(maintenance.packageName);
+                    if (versionSource.packageName)
+                      yield* providerLatestVersions.invalidate(versionSource.packageName);
                   }),
                 { concurrency: "unbounded", discard: true },
               );

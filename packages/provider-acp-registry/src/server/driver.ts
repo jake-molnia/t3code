@@ -164,7 +164,7 @@ export function acpRegistrySnapshotReadiness(
         installed: false,
         version: inspection.version,
         status: "warning",
-        message: `ACP Registry agent '${inspection.agentId}' requires an executable supplied by the sandbox image. Configure its command path and arguments.`,
+        message: `ACP Registry agent '${inspection.agentId}' requires an executable supplied by the sandbox image. Configure its executable path.`,
       };
     case "failed":
       return {

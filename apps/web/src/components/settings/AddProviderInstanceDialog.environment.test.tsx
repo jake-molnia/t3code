@@ -97,6 +97,16 @@ async function selectRegistryAcp() {
   );
 }
 
+function setRegistryExecutable(tree: ReturnType<typeof render>, value: string) {
+  const input = visitElements(
+    tree,
+    (element) => element.props.id === "add-provider-acp-executable",
+  );
+  const change = input?.props.onChange;
+  if (typeof change !== "function") throw new Error("Registry executable editor is missing");
+  change({ target: { value } });
+}
+
 function renderDialog() {
   hooks.beginRender();
   return AddProviderInstanceDialog({
@@ -205,7 +215,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     );
     await selectRegistryAcp();
 
-    const identityStep = render(onOpenChange);
+    let identityStep = render(onOpenChange);
     expect(
       visitElements(identityStep, (element) => {
         const content = JSON.stringify(element.props.children);
@@ -215,6 +225,14 @@ describe("AddProviderInstanceDialog environment routing", () => {
     (
       findByChildren(identityStep, "Continue to sign-in").props.onClick as (() => void) | undefined
     )?.();
+    expect(settingsHooks.mutate).not.toHaveBeenCalled();
+    identityStep = render(onOpenChange);
+    expect(
+      findByChildren(identityStep, "An executable supplied by the sandbox image is required."),
+    ).not.toBeNull();
+    setRegistryExecutable(identityStep, "/opt/agents/bin/kilo");
+    identityStep = render(onOpenChange);
+    (findByChildren(identityStep, "Continue to sign-in").props.onClick as () => void)();
     expect(settingsHooks.mutate).toHaveBeenCalledWith({
       operation: "create",
       instanceId: "acpRegistry_kilo_code",
@@ -224,6 +242,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
         displayName: "Kilo Code",
         config: {
           agentId: "kilo",
+          commandPath: "/opt/agents/bin/kilo",
           distribution: "auto",
           registryIconUrl: "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg",
         },
@@ -264,6 +283,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     );
     (configuration!.props.onChange as (value: Record<string, unknown>) => void)({
       agentId: "devin",
+      commandPath: "/opt/agents/bin/devin",
     });
     tree = render();
     (findByChildren(tree, "Next").props.onClick as () => void)();
@@ -277,7 +297,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
       instance: {
         driver: "acpRegistry",
         enabled: true,
-        config: { agentId: "devin" },
+        config: { agentId: "devin", commandPath: "/opt/agents/bin/devin" },
       },
     });
     tree = render();
@@ -363,7 +383,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     settingsHooks.mutate.mockResolvedValueOnce({ _tag: "Failure", cause: new Error("Conflict") });
     const onOpenChange = vi.fn();
     await selectRegistryAcp();
-
+    setRegistryExecutable(render(onOpenChange), "/opt/agents/bin/kilo");
     const identityStep = render(onOpenChange);
     (
       findByChildren(identityStep, "Continue to sign-in").props.onClick as (() => void) | undefined

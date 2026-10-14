@@ -723,11 +723,11 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         }
         command = resolvedOverride;
         yield* validateLocalExecutable(command);
-        args = settings.commandArgs;
+        args = distribution.args;
       } else {
         return yield* new AcpRegistryError({
           reason: "runner_unavailable",
-          detail: `ACP agent ${agent.id} requires an executable supplied by the execution image. Configure its command path and pinned arguments.`,
+          detail: `ACP agent ${agent.id} requires an executable supplied by the execution image. Configure its image executable path.`,
         });
       }
 
@@ -738,7 +738,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           command,
           args,
           cwd,
-          env: effectiveEnvironment,
+          env: { ...effectiveEnvironment, ...distribution.env },
           shell: false,
         },
       } satisfies ResolvedAcpRegistryAgent;

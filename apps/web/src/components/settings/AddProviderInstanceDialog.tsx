@@ -184,6 +184,10 @@ export function AddProviderInstanceDialog({
     : selectedAcp !== null || (isManualAcpConfiguration && manualAgentId.length > 0)
       ? null
       : "Select an ACP or configure one manually.";
+  const registryCommandError =
+    isAcpRegistry && !isLocalAcp && localCommandPath.length === 0
+      ? "An executable supplied by the sandbox image is required."
+      : null;
   const wizardStepSummaries = isAcpRegistry
     ? ([
         isLocalAcp ? "Local ACP command" : (selectedAcp?.name ?? (manualAgentId || null)),
@@ -309,6 +313,10 @@ export function AddProviderInstanceDialog({
     if (isSaving || createdInstanceId) return;
     setHasAttemptedSubmit(true);
     if (instanceIdError !== null || (isAcpRegistry && acpSelectionError !== null)) return;
+    if (registryCommandError !== null) {
+      setWizardStep(identityStep);
+      return;
+    }
 
     const config =
       driver === "codex"
@@ -623,6 +631,33 @@ export function AddProviderInstanceDialog({
                     />
                   }
                 />
+                {isAcpRegistry && !isLocalAcp ? (
+                  <SettingsRow
+                    title={<label htmlFor="add-provider-acp-executable">Executable</label>}
+                    description="Name or path supplied by the sandbox image. Registry arguments and environment are preserved."
+                    status={
+                      hasAttemptedSubmit && registryCommandError ? (
+                        <span role="alert" className="text-destructive">
+                          {registryCommandError}
+                        </span>
+                      ) : undefined
+                    }
+                    control={
+                      <div className="w-full @min-[32rem]/settings-row:w-56">
+                        <Input
+                          id="add-provider-acp-executable"
+                          size="sm"
+                          placeholder="e.g. /opt/agents/bin/agent"
+                          value={localCommandPath}
+                          aria-invalid={hasAttemptedSubmit && registryCommandError !== null}
+                          onChange={(event) =>
+                            setConfigDraft({ ...configDraft, commandPath: event.target.value })
+                          }
+                        />
+                      </div>
+                    }
+                  />
+                ) : null}
                 <SettingsRow
                   title="Accent color"
                   description="Optional marker shown in the picker."

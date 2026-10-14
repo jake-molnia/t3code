@@ -20,7 +20,7 @@ import * as ProviderContinuationRequests from "@t3tools/provider-core/server/Pro
 import { checkMuseProviderStatus, makePendingMuseProvider } from "./status.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
-import { enrichMuseSnapshot, compareMuseVersions } from "./maintenance.ts";
+import { enrichMuseSnapshot, getMuseVersionSource } from "./maintenance.ts";
 import { makeMuseEnvironment } from "./sdk.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -89,8 +89,11 @@ export const MuseDriver: ProviderDriver<MuseSettings, MuseDriverEnv> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
-      const getVersionSource = () =>
-        Effect.succeed({ packageName: null, compareVersions: compareMuseVersions });
+      const getVersionSource = (options?: { readonly fresh?: boolean }) =>
+        getMuseVersionSource(processEnvironment, options).pipe(
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
+        );
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<MuseSettings>>({
         getVersionSource,
         getSettings: snapshotSettings.getSettings,

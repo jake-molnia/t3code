@@ -312,9 +312,18 @@ it.effect("registry refresh and launch never install packages or fetch executabl
     yield* fs.writeFileString(commandPath, "#!/bin/sh\n");
     yield* fs.chmod(commandPath, 0o755);
     const distributions: AcpRegistrySupport.AcpRegistryAgent["distribution"][] = [
-      { npx: { package: "@example/acp@1.2.3", args: ["mutable-registry-argument"] } },
-      { uvx: { package: "example-acp==1.2.3" } },
-      { binary: { "linux-x86_64": { archive: archiveUrl, cmd: "agent" } } },
+      { npx: { package: "@example/acp@1.2.3", args: ["acp"], env: { ACP_MODE: "registry" } } },
+      { uvx: { package: "example-acp==1.2.3", args: ["acp"], env: { ACP_MODE: "registry" } } },
+      {
+        binary: {
+          "linux-x86_64": {
+            archive: archiveUrl,
+            cmd: "agent",
+            args: ["acp"],
+            env: { ACP_MODE: "registry" },
+          },
+        },
+      },
     ];
     for (const distribution of distributions) {
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
@@ -342,13 +351,15 @@ it.effect("registry refresh and launch never install packages or fetch executabl
         detail: expect.stringContaining("supplied by the execution image"),
       });
       expect(yield* resolver.inspect(settings())).toMatchObject({ status: "unprepared" });
-      const resolved = yield* resolver.resolve(
-        settings({ commandPath, commandArgs: ["--acp", "pinned argument"] }),
-        "/workspace",
-      );
+      const resolved = yield* resolver.resolve(settings({ commandPath }), "/workspace", {
+        PATH: "",
+        ACP_MODE: "host",
+        INSTANCE: "test",
+      });
       expect(resolved.spawn).toMatchObject({
         command: commandPath,
-        args: ["--acp", "pinned argument"],
+        args: ["acp"],
+        env: { PATH: "", ACP_MODE: "registry", INSTANCE: "test" },
         shell: false,
       });
       expect(yield* fs.exists(`${cacheDir}/tools`)).toBe(false);

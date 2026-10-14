@@ -41,10 +41,10 @@ export const AcpRegistrySettings = makeProviderSettingsSchema(
     commandPath: TrimmedString.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
-        title: "Executable override",
+        title: "Executable",
         description:
-          "Executable on this environment. For registry agents, this overrides the distribution executable while keeping its arguments and environment.",
-        providerSettingsForm: { placeholder: "Registry default", clearWhenEmpty: "omit" },
+          "Required executable supplied by the sandbox image. Registry agents keep their distribution arguments and environment.",
+        providerSettingsForm: { placeholder: "e.g. /opt/agents/bin/agent", clearWhenEmpty: "omit" },
       }),
     ),
     commandArgs: Schema.Array(Schema.String).pipe(

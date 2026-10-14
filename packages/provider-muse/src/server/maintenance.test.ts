@@ -8,6 +8,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import {
   compareMuseVersions,
   enrichMuseSnapshot,
+  getMuseVersionSource,
   latestMuseVersion,
   parseMuseVersion,
 } from "./maintenance.ts";
@@ -61,6 +62,43 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
         );
         expect(requests).toBe(2);
       }),
+  );
+  it.effect("explicit refresh replaces a successful cached channel version before enrichment", () =>
+    Effect.gen(function* () {
+      let requests = 0;
+      const environment = { MUSE_CHANNEL: "muse-canary" };
+      yield* Effect.gen(function* () {
+        expect(yield* latestMuseVersion(environment)).toBe("1.1.1-R9.1");
+        yield* getMuseVersionSource(environment);
+        expect(yield* latestMuseVersion(environment)).toBe("1.1.1-R9.1");
+        const refreshedSource = yield* getMuseVersionSource(environment, { fresh: true });
+        const refreshed = yield* enrichMuseSnapshot({
+          snapshot,
+          versionSource: refreshedSource,
+          enableProviderUpdateChecks: true,
+          environment,
+        });
+        expect(refreshed.versionAdvisory?.latestVersion).toBe("1.1.1-R10.1");
+      }).pipe(
+        Effect.provide(ProviderLatestVersions.layer),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) => {
+            requests += 1;
+            expect(request.url).toBe("https://api.meta.ai/muse-code/channels/muse-canary");
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                Response.json({
+                  version: requests === 1 ? "1.1.1-R9.1" : "1.1.1-R10.1",
+                }),
+              ),
+            );
+          }),
+        ),
+      );
+      expect(requests).toBe(2);
+    }),
   );
   it.effect(
     "compares numeric native release revisions and preserves the CLI release identity",

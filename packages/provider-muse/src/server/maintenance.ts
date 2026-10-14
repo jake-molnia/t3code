@@ -63,6 +63,15 @@ export const latestMuseVersion = Effect.fn("latestMuseVersion")(function* (
   );
 });
 
+/** Explicit refreshes bypass the channel cache before snapshot enrichment reads it. */
+export const getMuseVersionSource = Effect.fn("getMuseVersionSource")(function* (
+  environment: NodeJS.ProcessEnv,
+  options?: { readonly fresh?: boolean },
+) {
+  if (options?.fresh) yield* latestMuseVersion(environment, { fresh: true });
+  return { packageName: null, compareVersions: compareMuseVersions };
+});
+
 /** Feed Muse's release channel into the same advisory and notification flow as other drivers. */
 export const enrichMuseSnapshot = Effect.fn("enrichMuseSnapshot")(function* (input: {
   readonly snapshot: ServerProvider;
