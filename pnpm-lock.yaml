@@ -282,9 +282,6 @@ importers:
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
-      yauzl:
-        specifier: ^3.4.0
-        version: 3.4.0
     devDependencies:
       '@effect/vitest':
         specifier: 4.0.2
@@ -319,9 +316,6 @@ importers:
       '@types/proper-lockfile':
         specifier: ^4.1.4
         version: 4.1.4
-      '@types/yauzl':
-        specifier: ^3.4.0
-        version: 3.4.0
       effect-acp:
         specifier: workspace:*
         version: link:../../packages/effect-acp
@@ -5699,9 +5693,6 @@ packages:
 
   '@types/yargs@17.0.35':
     resolution: {integrity: sha512-qUHkeCyQFxMXg79wQfTtfndEC+N9ZZg76HJftDJp+qH2tV7Gj4OJi7l+PiWwJ+pWtW8GwSmqsDj/oymhrTWXjg==}
-
-  '@types/yauzl@3.4.0':
-    resolution: {integrity: sha512-NRPn5w6h8dhcnmx3YIRQcqMywY/+nND/uOkJessedcrowO3C0AssHp3tMJpxKAwOhFOo0OV1y9VtsC5hbKKBAw==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -14717,10 +14708,6 @@ snapshots:
     dependencies:
       '@types/yargs-parser': 21.0.3
     optional: true
-
-  '@types/yauzl@3.4.0':
-    dependencies:
-      '@types/node': 24.12.4
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
