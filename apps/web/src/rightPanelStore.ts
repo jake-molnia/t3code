@@ -503,6 +503,9 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                   })
                 : [];
               const rawActiveSurfaceId = validThreadState?.activeSurfaceId;
+              const removedDeviceWasActive =
+                typeof rawActiveSurfaceId === "string" &&
+                (rawActiveSurfaceId === "device" || rawActiveSurfaceId.startsWith("device:"));
               const persistedActiveSurfaceId = surfaces.some(
                 (surface) => surface.id === rawActiveSurfaceId,
               )
@@ -520,10 +523,10 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
               // An open panel needs an active surface: if migration dropped
               // the persisted one (e.g. plan was active), fall back to the
               // first survivor instead of rendering an open empty panel. Removed
-              // agents selections also keep a survivor ready while the panel is closed.
+              // agents and device selections also keep a survivor ready while the panel is closed.
               const activeSurfaceId =
                 persistedActiveSurfaceId ??
-                (isOpen || rawActiveSurfaceId === "agents" || rawActiveSurfaceId === "device"
+                (isOpen || rawActiveSurfaceId === "agents" || removedDeviceWasActive
                   ? (surfaces[0]?.id ?? null)
                   : null);
               return [

@@ -416,22 +416,24 @@ describe("rightPanelStore", () => {
     { kind: "plan", isOpen: true },
     { kind: "device", isOpen: true },
     { kind: "device", isOpen: false },
+    { kind: "device", isOpen: false, id: "device:mac:iphone" },
+    { kind: "device", isOpen: true, id: "device:mac:iphone" },
     { kind: "agents", isOpen: true },
     { kind: "agents", isOpen: false },
-  ])("drops $kind with isOpen=$isOpen and falls back", ({ kind, isOpen }) => {
+  ])("drops $kind with isOpen=$isOpen and falls back", ({ kind, isOpen, id = kind }) => {
     expect(
       migratePersistedRightPanelState({
         byThreadKey: {
           "env-1:thread-A": {
             isOpen,
-            activeSurfaceId: kind,
-            surfaces: [{ id: kind, kind }],
+            activeSurfaceId: id,
+            surfaces: [{ id, kind }],
           },
           "env-1:thread-B": {
             isOpen,
-            activeSurfaceId: kind,
+            activeSurfaceId: id,
             surfaces: [
-              { id: kind, kind },
+              { id, kind },
               { id: "diff", kind: "diff" },
             ],
           },
