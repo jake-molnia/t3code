@@ -4563,15 +4563,27 @@ const remoteClient = createExecutionClient({
 it.effect.each([
   "stopped",
   "replaced",
-  "pending",
-  "unavailable",
+  "pending-same",
+  "pending-replaced",
+  "pending-released",
+  "pending-failed",
+  "pending-cancelled",
+  "unavailable-same",
+  "unavailable-replaced",
   "unauthorized",
   "profile-error",
   "identity-error",
-] as const)("reopens a cached provider session after its remote worker is %s", (transition) =>
+] as const)("recovers cached provider sessions and MCP credentials after %s", (transition) =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
+    const mcpConfigs = yield* Ref.make<
+      ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+    >([]);
+    const acquiring = yield* Deferred.make<void>();
+    const acquired = yield* Deferred.make<typeof remoteClient, AgentRuntime.RuntimeClientError>();
     let changed = false;
+    const pending = transition.startsWith("pending-") || transition.startsWith("unavailable-");
+    const retained = transition.endsWith("-same");
     const replacement = createExecutionClient({
       identity: { ...remoteClient.identity, incarnation: "second", podUid: "replacement" },
       endpoint: "http://worker.test",
@@ -4581,6 +4593,8 @@ it.effect.each([
       const sink = yield* EventSink.EventSinkV2;
       const allocator = yield* IdAllocator.IdAllocatorV2;
       const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const registry = yield* McpSessionRegistry.McpSessionRegistry;
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
       const projectId = yield* allocator.allocate.project({ fixtureName: "remote-replacement" });
       const threadId = yield* allocator.allocate.thread({
         fixtureName: "remote-replacement",
@@ -4603,6 +4617,10 @@ it.effect.each([
       const first = yield* manager.open(input);
       assert.equal(yield* manager.open(input), first);
       assert.equal((yield* Ref.get(state)).openCount, 1);
+      const original = (yield* Ref.get(mcpConfigs)).at(-1);
+      if (!original) return yield* Effect.die("Provider did not receive its MCP credential");
+      const token = original.authorizationHeader.replace(/^Bearer\s+/, "");
+      assert.equal((yield* registry.resolve(token))?.thread.threadId, threadId);
       changed = true;
       if (
         transition === "unauthorized" ||
@@ -4613,20 +4631,87 @@ it.effect.each([
         assert.equal(error._tag, "ProviderSessionOpenError");
         assert.equal((yield* Ref.get(state)).openCount, 1);
         assert.equal((yield* Ref.get(state)).closeCount, 0);
+        assert.equal((yield* registry.resolve(token))?.thread.threadId, threadId);
         return;
       }
-      const reopened = yield* manager.open(input);
-      assert.notEqual(reopened, first);
-      assert.equal((yield* Ref.get(state)).openCount, 2);
-      assert.equal((yield* Ref.get(state)).closeCount, 1);
+      const reopening = yield* manager.open(input).pipe(Effect.forkChild);
+      if (pending) {
+        yield* Effect.raceFirst(
+          Deferred.await(acquiring),
+          Fiber.join(reopening).pipe(
+            Effect.andThen(Effect.die("Cached session reopened without acquiring readiness")),
+          ),
+        );
+        assert.deepEqual(yield* manager.get(providerSessionId), Option.some(first));
+        assert.equal((yield* Ref.get(state)).closeCount, 0);
+        assert.equal((yield* registry.resolve(token))?.thread.threadId, threadId);
+        assert.equal(
+          (yield* mcpSessions.read(threadId))?.authorizationHeader,
+          original.authorizationHeader,
+        );
+        if (transition === "pending-failed" || transition === "pending-cancelled") {
+          if (transition === "pending-failed") {
+            yield* Deferred.fail(
+              acquired,
+              new AgentRuntime.RuntimeClientError({
+                operation: "provider-placement",
+                httpStatus: 401,
+                cause: "Controller rejected acquisition",
+              }),
+            );
+            assert.equal(
+              (yield* Fiber.join(reopening).pipe(Effect.flip))._tag,
+              "ProviderSessionOpenError",
+            );
+          } else {
+            yield* Fiber.interrupt(reopening);
+          }
+          assert.deepEqual(yield* manager.get(providerSessionId), Option.some(first));
+          assert.equal((yield* Ref.get(state)).closeCount, 0);
+          assert.equal((yield* registry.resolve(token))?.thread.threadId, threadId);
+          return;
+        }
+        if (transition === "pending-released") {
+          // The event pump uses this same release path when its stream fails.
+          yield* manager.release({ providerSessionId, reason: "runtime_error" });
+          assert.deepEqual(yield* manager.get(providerSessionId), Option.none());
+        }
+        yield* Deferred.succeed(
+          acquired,
+          retained || transition === "pending-released" ? remoteClient : replacement,
+        );
+      }
+      const reopened = yield* Fiber.join(reopening);
+      if (retained) {
+        assert.equal(reopened, first);
+        assert.equal((yield* Ref.get(state)).openCount, 1);
+        assert.equal((yield* Ref.get(state)).closeCount, 0);
+        assert.equal(
+          (yield* mcpSessions.read(threadId))?.authorizationHeader,
+          original.authorizationHeader,
+        );
+        assert.equal((yield* registry.resolve(token))?.thread.threadId, threadId);
+      } else {
+        assert.notEqual(reopened, first);
+        assert.equal((yield* Ref.get(state)).openCount, 2);
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
+        assert.isUndefined(yield* registry.resolve(token));
+        const current = yield* mcpSessions.read(threadId);
+        assert.isDefined(current);
+        assert.notEqual(current?.providerSessionId, original.providerSessionId);
+      }
     }).pipe(
       Effect.provide(
-        layerTest({ state, idleTimeoutMs: 1000 }).pipe(
+        layerTest({ state, idleTimeoutMs: 1000, mcpConfigs }).pipe(
           Layer.provide(
             Layer.mock(AgentRuntime.RuntimeClient)({
               enabled: true,
+              forThread: () =>
+                Deferred.succeed(acquiring, undefined).pipe(
+                  Effect.andThen(Deferred.await(acquired)),
+                ),
               observeThread: () =>
-                changed && transition === "pending"
+                changed && transition.startsWith("pending-")
                   ? Effect.fail(
                       new AgentRuntime.RuntimeClientError({
                         operation: "observe-thread",
@@ -4640,9 +4725,8 @@ it.effect.each([
                       }),
                     )
                   : changed &&
-                      ["unavailable", "unauthorized", "profile-error", "identity-error"].includes(
-                        transition,
-                      )
+                      (transition.startsWith("unavailable-") ||
+                        ["unauthorized", "profile-error", "identity-error"].includes(transition))
                     ? Effect.fail(
                         new AgentRuntime.RuntimeClientError({
                           operation: "observe-thread",
@@ -4651,12 +4735,11 @@ it.effect.each([
                             ...(transition === "identity-error"
                               ? {}
                               : {
-                                  httpStatus:
-                                    transition === "unavailable"
-                                      ? 503
-                                      : transition === "unauthorized"
-                                        ? 401
-                                        : 409,
+                                  httpStatus: transition.startsWith("unavailable-")
+                                    ? 503
+                                    : transition === "unauthorized"
+                                      ? 401
+                                      : 409,
                                 }),
                             cause:
                               transition === "identity-error"
