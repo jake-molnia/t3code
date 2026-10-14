@@ -3544,6 +3544,44 @@ describe("composerDraftStore attachment references", () => {
     expect(mergedState.draftsByThreadKey[threadKeyFor(threadId)]?.prompt).toBe(`old ${fileLink} `);
   });
 
+  it.each([false, true])(
+    "restores image bytes from persisted drafts (legacy capture: %s)",
+    async (legacy) => {
+      const merged = useComposerDraftStore.persist.getOptions().merge!(
+        {
+          draftsByThreadKey: {
+            [threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]: {
+              prompt: "Inspect the image",
+              attachments: [
+                {
+                  id: "restored-image",
+                  name: "screenshot.png",
+                  mimeType: "image/png",
+                  sizeBytes: 3,
+                  dataUrl: "data:image/png;base64,AQID",
+                  ...(legacy
+                    ? { source: { kind: "snap-shot", accessibleText: "old metadata" } }
+                    : {}),
+                },
+              ],
+            },
+          },
+        },
+        useComposerDraftStore.getInitialState(),
+      );
+      const draft = merged.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)];
+      expect(draft?.images).toHaveLength(1);
+      const image = draft?.images[0];
+      expect(image).toMatchObject({
+        name: "screenshot.png",
+        mimeType: "image/png",
+        previewUrl: "data:image/png;base64,AQID",
+      });
+      expect(image).not.toHaveProperty("source");
+      expect(new Uint8Array(await image!.file.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    },
+  );
+
   it("migrates legacy image references without doubling their image marker", () => {
     const merged = useComposerDraftStore.persist.getOptions().merge!(
       {
