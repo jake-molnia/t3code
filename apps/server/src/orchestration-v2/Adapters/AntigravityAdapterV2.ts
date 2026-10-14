@@ -197,7 +197,7 @@ export function makeAntigravityAcpAdapterFlavor(
         writeAntigravityClientTextFile({
           fileSystem: options.fileSystem,
           path: options.path,
-          allowedRoots: antigravityClientFileRoots(cwd),
+          allowedRoots: cwd === null ? [] : [cwd],
           request,
         }),
     },

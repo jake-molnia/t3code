@@ -547,7 +547,8 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
             error: new ProviderSetupError({
               instanceId,
               operation: "resolve",
-              detail: "Antigravity is not installed.",
+              detail:
+                "The sandbox image must include Antigravity and its localharness_external helper.",
             }),
             installed: false,
           },

@@ -106,11 +106,7 @@ function isMissingInstallation(error: EffectAcpErrors.AcpError | ProviderSetupEr
       (Predicate.isObject(error.cause) && error.cause.code === "ENOENT")
     );
   }
-  return (
-    error._tag === "ProviderSetupError" &&
-    error.operation === "resolve" &&
-    /not installed|missing|incomplete|does not publish/i.test(error.detail)
-  );
+  return error._tag === "ProviderSetupError" && error.operation === "resolve";
 }
 
 interface AntigravityProviderState {

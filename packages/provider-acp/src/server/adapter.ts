@@ -307,6 +307,7 @@ export interface AcpAdapterV2Flavor {
   readonly preferResumeSession?: boolean;
   readonly onSessionEvent?: (
     event: AcpSessionRuntime.AcpSessionRuntimeEvent,
+    cwd: string | null,
   ) => Effect.Effect<void>;
   /** Batch launches without child completion signals become idle when the root turn ends. */
   readonly subagentsIdleOnTurnCompletion?: boolean;
@@ -5624,7 +5625,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
               return runRuntimeCallbackAtGeneration(
                 handlerGeneration,
-                flavor.onSessionEvent?.(event) ?? Effect.void,
+                clientPolicyContext.pipe(
+                  Effect.flatMap(
+                    ({ policy }) => flavor.onSessionEvent?.(event, policy.cwd) ?? Effect.void,
+                  ),
+                ),
               ).pipe(Effect.asVoid);
             }),
             Effect.forkIn(runtimeScope ?? sessionScope),

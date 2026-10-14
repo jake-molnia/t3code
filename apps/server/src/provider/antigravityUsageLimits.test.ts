@@ -57,7 +57,7 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     /** Google account id from userinfo; omit to make userinfo fail. */
     userId?: string;
     missingToken?: boolean;
-    authMethod?: "oauth-personal" | "gemini-api-key";
+    authMethod?: "oauth-personal" | "oauth-business" | "gemini-api-key";
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -120,6 +120,14 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
 });
 
 describe("Antigravity subscription limits", () => {
+  it.effect("does not use a personal account token for enterprise quotas", () =>
+    Effect.gen(function* () {
+      const { probe, requests } = yield* fixture({ authMethod: "oauth-business" });
+      expect((yield* probe).unavailable?.reason).toBe("unsupported");
+      expect(requests).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("reports separate Gemini and shared Claude/GPT five-hour and weekly limits", () =>
     Effect.gen(function* () {
       const { probe, requests } = yield* fixture();

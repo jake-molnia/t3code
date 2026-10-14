@@ -35,28 +35,29 @@ const resolveClientFilePath = Effect.fn("AntigravityClientFiles.resolveClientFil
     const outside = EffectAcpErrors.AcpRequestError.invalidParams(
       `Path '${input.requestPath}' is outside the session workspace.`,
     );
-    const real = yield* input.fileSystem.realPath(resolved).pipe(
-      Effect.catch(() =>
-        Effect.gen(function* () {
-          // Only a missing file (a new write) falls back to its parent; a
-          // dangling or unreadable link must not be followed on write.
-          const entryExists = yield* input.fileSystem.readLink(resolved).pipe(
-            Effect.as(true),
-            Effect.catch(() => input.fileSystem.exists(resolved)),
-            Effect.orElseSucceed(() => true),
-          );
-          if (entryExists) return yield* outside;
-          const parent = yield* input.fileSystem
-            .realPath(path.dirname(resolved))
-            .pipe(Effect.orElseSucceed(() => path.dirname(resolved)));
-          return path.join(parent, path.basename(resolved));
-        }),
-      ),
-    );
+    const canonicalize = (
+      candidate: string,
+    ): Effect.Effect<string, EffectAcpErrors.AcpRequestError> =>
+      input.fileSystem.realPath(candidate).pipe(
+        Effect.catchReason("PlatformError", "NotFound", () =>
+          input.fileSystem.readLink(candidate).pipe(
+            Effect.flatMap(() => Effect.fail(outside)),
+            Effect.catchReason("PlatformError", "NotFound", () => {
+              const parent = path.dirname(candidate);
+              if (parent === candidate) return Effect.fail(outside);
+              return canonicalize(parent).pipe(
+                Effect.map((realParent) => path.join(realParent, path.basename(candidate))),
+              );
+            }),
+          ),
+        ),
+        Effect.mapError(() => outside),
+      );
+    const real = yield* canonicalize(resolved);
     const roots = yield* Effect.forEach(input.allowedRoots, (root) =>
-      input.fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root)),
+      input.fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => undefined)),
     );
-    if (!roots.some((root) => isInsideRoot(path, root, real))) {
+    if (!roots.some((root) => root !== undefined && isInsideRoot(path, root, real))) {
       return yield* outside;
     }
     return real;

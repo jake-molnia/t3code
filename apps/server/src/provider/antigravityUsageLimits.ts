@@ -194,7 +194,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   const read = Effect.gen(function* () {
     const startedGeneration = generation;
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    if (input.authMethod !== "oauth-personal" && input.authMethod !== "oauth-business") {
+    if (input.authMethod !== "oauth-personal") {
       return makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
     }
     if (!(yield* fs.exists(tokenPath))) {

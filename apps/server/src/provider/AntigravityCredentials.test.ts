@@ -70,7 +70,6 @@ it.effect(
       ).toThrow();
     }).pipe(
       Effect.scoped,
-      Effect.provide(TestProviderHost.layer()),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(TestProviderHost.layer().pipe(Layer.provideMerge(NodeServices.layer))),
     ),
 );

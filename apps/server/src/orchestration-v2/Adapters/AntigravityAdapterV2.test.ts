@@ -13,6 +13,7 @@ import {
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -296,7 +297,12 @@ describe("AntigravityAdapterV2 workspace changes", () => {
       type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
       let readTextFile: Parameters<RuntimeService["handleReadTextFile"]>[0] | undefined;
       const instanceId = ProviderInstanceId.make("antigravity-workspace-change-test");
+      const commandWorkspace = yield* Deferred.make<string | null>();
       const adapter = yield* makeAntigravityAdapterV2({
+        onSessionEvent: (event, cwd) =>
+          event._tag === "AvailableCommandsUpdated"
+            ? Deferred.succeed(commandWorkspace, cwd).pipe(Effect.asVoid)
+            : Effect.void,
         instanceId,
         selfInvocation: yield* resolveSelfInvocation(),
         makeRuntime: (input) =>
@@ -345,6 +351,7 @@ describe("AntigravityAdapterV2 workspace changes", () => {
         modelSelection,
         runtimePolicy: policyFor(workspaceA),
       });
+      assert.equal(yield* Deferred.await(commandWorkspace), workspaceA);
       // The session opened for A now runs a turn for B.
       const now = yield* DateTime.now;
       yield* session
@@ -419,6 +426,7 @@ describe("AntigravityAdapterV2 client file system under restrictive policies", (
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
+      const host = yield* ProviderHost.ProviderHost;
       const path = yield* Path.Path;
       const crypto = yield* Crypto.Crypto;
       const mockAgentPath = yield* path.fromFileUrl(
@@ -502,6 +510,46 @@ describe("AntigravityAdapterV2 client file system under restrictive policies", (
           context("fs/read_text_file"),
         );
         assert.equal(read.content, "existing", name);
+        const attachment = path.join(host.paths.attachmentsDir, "upload.txt");
+        yield* fileSystem.writeFileString(attachment, "immutable upload");
+        assert.equal(
+          (yield* readTextFile(
+            { sessionId: "mock-session-1", path: attachment },
+            context("fs/read_text_file"),
+          )).content,
+          "immutable upload",
+        );
+        const attachmentWrite = yield* writeTextFile(
+          { sessionId: "mock-session-1", path: attachment, content: "changed" },
+          context("fs/write_text_file"),
+        ).pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(attachmentWrite));
+        assert.equal(yield* fileSystem.readFileString(attachment), "immutable upload");
+        const link = path.join(workspace, "outside-link");
+        yield* fileSystem.symlink(outside, link);
+        const nestedEscape = yield* writeTextFile(
+          {
+            sessionId: "mock-session-1",
+            path: path.join(link, "missing", "nested", "file.txt"),
+            content: "escape",
+          },
+          context("fs/write_text_file"),
+        ).pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(nestedEscape));
+        assert.isFalse(yield* fileSystem.exists(path.join(outside, "missing")));
+        const dangling = path.join(workspace, "dangling");
+        yield* fileSystem.symlink(path.join(outside, "absent"), dangling);
+        const danglingWrite = yield* writeTextFile(
+          {
+            sessionId: "mock-session-1",
+            path: path.join(dangling, "nested", "file.txt"),
+            content: "escape",
+          },
+          context("fs/write_text_file"),
+        ).pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(danglingWrite));
+        assert.isFalse(yield* fileSystem.exists(path.join(outside, "absent")));
+
         const written = path.join(workspace, "src", "edited.ts");
         yield* writeTextFile(
           { sessionId: "mock-session-1", path: written, content: "edited" },

@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Installation from "./AntigravityInstallation.ts";
 
 it.effect(
@@ -34,5 +35,8 @@ it.effect(
         "antigravity-version.json",
         "localharness_external",
       ]);
-    }).pipe(Effect.scoped, Effect.provide(Installation.layer), Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Installation.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+    ),
 );
