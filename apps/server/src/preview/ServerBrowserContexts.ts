@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Owns Playwright resources outside the Effect runtime.
 import { DEFAULT_BROWSER_PROFILE_ID, INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
 import { constVoid } from "effect/Function";
+import * as Schema from "effect/Schema";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
@@ -8,6 +9,11 @@ import * as NodePath from "node:path";
 import type { Browser, BrowserContext, CDPSession } from "playwright-core";
 
 import { sandboxDisabled } from "./PreviewBrowserHost.ts";
+import { waitForService } from "../execution/ServiceReadiness.ts";
+
+const decodeBrowserVersion = Schema.decodeUnknownSync(
+  Schema.Struct({ webSocketDebuggerUrl: Schema.String }),
+);
 
 // Playwright needs its files on disk. createRequire also resolves it from a Node SEA executable.
 const requirePlaywright = NodeModule.createRequire(import.meta.url);
@@ -90,6 +96,7 @@ export class ServerBrowserContexts {
   private browser: Promise<Browser> | undefined;
   private closing: Promise<void> | undefined;
   private readonly runtimeContexts = new WeakSet<BrowserContext>();
+  private readonly readinessAbort = new AbortController();
 
   constructor(options: Options) {
     this.options = options;
@@ -126,6 +133,15 @@ export class ServerBrowserContexts {
     if (!this.browser) {
       const launched = (async () => {
         const { chromium } = loadPlaywright();
+        if (this.options.cdpEndpoint) {
+          await waitForService(new URL("/json/version", this.options.cdpEndpoint), {
+            signal: this.readinessAbort.signal,
+            accept: async (response) => {
+              decodeBrowserVersion(await response.json());
+              return true;
+            },
+          });
+        }
         const browser = this.options.cdpEndpoint
           ? await chromium.connectOverCDP(this.options.cdpEndpoint, { timeout: 15_000 })
           : await this.launchOptions().then((options) =>
@@ -234,6 +250,7 @@ export class ServerBrowserContexts {
   }
 
   close() {
+    this.readinessAbort.abort(new Error("The preview browser is closed."));
     this.closing ??= this.dispose();
     return this.closing;
   }

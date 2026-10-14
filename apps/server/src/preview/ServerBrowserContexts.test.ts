@@ -2,7 +2,7 @@ import * as NodeEvents from "node:events";
 
 import { INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
 import { chromium, type Browser, type BrowserContext, type BrowserType } from "playwright-core";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 
@@ -58,11 +58,22 @@ const options = () => ({
 });
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({ webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/test" }),
+    ),
+  );
   launches.launch.mockReset();
   launches.persistent.mockReset();
   launches.connect.mockReset();
   launches.mkdir.mockClear();
   launches.rm.mockClear();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("ServerBrowserContexts", () => {
@@ -139,14 +150,68 @@ describe("ServerBrowserContexts", () => {
     const context = makeContext();
     const browser = { contexts: () => [context], on: vi.fn(), close: vi.fn(async () => {}) };
     const connection = Promise.withResolvers<Browser>();
-    launches.connect.mockReturnValue(connection.promise);
+    const connecting = Promise.withResolvers<void>();
+    launches.connect.mockImplementation(() => {
+      connecting.resolve();
+      return connection.promise;
+    });
     const pool = new ServerBrowserContexts({ ...options(), cdpEndpoint: "http://127.0.0.1:9222" });
     const opening = expect(pool.contextFor("default")).rejects.toThrow("closed");
+    await connecting.promise;
     const closing = pool.close();
     connection.resolve(browser as unknown as Browser);
     await Promise.all([opening, closing]);
     expect(browser.close).toHaveBeenCalledOnce();
     expect(context.close).not.toHaveBeenCalled();
+  });
+
+  it("waits for Chromium readiness and shares the first attachment", async () => {
+    vi.useFakeTimers();
+    const health = vi.mocked(fetch);
+    health.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    const context = makeContext();
+    const browser = { contexts: () => [context], on: vi.fn(), close: vi.fn(async () => {}) };
+    launches.connect.mockResolvedValue(browser as unknown as Browser);
+    const pool = new ServerBrowserContexts({ ...options(), cdpEndpoint: "http://127.0.0.1:9222" });
+    const first = pool.contextFor("default", "first");
+    const second = pool.contextFor("default", "second");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(launches.connect).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await first).toBe(context);
+    expect(await second).toBe(context);
+    expect(health).toHaveBeenCalledTimes(2);
+    expect(String(health.mock.calls[0]?.[0])).toBe("http://127.0.0.1:9222/json/version");
+    expect(launches.connect).toHaveBeenCalledOnce();
+    await pool.close();
+  });
+
+  it("cancels a pending Chromium readiness check on shutdown", async () => {
+    const started = Promise.withResolvers<void>();
+    vi.mocked(fetch).mockImplementation(
+      (_input, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+            once: true,
+          });
+          started.resolve();
+        }),
+    );
+    const pool = new ServerBrowserContexts({ ...options(), cdpEndpoint: "http://127.0.0.1:9222" });
+    const opening = expect(pool.contextFor("default")).rejects.toThrow();
+    await started.promise;
+    await pool.close();
+    await opening;
+    expect(launches.connect).not.toHaveBeenCalled();
+  });
+
+  it("does not attach to Chromium after an invalid readiness response", async () => {
+    vi.mocked(fetch).mockResolvedValue(Response.json({ unexpected: true }));
+    const pool = new ServerBrowserContexts({ ...options(), cdpEndpoint: "http://127.0.0.1:9222" });
+    await expect(pool.contextFor("default")).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(launches.connect).not.toHaveBeenCalled();
+    await pool.close();
   });
 
   it("lazily shares one browser across concurrent isolated sessions and reuses each context", async () => {

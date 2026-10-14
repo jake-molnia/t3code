@@ -157,7 +157,6 @@ const layerWakeups = Wakeups.layer({
 function clientMetadata() {
   return clientPresentationMetadata({
     appVersion: APP_VERSION,
-    hosted: isHostedStaticApp(),
     identity: {
       userAgent: navigator.userAgent,
       platform: navigator.platform,
