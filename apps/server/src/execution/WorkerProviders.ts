@@ -1,7 +1,5 @@
 import { resolveModelPreferences } from "@t3tools/shared/serverSettings";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
-import { filterApertureSnapshot } from "./ApertureCatalog.ts";
-import { validateHarnessLaunch } from "./HarnessDefaults.ts";
 import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
 import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
@@ -145,10 +143,9 @@ export const make = Effect.gen(function* () {
               ...input.settings,
               ...resolveModelPreferences(input.settings),
             });
-            configurations[input.instanceId] = yield* Effect.try(() => {
-              validateHarnessLaunch(input.config);
-              return normalizeHarness(input.config);
-            });
+            configurations[input.instanceId] = yield* Effect.try(() =>
+              normalizeHarness(input.config),
+            );
             yield* mutator.reconcile(configurations);
             const instance = yield* registry.getInstance(input.instanceId);
             if (!instance) return yield* new WorkerProviderError({ operation: "configure" });
@@ -263,24 +260,20 @@ export const make = Effect.gen(function* () {
           return null;
         }
         case "provider.snapshot":
-          return yield* encodeServerProvider(
-            filterApertureSnapshot(yield* instance.snapshot.getSnapshot),
-          );
+          return yield* encodeServerProvider(yield* instance.snapshot.getSnapshot);
         case "provider.refreshModels":
           if (!instance.refreshModels)
             return yield* new WorkerProviderError({ operation: "models_unavailable" });
           yield* instance.refreshModels();
           return null;
         case "provider.refresh":
-          return yield* encodeServerProvider(
-            filterApertureSnapshot(yield* instance.snapshot.refresh),
-          );
+          return yield* encodeServerProvider(yield* instance.snapshot.refresh);
         case "provider.snapshotForCwd": {
           const cwd = yield* decodeRpcValue2(command.input);
           const snapshot = instance.snapshotForCwd
             ? yield* instance.snapshotForCwd(cwd)
             : yield* instance.snapshot.getSnapshot;
-          return yield* encodeServerProvider(filterApertureSnapshot(snapshot));
+          return yield* encodeServerProvider(snapshot);
         }
         case "text.commit":
           return yield* instance.textGeneration.generateCommitMessage(
