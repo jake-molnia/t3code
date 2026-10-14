@@ -2156,6 +2156,11 @@ export const layerWithOptions = (
                 Option.isSome(agentRuntime)
               ) {
                 const observation = yield* agentRuntime.value.observeThread(input.threadId).pipe(
+                  Effect.catch((error) =>
+                    AgentRuntime.isWorkerObservationPending(error)
+                      ? Effect.succeed(null)
+                      : Effect.fail(error),
+                  ),
                   Effect.mapError(
                     (cause) =>
                       new ProviderSessionOpenError({
@@ -2178,12 +2183,13 @@ export const layerWithOptions = (
                     ),
                   );
                 if (
+                  observation === null ||
                   observation.kind === "stopped" ||
                   (observation.kind === "running" &&
                     residency !== null &&
                     !sameIdentity(residency, observation.client.identity))
                 ) {
-                  // A replaced worker cannot receive a close. Retire its central scope before resuming native history on the new worker.
+                  // Pending or replaced workers cannot serve the cached runtime. Let the adapter acquire readiness before attaching or restoring native history.
                   forgetRemoteProviderSession(input.providerSessionId);
                   yield* releaseEntry({
                     providerSessionId: input.providerSessionId,

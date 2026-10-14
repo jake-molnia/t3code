@@ -352,6 +352,7 @@ it.live.each([
   "pending-live",
   "pending-replaced",
   "pending-status",
+  "pending-nested-status",
   "unauthorized",
   "profile-error",
   "identity-mismatch",
@@ -425,7 +426,10 @@ it.live.each([
         expect(acquisitions).toBe(0);
       } else {
         expect(calls.at(-1)).toBe(
-          state === "live" || state === "pending-live" || state === "pending-status"
+          state === "live" ||
+            state === "pending-live" ||
+            state === "pending-status" ||
+            state === "pending-nested-status"
             ? "attachSession"
             : "openSession",
         );
@@ -449,18 +453,26 @@ it.live.each([
                     new Runtime.RuntimeClientError({
                       operation: "observe-thread",
                       cause:
-                        state === "pending-status"
-                          ? new Runtime.WorkerNotReady({})
-                          : new Runtime.RuntimeClientError({
-                              operation: "request",
-                              httpStatus:
-                                state === "unauthorized"
-                                  ? 401
-                                  : state === "profile-error"
-                                    ? 409
-                                    : 503,
-                              cause: "controller rejected observation",
-                            }),
+                        state === "pending-nested-status"
+                          ? new Runtime.RuntimeClientError({
+                              operation: "observe",
+                              cause: new Runtime.RuntimeClientError({
+                                operation: "observe",
+                                cause: new Runtime.WorkerNotReady({}),
+                              }),
+                            })
+                          : state === "pending-status"
+                            ? new Runtime.WorkerNotReady({})
+                            : new Runtime.RuntimeClientError({
+                                operation: "request",
+                                httpStatus:
+                                  state === "unauthorized"
+                                    ? 401
+                                    : state === "profile-error"
+                                      ? 409
+                                      : 503,
+                                cause: "controller rejected observation",
+                              }),
                     }),
                   )
                 : Effect.succeed(

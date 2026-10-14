@@ -4560,67 +4560,126 @@ const remoteClient = createExecutionClient({
   token: "test-token",
 });
 
-it.effect.each(["stopped", "replaced"] as const)(
-  "reopens a cached provider session after its remote worker is %s",
-  (transition) =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      let changed = false;
-      const replacement = createExecutionClient({
-        identity: { ...remoteClient.identity, incarnation: "second", podUid: "replacement" },
-        endpoint: "http://worker.test",
-        token: "test-token",
+it.effect.each([
+  "stopped",
+  "replaced",
+  "pending",
+  "unavailable",
+  "unauthorized",
+  "profile-error",
+  "identity-error",
+] as const)("reopens a cached provider session after its remote worker is %s", (transition) =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    let changed = false;
+    const replacement = createExecutionClient({
+      identity: { ...remoteClient.identity, incarnation: "second", podUid: "replacement" },
+      endpoint: "http://worker.test",
+      token: "test-token",
+    });
+    yield* Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const allocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const projectId = yield* allocator.allocate.project({ fixtureName: "remote-replacement" });
+      const threadId = yield* allocator.allocate.thread({
+        fixtureName: "remote-replacement",
+        projectId,
       });
-      yield* Effect.gen(function* () {
-        const sink = yield* EventSink.EventSinkV2;
-        const allocator = yield* IdAllocator.IdAllocatorV2;
-        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-        const projectId = yield* allocator.allocate.project({ fixtureName: "remote-replacement" });
-        const threadId = yield* allocator.allocate.thread({
-          fixtureName: "remote-replacement",
-          projectId,
-        });
-        const providerSessionId = yield* allocator.allocate.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-          threadId,
-        });
-        yield* sink.write({
-          events: [
-            yield* makeThreadCreatedEvent({
-              idAllocator: allocator,
-              threadId,
-              now: yield* DateTime.now,
-            }),
-          ],
-        });
-        const input = { threadId, providerSessionId, modelSelection, runtimePolicy };
-        const first = yield* manager.open(input);
-        assert.equal(yield* manager.open(input), first);
+      const providerSessionId = yield* allocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* sink.write({
+        events: [
+          yield* makeThreadCreatedEvent({
+            idAllocator: allocator,
+            threadId,
+            now: yield* DateTime.now,
+          }),
+        ],
+      });
+      const input = { threadId, providerSessionId, modelSelection, runtimePolicy };
+      const first = yield* manager.open(input);
+      assert.equal(yield* manager.open(input), first);
+      assert.equal((yield* Ref.get(state)).openCount, 1);
+      changed = true;
+      if (
+        transition === "unauthorized" ||
+        transition === "profile-error" ||
+        transition === "identity-error"
+      ) {
+        const error = yield* manager.open(input).pipe(Effect.flip);
+        assert.equal(error._tag, "ProviderSessionOpenError");
         assert.equal((yield* Ref.get(state)).openCount, 1);
-        changed = true;
-        const reopened = yield* manager.open(input);
-        assert.notEqual(reopened, first);
-        assert.equal((yield* Ref.get(state)).openCount, 2);
-        assert.equal((yield* Ref.get(state)).closeCount, 1);
-      }).pipe(
-        Effect.provide(
-          layerTest({ state, idleTimeoutMs: 1000 }).pipe(
-            Layer.provide(
-              Layer.mock(AgentRuntime.RuntimeClient)({
-                enabled: true,
-                observeThread: () =>
-                  Effect.succeed(
-                    changed && transition === "stopped"
-                      ? { kind: "stopped" as const }
-                      : { kind: "running" as const, client: changed ? replacement : remoteClient },
-                  ),
-                sessionResidency: () => Effect.succeed(remoteClient.identity),
-              }),
-            ),
+        assert.equal((yield* Ref.get(state)).closeCount, 0);
+        return;
+      }
+      const reopened = yield* manager.open(input);
+      assert.notEqual(reopened, first);
+      assert.equal((yield* Ref.get(state)).openCount, 2);
+      assert.equal((yield* Ref.get(state)).closeCount, 1);
+    }).pipe(
+      Effect.provide(
+        layerTest({ state, idleTimeoutMs: 1000 }).pipe(
+          Layer.provide(
+            Layer.mock(AgentRuntime.RuntimeClient)({
+              enabled: true,
+              observeThread: () =>
+                changed && transition === "pending"
+                  ? Effect.fail(
+                      new AgentRuntime.RuntimeClientError({
+                        operation: "observe-thread",
+                        cause: new AgentRuntime.RuntimeClientError({
+                          operation: "observe",
+                          cause: new AgentRuntime.RuntimeClientError({
+                            operation: "observe",
+                            cause: new AgentRuntime.WorkerNotReady({}),
+                          }),
+                        }),
+                      }),
+                    )
+                  : changed &&
+                      ["unavailable", "unauthorized", "profile-error", "identity-error"].includes(
+                        transition,
+                      )
+                    ? Effect.fail(
+                        new AgentRuntime.RuntimeClientError({
+                          operation: "observe-thread",
+                          cause: new AgentRuntime.RuntimeClientError({
+                            operation: transition === "identity-error" ? "observe" : "request",
+                            ...(transition === "identity-error"
+                              ? {}
+                              : {
+                                  httpStatus:
+                                    transition === "unavailable"
+                                      ? 503
+                                      : transition === "unauthorized"
+                                        ? 401
+                                        : 409,
+                                }),
+                            cause:
+                              transition === "identity-error"
+                                ? "Worker identity mismatch"
+                                : "Controller rejected observation",
+                          }),
+                        }),
+                      )
+                    : Effect.succeed(
+                        changed && transition === "stopped"
+                          ? { kind: "stopped" as const }
+                          : {
+                              kind: "running" as const,
+                              client: changed ? replacement : remoteClient,
+                            },
+                      ),
+              sessionResidency: () => Effect.succeed(remoteClient.identity),
+            }),
           ),
         ),
-      );
-    }),
+      ),
+    );
+  }),
 );
 
 it.effect.each([false, true])(
