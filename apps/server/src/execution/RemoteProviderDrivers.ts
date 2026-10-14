@@ -1,3 +1,4 @@
+import { isAntigravityLogoutPrompt } from "../provider/AntigravityAuth.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { credentialPolicy, applyCredentialPolicy } from "./credentialPolicy.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
@@ -106,12 +107,17 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               settings: current,
             });
             yield* Effect.tryPromise(() => client.transient("configureProvider", encoded));
-            if (shareCredentials && (driver.driverKind === "cursor" || managedCodex)) {
+            if (
+              shareCredentials &&
+              (driver.driverKind === "cursor" ||
+                driver.driverKind === "antigravity" ||
+                managedCodex)
+            ) {
               const owner = yield* runtime
                 .forUtility(instanceId)
                 .pipe(Effect.flatMap((owner) => configure(owner, false)));
               if (!sameIdentity(owner.identity, client.identity)) {
-                if (driver.driverKind === "cursor") {
+                if (driver.driverKind === "cursor" || driver.driverKind === "antigravity") {
                   const credentials = yield* Effect.tryPromise(() =>
                     owner.transient("auth.executionCredentials", { instanceId, input: null }),
                   );
@@ -347,10 +353,19 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               : invoke("provider.snapshotForCwd", cwd, C.ServerProvider, cwd).pipe(
                   Effect.map((value) => applyCredentialPolicy(value, authPolicy)),
                 ),
-          refreshModels: () => refresh.pipe(Effect.asVoid),
+          refreshModels: () =>
+            driver.driverKind === "antigravity"
+              ? invoke("provider.refreshModels", null, Schema.Null).pipe(
+                  Effect.andThen(refresh),
+                  Effect.asVoid,
+                )
+              : refresh.pipe(Effect.asVoid),
           ...(authPolicy.kind !== "workspace"
             ? {
                 auth: {
+                  ...(driver.driverKind === "antigravity"
+                    ? { isLogoutPrompt: isAntigravityLogoutPrompt }
+                    : {}),
                   ...(driver.driverKind === "cursor" || managedCodex
                     ? {
                         credentialBinding: {

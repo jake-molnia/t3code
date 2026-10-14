@@ -1,3 +1,4 @@
+import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -403,6 +404,7 @@ const awaitPersistedProvider = (
 const layerTestNodeServices = Layer.mergeAll(
   NodeServices.layer,
   Layer.mock(CodexInstallation.CodexInstallation)({}),
+  Layer.mock(AntigravityInstallation.AntigravityInstallation)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
     getEnvironmentId: Effect.succeed(EnvironmentId.make("00000000-0000-4000-8000-000000000001")),

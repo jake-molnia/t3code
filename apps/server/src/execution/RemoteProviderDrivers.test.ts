@@ -19,9 +19,9 @@ const decodePollingRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ method: Schema.String })),
 );
 
-it.live(
-  "central provider factory needs no process or filesystem services and fails closed without a sandbox",
-  () =>
+it.live.each(["codex", "antigravity"])(
+  "%s central factory needs no local execution services and fails closed without a sandbox",
+  (driverKind) =>
     Effect.gen(function* () {
       let utilityRequests = 0;
       const runtime = Layer.succeed(
@@ -50,10 +50,10 @@ it.live(
       yield* Effect.scoped(
         Effect.gen(function* () {
           const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
-          const driver = drivers.find((driver) => driver.driverKind === "codex");
+          const driver = drivers.find((driver) => driver.driverKind === driverKind);
           if (!driver) throw new Error("Codex driver missing");
           const instance = yield* driver.create({
-            instanceId: ProviderInstanceId.make("codex"),
+            instanceId: ProviderInstanceId.make(driverKind),
             displayName: undefined,
             environment: [],
             enabled: true,
@@ -112,25 +112,28 @@ it.live("does not expose invented central auth controllers for CLI-owned account
   }).pipe(Effect.scoped, Effect.provide(Layer.merge(unavailableRuntime, Settings.layerTest()))),
 );
 
-it.live(
-  "keeps configured instance environment across roots and invalidates connected Cursor copies on logout",
-  () =>
+it.live.each(["cursor", "antigravity"])(
+  "keeps %s instance credentials separate across roots and clears copies on logout",
+  (driverKind) =>
     Effect.gen(function* () {
-      const instanceId = ProviderInstanceId.make("cursor-account");
+      const instanceId = ProviderInstanceId.make(`${driverKind}-account`);
       const snapshot = yield* buildUnavailableProviderSnapshot({
         instanceId,
-        driverKind: C.ProviderDriverKind.make("cursor"),
+        driverKind: C.ProviderDriverKind.make(driverKind),
         reason: "test",
       });
       const encodedSnapshot = yield* Schema.encodeEffect(Schema.toCodecJson(C.ServerProvider))(
         snapshot,
       );
-      let ownerKey: unknown = {
-        version: 1,
-        backendUrl: "https://api.cursor.com",
-        apiKey: "fake-account-key",
-        createdAtMs: 100,
-      };
+      let ownerKey: unknown =
+        driverKind === "antigravity"
+          ? { personal: "native-oauth-fixture", business: null }
+          : {
+              version: 1,
+              backendUrl: "https://api.cursor.com",
+              apiKey: "fake-account-key",
+              createdAtMs: 100,
+            };
       const copies = new Map<string, unknown>();
       const reviewRequests: Array<{ workspaceId: string; input: typeof ReviewGuideInput.Type }> =
         [];
@@ -160,7 +163,9 @@ it.live(
               environments.set(workspaceId, input.config.environment);
             } else {
               const input = Schema.decodeUnknownSync(ProviderRequest)(request.input);
-              if (request.method === "auth.executionCredentials") value = ownerKey;
+              if (request.method === "provider.refreshModels") value = null;
+              else if (request.method === "provider.refresh") value = encodedSnapshot;
+              else if (request.method === "auth.executionCredentials") value = ownerKey;
               else if (request.method === "auth.importExecutionCredentials")
                 copies.set(workspaceId, input.input);
               else if (request.method === "provider.snapshotForCwd") value = encodedSnapshot;
@@ -195,7 +200,7 @@ it.live(
       ];
       yield* Effect.gen(function* () {
         const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
-        const driver = drivers.find((driver) => driver.driverKind === "cursor");
+        const driver = drivers.find((driver) => driver.driverKind === driverKind);
         if (!driver) throw new Error("Missing Cursor");
         const instance = yield* driver.create({
           instanceId,
@@ -206,6 +211,7 @@ it.live(
         });
         if (!instance.snapshotForCwd || !instance.auth)
           throw new Error("Missing Cursor capabilities");
+        if (instance.refreshModels) yield* instance.refreshModels();
         yield* instance.snapshotForCwd("first");
         yield* instance.snapshotForCwd("second");
         expect(copies.get("root-one")).toEqual(ownerKey);
@@ -229,6 +235,11 @@ it.live(
           stops: [],
         });
         expect(reviewRequests).toEqual([{ workspaceId: "root-one", input: reviewInput }]);
+        if (driverKind === "antigravity") {
+          expect(instance.auth.isLogoutPrompt?.(" /logout ", false)).toBe(true);
+          expect(instance.auth.isLogoutPrompt?.("/logout", true)).toBe(false);
+          expect(instance.auth.isLogoutPrompt?.("Explain /logout", false)).toBe(false);
+        }
         yield* instance.auth.logout(Effect.void);
         expect(ownerKey).toBeNull();
         expect(copies.get("root-one")).toBeNull();

@@ -1,3 +1,4 @@
+import * as AntigravityUsage from "../provider/Drivers/AntigravityUsage.ts";
 import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
 import { harnessDefaults } from "../execution/HarnessDefaults.ts";
 import * as HistorySources from "./UsageHistorySources.ts";
@@ -130,6 +131,7 @@ const layerService = (input: {
   layerCursorUsageAccounts(
     CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer)),
   ).pipe(
+    Layer.provideMerge(AntigravityUsage.layer),
     Layer.provideMerge(ProviderHostLive.layer),
     Layer.provideMerge(Layer.mock(BackgroundPolicy.BackgroundPolicy)({})),
     Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),

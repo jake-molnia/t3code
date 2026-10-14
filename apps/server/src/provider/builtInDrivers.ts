@@ -24,6 +24,7 @@ import {
   AcpRegistryDriver,
   type AcpRegistryDriverEnv,
 } from "@t3tools/provider-acp-registry/server";
+import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/AntigravityDriver.ts";
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
 import { CursorDriver, type CursorDriverEnv } from "@t3tools/provider-cursor/server";
@@ -42,6 +43,7 @@ import type {
  * layer must provide every service in this union.
  */
 export type BuiltInDriversEnv =
+  | AntigravityDriverEnv
   | AcpRegistryDriverEnv
   | ClaudeDriverEnv
   | CodexDriverEnv
@@ -65,10 +67,12 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   PiDriver,
   MuseDriver,
   AcpRegistryDriver,
+  AntigravityDriver,
 ];
 
 /** Services the built-in usage readers need. */
 export type BuiltInUsageReadersEnv =
+  | ProviderUsageReaderEnv<typeof AntigravityDriver>
   | ProviderUsageReaderEnv<typeof ClaudeDriver>
   | ProviderUsageReaderEnv<typeof CodexDriver>
   | ProviderUsageReaderEnv<typeof GrokDriver>
@@ -83,4 +87,12 @@ export type BuiltInUsageReadersEnv =
  */
 export const BUILT_IN_USAGE_DRIVERS: ReadonlyArray<
   AnyProviderDriver<BuiltInDriversEnv, BuiltInUsageReadersEnv>
-> = [ClaudeDriver, CodexDriver, GrokDriver, PiDriver, OpenCodeDriver, CursorDriver];
+> = [
+  ClaudeDriver,
+  CodexDriver,
+  GrokDriver,
+  PiDriver,
+  OpenCodeDriver,
+  CursorDriver,
+  AntigravityDriver,
+];
