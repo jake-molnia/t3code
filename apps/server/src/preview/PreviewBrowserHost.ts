@@ -44,13 +44,23 @@ export const diagnoseLaunchFailure = Effect.fn("PreviewBrowserHost.diagnoseLaunc
       return new PreviewBrowserSandboxError({});
     }
     if ((yield* HostProcess.Platform) !== "linux") return undefined;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const starts = yield* spawner
+      .exitCode(
+        ChildProcess.make(input.executable, ["--version"], { stdin: "ignore", stderr: "ignore" }),
+      )
+      .pipe(
+        Effect.timeout("5 seconds"),
+        Effect.orElseSucceed(() => -1),
+      );
+    if (starts === 0) return undefined;
     const libraries = yield* missingLibraries(input.executable);
     return libraries.length === 0 ? undefined : new PreviewBrowserLibrariesError({ libraries });
   },
 );
 
 /** Shared libraries the loader cannot find for `executable`, by `ldd`. */
-export const missingLibraries = Effect.fn("PreviewBrowserHost.missingLibraries")(function* (
+const missingLibraries = Effect.fn("PreviewBrowserHost.missingLibraries")(function* (
   executable: string,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
