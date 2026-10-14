@@ -131,9 +131,14 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       });
       assert.equal(next.favorites?.[0]?.model, "gateway/claude");
     }).pipe(
-      Effect.provide(layerServerSettings()),
       Effect.provide(
-        ConfigProvider.layer(ConfigProvider.fromUnknown({ T3_GATEWAY_API_KEY: "inference-key" })),
+        layerServerSettings().pipe(
+          Layer.provideMerge(
+            ConfigProvider.layer(
+              ConfigProvider.fromUnknown({ T3_GATEWAY_API_KEY: "inference-key" }),
+            ),
+          ),
+        ),
       ),
     ),
   );

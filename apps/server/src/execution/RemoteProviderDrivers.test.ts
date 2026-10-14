@@ -629,9 +629,12 @@ it.live("gateway deployment does not expose or copy native managed account contr
     }
   }).pipe(
     Effect.scoped,
-    Effect.provide(Layer.merge(unavailableRuntime, Settings.layerTest())),
     Effect.provide(
-      ConfigProvider.layer(ConfigProvider.fromUnknown({ T3_GATEWAY_API_KEY: "inference-key" })),
+      Layer.mergeAll(
+        unavailableRuntime,
+        Settings.layerTest(),
+        ConfigProvider.layer(ConfigProvider.fromUnknown({ T3_GATEWAY_API_KEY: "inference-key" })),
+      ),
     ),
   ),
 );
