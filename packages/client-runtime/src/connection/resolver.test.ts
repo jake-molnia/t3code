@@ -3,7 +3,6 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   type DesktopSshEnvironmentTarget,
 } from "@t3tools/contracts";
-import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -239,8 +238,7 @@ describe("ConnectionResolver", () => {
         environmentId: ENVIRONMENT_ID,
         label: "Primary",
         httpBaseUrl: "http://127.0.0.1:3777",
-        socketUrl:
-          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=2",
+        socketUrl: "ws://127.0.0.1:3777/ws?clientSurface=web&orchestrationProtocol=2",
         httpAuthorization: null,
         target,
       });
@@ -353,10 +351,9 @@ describe("ConnectionResolver", () => {
     }),
   );
 
-  it.effect("exports the complete relay authorization flow through the product tracer", () =>
+  it.effect("keeps the complete relay authorization flow on the local tracer", () =>
     Effect.gen(function* () {
       const userSpans: Array<string> = [];
-      const productSpans: Array<string> = [];
       const target = new RelayConnectionTarget({
         environmentId: ENVIRONMENT_ID,
         label: "Cloud",
@@ -379,15 +376,11 @@ describe("ConnectionResolver", () => {
 
       yield* broker
         .prepare(catalogEntry(target))
-        .pipe(
-          Effect.provideService(RelayClientTracer, Option.some(collectingTracer(productSpans))),
-          Effect.withTracer(collectingTracer(userSpans)),
-        );
+        .pipe(Effect.withTracer(collectingTracer(userSpans)));
 
-      expect(productSpans).toContain("clientRuntime.connection.broker.relay");
-      expect(productSpans).toContain("test.remote.authorizeDpop");
+      expect(userSpans).toContain("clientRuntime.connection.broker.relay");
+      expect(userSpans).toContain("test.remote.authorizeDpop");
       expect(userSpans).toContain("clientRuntime.connection.broker.prepare");
-      expect(userSpans).not.toContain("test.remote.authorizeDpop");
     }),
   );
 

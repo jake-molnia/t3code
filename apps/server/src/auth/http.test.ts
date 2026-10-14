@@ -7,13 +7,11 @@ import {
   EnvironmentAuthenticatedAuth,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
-import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
@@ -162,9 +160,8 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it.effect("exports only verified T3 Connect requests", () =>
+it.effect("keeps authentication and handler diagnostics on the local tracer", () =>
   Effect.gen(function* () {
-    const productSpans: Array<string> = [];
     const localSpans: Array<string> = [];
     const collect = (into: Array<string>) =>
       Tracer.make({
@@ -213,27 +210,17 @@ it.effect("exports only verified T3 Connect requests", () =>
             }),
           ),
         ),
-        Effect.provideService(RelayClientTracer, Option.some(collect(productSpans))),
         Effect.withTracer(collect(localSpans)),
       );
 
     yield* handle("DPoP connect");
-    expect(productSpans).toEqual([
-      "environment.relay.request",
-      "EnvironmentAuth.authenticateHttpRequest",
-      "environment.handler",
-    ]);
-    expect(localSpans).toEqual(["EnvironmentAuth.authenticateHttpRequest"]);
-
-    productSpans.length = 0;
+    expect(localSpans).toEqual(["EnvironmentAuth.authenticateHttpRequest", "environment.handler"]);
     localSpans.length = 0;
     yield* handle("DPoP forged");
-    expect(productSpans).toEqual([]);
     expect(localSpans).toEqual(["EnvironmentAuth.authenticateHttpRequest"]);
 
     localSpans.length = 0;
     yield* handle("Bearer access-token");
-    expect(productSpans).toEqual([]);
     expect(localSpans).toEqual(["EnvironmentAuth.authenticateHttpRequest", "environment.handler"]);
   }).pipe(Effect.scoped),
 );

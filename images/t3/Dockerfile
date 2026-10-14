@@ -40,7 +40,6 @@ RUN test "$TARGETARCH" = amd64 \
     && mkdir -p /workspace && chown node:node /workspace
 COPY --from=desktop-tools /opt/code-server /opt/code-server
 COPY --from=go-toolchain /usr/local/go /usr/local/go
-COPY images/t3/harness-configs /opt/t3/harness-configs
 COPY --from=worker-package /out/worker /opt/t3
 COPY --from=harnesses /opt/harnesses /opt/harnesses
 COPY --from=harnesses /opt/native/bin /opt/native/bin
@@ -57,7 +56,6 @@ ENV PATH=/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_m
     T3_WORKSPACE_ROOT=/workspace T3_WORKER_STATE_DIR=/workspace/.t3-worker \
     T3_WORKER_PORT=8083 T3_BROWSER_EXECUTABLE=/usr/bin/chromium \
     T3CODE_SERVER_BROWSER_SANDBOX=0 SANDBOX_CHROMIUM_SANDBOX=disabled \
-    T3_HARNESS_DEFAULTS_FILE=/opt/t3/harness-configs/defaults.json \
     T3_ACP_MCP_NODE=/usr/local/bin/node T3_ACP_MCP_ENTRYPOINT=/opt/t3/dist/bin.mjs \
     HOME=/workspace/home CODEX_HOME=/workspace/home/.codex \
     DISABLE_AUTOUPDATER=1 MUSE_NO_AUTO_UPDATE=1

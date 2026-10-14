@@ -26,7 +26,6 @@ it.effect(
   () =>
     Effect.gen(function* () {
       vi.stubEnv("APERTURE_UPSTREAM", "");
-      vi.stubEnv("T3_HARNESS_STATE_DIR", "");
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-worker-layers-" });
       const services = yield* Layer.build(workerLayers({ cwd: stateDir, stateDir, port: 3774 }));
@@ -49,7 +48,7 @@ it.effect(
 );
 
 it.effect(
-  "exports one effective configuration after harness bootstrap and persists only raw settings",
+  "resolves optional operator defaults without rewriting native settings or process environment",
   () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -62,7 +61,7 @@ it.effect(
             environment: [
               {
                 name: "PI_CODING_AGENT_DIR",
-                value: "${T3_HARNESS_STATE_DIR}/pi",
+                value: "${T3_TEST_NATIVE_CONFIG_DIR}/pi",
                 sensitive: false,
               },
             ],
@@ -76,7 +75,7 @@ it.effect(
       );
       const keys = [
         "T3_HARNESS_DEFAULTS_FILE",
-        "T3_HARNESS_STATE_DIR",
+        "T3_TEST_NATIVE_CONFIG_DIR",
         "T3_TEST_OPERATOR_SECRET",
         "APERTURE_UPSTREAM",
       ] as const;
@@ -84,7 +83,7 @@ it.effect(
         Effect.sync(() => {
           const saved = new Map(keys.map((key) => [key, process.env[key]]));
           process.env.T3_HARNESS_DEFAULTS_FILE = defaults;
-          process.env.T3_HARNESS_STATE_DIR = "/wrong-bootstrap-home";
+          process.env.T3_TEST_NATIVE_CONFIG_DIR = `${root}/native-config`;
           process.env.T3_TEST_OPERATOR_SECRET = "expanded-operator-secret";
           delete process.env.APERTURE_UPSTREAM;
           return saved;
@@ -101,7 +100,7 @@ it.effect(
       yield* Effect.gen(function* () {
         const normalize = yield* ProviderConfigurationOverrides;
         expect(normalize({ driver: ProviderDriverKind.make("pi") }).environment).toEqual([
-          { name: "PI_CODING_AGENT_DIR", value: `${root}/state/harnesses/pi`, sensitive: false },
+          { name: "PI_CODING_AGENT_DIR", value: `${root}/native-config/pi`, sensitive: false },
         ]);
         expect(
           normalize({ driver: ProviderDriverKind.make("codex") }).environment?.[0]?.value,
@@ -117,9 +116,7 @@ it.effect(
         yield* settings.updateSettings({ providerInstances: rawInstances });
         const config = yield* ServerConfig.ServerConfig;
         const persisted = yield* fs.readFileString(config.settingsPath);
-        const saved = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(Schema.toCodecJson(ServerSettings)),
-        )(persisted);
+        const saved = yield* decodeSavedSettings(persisted);
         expect(saved.providerInstances).toEqual(rawInstances);
         expect(persisted).not.toContain("expanded-operator-secret");
         expect(persisted).not.toContain("PI_CODING_AGENT_DIR");

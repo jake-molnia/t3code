@@ -3,12 +3,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 
-import {
-  hostedAppUrlConfig,
-  makeCloudCliOAuthConfig,
-  makeRelayUrlConfig,
-  resolveRelayClientTracingConfig,
-} from "./publicConfig.ts";
+import { hostedAppUrlConfig, makeCloudCliOAuthConfig, makeRelayUrlConfig } from "./publicConfig.ts";
 
 const provideEnv = (env: Readonly<Record<string, string>>) =>
   Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })));
@@ -144,39 +139,3 @@ it.effect("reports malformed Clerk publishable keys as typed configuration failu
     }
   }),
 );
-
-it("resolves relay client tracing from runtime config with build-time fallback", () => {
-  const fallback = {
-    tracesUrl: "https://embedded.example.test/v1/traces",
-    tracesDataset: "embedded-dataset",
-    tracesToken: "embedded-token",
-  };
-
-  assert.deepEqual(resolveRelayClientTracingConfig({}, fallback), fallback);
-  assert.deepEqual(
-    resolveRelayClientTracingConfig(
-      {
-        T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://runtime.example.test/v1/traces",
-        T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "runtime-dataset",
-        T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "runtime-token",
-      },
-      fallback,
-    ),
-    {
-      tracesUrl: "https://runtime.example.test/v1/traces",
-      tracesDataset: "runtime-dataset",
-      tracesToken: "runtime-token",
-    },
-  );
-  assert.equal(
-    resolveRelayClientTracingConfig(
-      {
-        T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "http://insecure.example.test/v1/traces",
-        T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "runtime-dataset",
-        T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "runtime-token",
-      },
-      fallback,
-    ),
-    null,
-  );
-});

@@ -210,7 +210,7 @@ describe("remote environment authorization", () => {
     }),
   );
 
-  it.effect("keeps OS sentinels in telemetry but out of display metadata", () =>
+  it.effect("keeps OS sentinels out of display metadata and WebSocket URLs", () =>
     Effect.gen(function* () {
       const tokenResponse = () =>
         Response.json(
@@ -247,7 +247,7 @@ describe("remote environment authorization", () => {
         deviceType: "desktop",
         os: "unknown",
       });
-      expect(websocketUrl.searchParams.get("clientOs")).toBe("unknown");
+      expect(websocketUrl.searchParams.get("clientOs")).toBeNull();
     }),
   );
 
@@ -475,14 +475,12 @@ describe("remote environment authorization", () => {
           appVersion: "1.2.3",
           deviceType: "mobile",
           os: "Android",
-          osMajorVersion: 15,
-          deviceModel: "Pixel 9",
         },
         connectionMethod: "relay",
       }).pipe(provideRemoteHttp(fetch.fetchFn));
 
       expect(url).toBe(
-        "wss://remote.example.com/ws?wsTicket=ws-ticket&clientSurface=mobile&clientAppVersion=1.2.3&clientDeviceType=phone&clientOs=Android&clientOsMajorVersion=15&clientDeviceModel=Pixel+9&connectionMethod=relay",
+        "wss://remote.example.com/ws?wsTicket=ws-ticket&clientSurface=mobile&clientAppVersion=1.2.3",
       );
     }),
   );

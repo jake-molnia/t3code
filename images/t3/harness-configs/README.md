@@ -1,15 +1,41 @@
-# Worker harness configuration
+# Worker provider configuration
 
-Set `T3_HARNESS_DEFAULTS_FILE=/opt/t3/harness-configs/defaults.json`, `APERTURE_UPSTREAM` to the authorized pool proxy origin, and `APERTURE_API_KEY` to its SDK credential. The existing pool proxy uses `-` as the nonsecret SDK key because network identity authorizes upstream access. Never bake real credentials into this image.
+Providers use their native configuration, credentials, model discovery, and session protocols in
+execution workers. Configure an instance in **Settings > Providers**. Its environment variables
+and settings travel to the worker; binaries come from the pinned worker image.
 
-The worker applies this manifest to native T3 provider factories after receiving each provider instance. Operator entries override matching configuration and environment fields; unrelated instance settings remain available. `${NAME}` values resolve from worker environment. Expanded defaults are not written into central or worker settings files. The manifest's driver keys are T3 driver IDs, including `claudeAgent`.
+Aperture is usable through each provider's supported endpoint configuration. For Codex, use its
+native `config.toml` provider entry and credential source, or the instance's launch arguments and
+environment variables. T3 does not fetch an Aperture catalog at worker startup, generate provider
+configuration, or remove models from native snapshots. A gateway outage must not prevent other
+providers or workspace operations from starting.
 
-Codex uses its existing/API-key mode and Responses endpoint. Seed the central instance with `setupMode: existing` too, so T3 does not initiate managed ChatGPT credential sharing. Claude uses the Anthropic-compatible endpoint. Grok uses its native XAI API/model endpoint variables. OpenCode uses the pinned `opencode2` executable with native `providers`/`settings` configuration. On startup the worker reads Aperture's model catalog and publishes retained OpenCode and Pi configuration for Responses, Chat Completions, and Anthropic Messages separately. Their native provider names are `aperture`, `aperture-chat`, and `aperture-anthropic`. Codex, Claude, and Grok snapshots omit models whose advertised endpoints cannot be used by that harness. Model IDs and available context limits come from the catalog. Routes flagged `requires_client_auth` are excluded because this deployment supplies managed Aperture credentials rather than personal provider accounts. With the current catalog this leaves Claude unavailable until Aperture has a managed Anthropic Messages route. An unavailable or malformed catalog prevents worker startup instead of silently sending requests to a public provider.
+Cursor uses its native browser sign-in in Settings. Its saved credential is transferred from the
+auth utility worker to execution workers. Claude, Grok, OpenCode, Pi, and Muse retain their upstream
+CLI-owned sign-in paths and instance environment variables. Run CLI sign-in in the destination
+sandbox's terminal with the same config directory used by that instance. A login in one root's
+sandbox does not sign in another root; API credentials supplied in instance settings travel with
+the instance. Muse supports `muse login` or an explicit `META_API_KEY`; Claude supports
+`claude auth login`, `CLAUDE_CODE_OAUTH_TOKEN`, or its documented API credentials. Do not sign in
+on the central server and expect its local files to reach a worker.
 
-Aperture MCP is added alongside the session-scoped `t3-code` MCP using each adapter's existing launch interface. ACP providers receive the existing stdio-to-HTTP bridge; Pi uses native MCP registration. No second provider launcher is installed.
+An optional `T3_HARNESS_DEFAULTS_FILE` can supply deployment-owned defaults keyed by driver ID.
+Its `config` object and `environment` array have the same shapes as provider instance settings.
+`${NAME}` references resolve from the worker environment. Explicit instance values, including an
+empty environment value, take precedence. Expanded defaults are not saved to central settings.
+There is no required defaults file or gateway-specific setup mode.
 
-Cursor and Muse require proprietary provider authentication and reject configuration in Aperture mode. An Aperture key is not a Cursor SDK or Muse account credential. They remain installed for upstream compatibility, but this deployment must leave their instances disabled.
+When upgrading a deployment that used the removed bundled defaults and settings seed, provision
+its existing native provider configuration in the worker home or instance settings first. Remove
+the old `T3_HARNESS_DEFAULTS_FILE=/opt/t3/harness-configs/defaults.json` reference, or point it to a
+file managed by the deployment. Existing Pi and OpenCode configuration files on retained storage
+can be used through `PI_CODING_AGENT_DIR` and `OPENCODE_CONFIG`. For the OpenCode 2 runtime supplied
+by the base image, retain `binaryPath: opencode2` on the instance. Deployment manifests and secrets
+belong in the config repository, not this image.
 
-All worker provider calls enforce full access while preserving plan versus normal interaction mode. Kubernetes remains the execution boundary.
+The optional Aperture MCP endpoint remains independent of model routing. `APERTURE_UPSTREAM` and
+`APERTURE_API_KEY` add it beside the session-scoped `t3-code` MCP server. They do not select model
+providers or disable native accounts.
 
-`settings.seed.json` is a minimal central settings seed validated against T3's ServerSettings schema. Apply it only when the central settings file does not exist. It selects Codex with `gpt-6-luna` and disables providers requiring native account credentials.
+Worker provider calls run with full access while preserving plan versus normal interaction mode.
+Kubernetes remains the execution boundary. Conversation SQLite remains in the central service.
