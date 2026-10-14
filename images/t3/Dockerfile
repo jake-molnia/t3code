@@ -18,6 +18,9 @@ COPY LICENSE /out/worker/LICENSE
 FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bdcd73c103b096988922d7 AS harnesses
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
+COPY images/t3/providers.lock.json images/t3/verify-provider-pins.mjs /tmp/provider-pins/
+COPY images/t3/harnesses/package*.json /tmp/provider-pins/harnesses/
+RUN node /tmp/provider-pins/verify-provider-pins.mjs
 COPY images/t3/harnesses/package*.json /opt/harnesses/
 RUN npm ci --prefix /opt/harnesses --omit=dev --no-audit --no-fund
 COPY images/t3/providers.lock.json /opt/providers.lock.json
@@ -48,7 +51,7 @@ COPY --from=harnesses /opt/native/az/opt/az /opt/az
 COPY --from=harnesses /opt/native/az/usr/bin/az /usr/bin/az
 COPY --from=harnesses /opt/native/extensions /opt/azure/extensions
 COPY --from=harnesses /opt/providers.lock.json /opt/t3/providers.lock.json
-RUN ln -sfn /usr/local/bin/opencode /usr/local/bin/opencode2 \
+RUN mv /usr/local/bin/opencode /usr/local/bin/opencode2 \
     && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
     && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs

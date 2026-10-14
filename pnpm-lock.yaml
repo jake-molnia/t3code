@@ -798,9 +798,6 @@ importers:
 
   packages/provider-acp-registry:
     dependencies:
-      '@noble/hashes':
-        specifier: 'catalog:'
-        version: 1.8.0
       '@t3tools/contracts':
         specifier: workspace:*
         version: link:../contracts

@@ -1,25 +1,14 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  DEFAULT_SERVER_SETTINGS,
-  ProviderDriverKind,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import * as TestClock from "effect/testing/TestClock";
-import * as ChildProcess from "effect/process/ChildProcess";
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
@@ -27,7 +16,6 @@ import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 const registryUrl = "https://registry.test/registry.json";
 const archiveUrl = "https://registry.test/example-agent.bin";
 const decodeAcpRegistrySettings = Schema.decodeSync(AcpRegistrySettings);
-const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 function makeAgent(
   distribution: AcpRegistrySupport.AcpRegistryAgent["distribution"],
@@ -65,78 +53,6 @@ function layerResolver(
     Layer.succeed(HttpClient.HttpClient, HttpClient.make(execute)),
   );
 }
-
-const makeFakeNpmToolchain = Effect.fn("AcpRegistrySupport.test.makeFakeNpmToolchain")(function* (
-  rootDirectory: string,
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const toolchainBin = path.join(rootDirectory, "fake-node", "bin");
-  const globalPrefix = path.join(rootDirectory, "tools", "example-agent", "1.2.3", "npm");
-  const globalBin = path.join(globalPrefix, "bin");
-  const executablePath = path.join(globalBin, "example-agent");
-  const npmPath = path.join(toolchainBin, "npm");
-  const logPath = path.join(rootDirectory, "npm.log");
-  yield* fileSystem.makeDirectory(toolchainBin, { recursive: true });
-  yield* fileSystem.makeDirectory(globalPrefix, { recursive: true });
-  yield* fileSystem.writeFileString(logPath, "");
-  yield* fileSystem.copyFile(
-    yield* path.fromFileUrl(
-      new URL("./testing/AcpRegistrySupport.npm.fixture.sh", import.meta.url),
-    ),
-    npmPath,
-  );
-  yield* fileSystem.chmod(npmPath, 0o755);
-  return {
-    environment: {
-      ...process.env,
-      PATH: `${toolchainBin}:${process.env.PATH ?? ""}`,
-      FAKE_NPM_LOG: logPath,
-      FAKE_NPM_PREFIX: path.join(rootDirectory, "external-npm-global"),
-      FAKE_NPM_MANIFEST: encodeUnknownJson({
-        name: "@example/acp",
-        version: "1.2.3",
-        bin: { "example-agent": "dist/cli.js" },
-      }),
-    } satisfies NodeJS.ProcessEnv,
-    executablePath,
-    globalBin,
-    logPath,
-    npmPath,
-  };
-});
-
-const makeFakeUvToolchain = Effect.fn("AcpRegistrySupport.test.makeFakeUvToolchain")(function* (
-  rootDirectory: string,
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const toolchainBin = path.join(rootDirectory, "fake-uv", "bin");
-  const globalBin = path.join(rootDirectory, "tools", "example-agent", "1.2.3", "python", "bin");
-  const executablePath = path.join(globalBin, "fast-agent");
-  const uvPath = path.join(toolchainBin, "uv");
-  const logPath = path.join(rootDirectory, "uv.log");
-  yield* fileSystem.makeDirectory(toolchainBin, { recursive: true });
-  yield* fileSystem.writeFileString(logPath, "");
-  yield* fileSystem.copyFile(
-    yield* path.fromFileUrl(new URL("./testing/AcpRegistrySupport.uv.fixture.sh", import.meta.url)),
-    uvPath,
-  );
-  yield* fileSystem.chmod(uvPath, 0o755);
-  return {
-    environment: {
-      ...process.env,
-      PATH: `${toolchainBin}:${process.env.PATH ?? ""}`,
-      FAKE_UV_LOG: logPath,
-      FAKE_UV_BIN: path.join(rootDirectory, "external-uv-bin"),
-      FAKE_UV_EXECUTABLE: executablePath,
-    } satisfies NodeJS.ProcessEnv,
-    executablePath,
-    globalBin,
-    logPath,
-    uvPath,
-  };
-});
 
 describe("AcpRegistrySupport", () => {
   it("preserves the registry failure when translating it for clients", () => {
@@ -223,7 +139,7 @@ describe("AcpRegistrySupport", () => {
       const environment = { ...hostEnvironment, PATH: cacheDir, OVERRIDE: "provider" };
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
-        toolsDir: `${cacheDir}/tools`,
+
         registryUrl,
       }).pipe(Effect.provideService(HostProcess.Environment, hostEnvironment));
       const localSettings = decodeAcpRegistrySettings({
@@ -273,7 +189,7 @@ describe("AcpRegistrySupport", () => {
       const environment = { PATH: "/unused", INHERITED: "host" };
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
-        toolsDir: `${cacheDir}/tools`,
+
         registryUrl,
       }).pipe(Effect.provideService(HostProcess.Environment, environment));
       const resolved = yield* resolver.resolve(
@@ -293,7 +209,7 @@ describe("AcpRegistrySupport", () => {
       for (const extension of [".cmd", ".BAT"]) {
         const windowsResolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
           cacheDir,
-          toolsDir: `${cacheDir}/tools`,
+
           registryUrl,
         }).pipe(
           Effect.provideService(HostProcess.Platform, "win32"),
@@ -324,7 +240,7 @@ describe("AcpRegistrySupport", () => {
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
-        toolsDir: `${cacheDir}/tools`,
+
         registryUrl,
       });
       const environment = { PATH: cacheDir };
@@ -368,7 +284,7 @@ describe("AcpRegistrySupport", () => {
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
-        toolsDir: `${cacheDir}/tools`,
+
         registryUrl,
       });
       const error = yield* resolver.inspect(settings()).pipe(Effect.flip);
@@ -385,4 +301,61 @@ describe("AcpRegistrySupport", () => {
       ),
     );
   });
+});
+
+it.effect("registry refresh and launch never install packages or fetch executables", () => {
+  const requests: string[] = [];
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const cacheDir = yield* fs.makeTempDirectoryScoped();
+    const commandPath = `${cacheDir}/image-agent`;
+    yield* fs.writeFileString(commandPath, "#!/bin/sh\n");
+    yield* fs.chmod(commandPath, 0o755);
+    const distributions: AcpRegistrySupport.AcpRegistryAgent["distribution"][] = [
+      { npx: { package: "@example/acp@1.2.3", args: ["mutable-registry-argument"] } },
+      { uvx: { package: "example-acp==1.2.3" } },
+      { binary: { "linux-x86_64": { archive: archiveUrl, cmd: "agent" } } },
+    ];
+    for (const distribution of distributions) {
+      const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir,
+        registryUrl,
+      }).pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) => {
+            requests.push(request.url);
+            if (request.url !== registryUrl)
+              return Effect.die("Executable downloads are forbidden");
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(makeRegistry(makeAgent(distribution))),
+              ),
+            );
+          }),
+        ),
+      );
+      expect((yield* resolver.search({ query: "example" })).agents).toHaveLength(1);
+      expect(yield* resolver.resolve(settings(), "/workspace").pipe(Effect.flip)).toMatchObject({
+        reason: "runner_unavailable",
+        detail: expect.stringContaining("supplied by the execution image"),
+      });
+      expect(yield* resolver.inspect(settings())).toMatchObject({ status: "unprepared" });
+      const resolved = yield* resolver.resolve(
+        settings({ commandPath, commandArgs: ["--acp", "pinned argument"] }),
+        "/workspace",
+      );
+      expect(resolved.spawn).toMatchObject({
+        command: commandPath,
+        args: ["--acp", "pinned argument"],
+        shell: false,
+      });
+      expect(yield* fs.exists(`${cacheDir}/tools`)).toBe(false);
+    }
+    expect(requests.every((url) => url === registryUrl)).toBe(true);
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(layerResolver(() => Effect.die("unexpected request"), { PATH: "" })),
+  );
 });

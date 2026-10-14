@@ -20,7 +20,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { readCustomModelEntries } from "@t3tools/shared/model";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { createProviderVersionAdvisory } from "./maintenanceResolver.ts";
+import { createProviderVersionAdvisory } from "./versionAdvisory.ts";
 import { collectUint8StreamText } from "./collectStreamText.ts";
 
 // Localized cmd.exe "not recognized" messages for a missing executable.

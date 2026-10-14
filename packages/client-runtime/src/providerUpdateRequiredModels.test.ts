@@ -13,7 +13,9 @@ describe("formatProviderUpdateRequiredNotice", () => {
           { slug: "b", name: "Model B", minVersion: "2.1.10" },
         ],
       }),
-    ).toBe("Update Claude Code to v2.1.10 or newer to use Model A and Model B.");
+    ).toBe(
+      "Ask your deployment administrator for a sandbox image with Claude Code v2.1.10 or newer to use Model A and Model B.",
+    );
     expect(
       formatProviderUpdateRequiredNotice({ driver: ProviderDriverKind.make("codex") }),
     ).toBeNull();
@@ -28,7 +30,7 @@ describe("formatProviderUpdateRequiredNotice", () => {
       ],
     };
     expect(formatProviderUpdateRequiredNotice(provider, " model a ")).toBe(
-      "Update Claude Code to v2.1.9 or newer to use Model A.",
+      "Ask your deployment administrator for a sandbox image with Claude Code v2.1.9 or newer to use Model A.",
     );
     expect(formatProviderUpdateRequiredNotice(provider, "gpt")).toBeNull();
   });
@@ -42,6 +44,8 @@ describe("formatProviderUpdateRequiredNotice", () => {
           { slug: "b", name: "B", minVersion: "2.1.0" },
         ],
       }),
-    ).toBe("Update the Codex CLI to v2.1.0 or newer to use A and B.");
+    ).toBe(
+      "Ask your deployment administrator for a sandbox image with the Codex CLI v2.1.0 or newer to use A and B.",
+    );
   });
 });

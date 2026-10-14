@@ -35,11 +35,7 @@ import {
 } from "@t3tools/provider-core/server/driver";
 import type { ServerProviderDraft } from "@t3tools/provider-core/server/snapshotProbe";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import {
-  makeCachedProviderMaintenanceResolution,
-  makePackageManagedProviderMaintenanceResolver,
-  resolveProviderMaintenanceCapabilitiesEffect,
-} from "@t3tools/provider-core/server/maintenanceResolver";
+
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -49,13 +45,6 @@ import {
 const decodePiSettings = Schema.decodeSync(PiSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("pi");
-const UPDATE = makePackageManagedProviderMaintenanceResolver({
-  provider: DRIVER_KIND,
-  npmPackageName: "@earendil-works/pi-coding-agent",
-  // Pi's updater covers its own installer and npm, pnpm, yarn, and bun globals.
-  nativeUpdate: { args: ["update", "--self"] },
-});
-
 export type PiDriverEnv =
   | PiAdapterV2DriverEnv
   | ProviderHost.ProviderHost
@@ -93,8 +82,6 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const pathService = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
       const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
       const host = yield* ProviderHost.ProviderHost;
@@ -111,16 +98,8 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies PiSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, pathService),
-        ),
-      );
+      const getVersionSource = () =>
+        Effect.succeed({ packageName: "@earendil-works/pi-coding-agent" });
 
       const orchestrationAdapter = yield* PiAdapterV2Driver.create({
         instanceId,
@@ -149,7 +128,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
 
       const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<PiSettings>>({
-        resolveMaintenance,
+        getVersionSource,
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
@@ -157,11 +136,11 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
           buildInitialPiProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          resolveMaintenance().pipe(
-            Effect.flatMap((maintenanceCapabilities) =>
+          getVersionSource().pipe(
+            Effect.flatMap((versionSource) =>
               enrichPiSnapshot({
                 snapshot: currentSnapshot,
-                maintenanceCapabilities,
+                versionSource,
                 enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
                 publishSnapshot,
               }),

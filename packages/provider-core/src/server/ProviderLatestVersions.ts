@@ -1,8 +1,7 @@
 /**
  * Memoizes "latest available version" lookups (npm registry, release
  * channels) for the version advisory. One instance is shared by every driver
- * and the maintenance runner, so a provider update can invalidate the entry
- * the next snapshot refresh reads.
+ * so an explicit status refresh can invalidate the entry it reads.
  *
  * @module provider-core/server/ProviderLatestVersions
  */

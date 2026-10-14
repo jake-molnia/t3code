@@ -20,7 +20,7 @@ import * as ProviderContinuationRequests from "@t3tools/provider-core/server/Pro
 import { checkMuseProviderStatus, makePendingMuseProvider } from "./status.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
-import { enrichMuseSnapshot, latestMuseVersion, museMaintenance } from "./maintenance.ts";
+import { enrichMuseSnapshot, compareMuseVersions } from "./maintenance.ts";
 import { makeMuseEnvironment } from "./sdk.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -28,10 +28,7 @@ import {
   type ProviderInstance,
 } from "@t3tools/provider-core/server/driver";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import {
-  makeCachedProviderMaintenanceResolution,
-  resolveProviderMaintenanceCapabilitiesEffect,
-} from "@t3tools/provider-core/server/maintenanceResolver";
+
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -92,34 +89,10 @@ export const MuseDriver: ProviderDriver<MuseSettings, MuseDriverEnv> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
-      const resolveInstallation = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(museMaintenance, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnvironment,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
-      );
-      const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
-        Effect.gen(function* () {
-          const capabilities = yield* resolveInstallation(options);
-          // The maintenance runner requests fresh capabilities around an explicit update
-          // and needs the native target version to verify that the command actually upgraded.
-          const latestVersion = options?.fresh
-            ? yield* latestMuseVersion(processEnvironment, { fresh: true }).pipe(
-                Effect.provideService(HttpClient.HttpClient, httpClient),
-                Effect.provideService(
-                  ProviderLatestVersions.ProviderLatestVersions,
-                  latestVersions,
-                ),
-              )
-            : undefined;
-          return latestVersion !== undefined ? { ...capabilities, latestVersion } : capabilities;
-        });
+      const getVersionSource = () =>
+        Effect.succeed({ packageName: null, compareVersions: compareMuseVersions });
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<MuseSettings>>({
-        resolveMaintenance,
+        getVersionSource,
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
@@ -132,11 +105,11 @@ export const MuseDriver: ProviderDriver<MuseSettings, MuseDriverEnv> = {
           Effect.provideService(Path.Path, path),
         ),
         enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          resolveMaintenance().pipe(
-            Effect.flatMap((maintenanceCapabilities) =>
+          getVersionSource().pipe(
+            Effect.flatMap((versionSource) =>
               enrichMuseSnapshot({
                 snapshot: currentSnapshot,
-                maintenanceCapabilities,
+                versionSource,
                 enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
                 environment: processEnvironment,
               }),

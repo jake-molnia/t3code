@@ -2,25 +2,19 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import {
   compareMuseVersions,
   enrichMuseSnapshot,
-  museMaintenance,
   latestMuseVersion,
   parseMuseVersion,
 } from "./maintenance.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 
-const maintenanceCapabilities = {
-  ...makeManualOnlyProviderMaintenanceCapabilities({
-    provider: ProviderDriverKind.make("muse"),
-    packageName: null,
-  }),
+const versionSource = {
+  packageName: null,
   compareVersions: compareMuseVersions,
 };
 const snapshot: ServerProvider = {
@@ -94,7 +88,7 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
         });
         const check = enrichMuseSnapshot({
           snapshot,
-          maintenanceCapabilities,
+          versionSource,
           enableProviderUpdateChecks: true,
           environment: { MUSE_CHANNEL: "muse-canary" },
         });
@@ -106,7 +100,6 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
           status: "behind_latest",
           currentVersion: "1.0.3",
           latestVersion: "1.1.1-R2514.1",
-          canUpdate: false,
         });
         expect(second.versionAdvisory?.latestVersion).toBe("1.1.1-R2514.1");
         expect(requests).toEqual(["https://api.meta.ai/muse-code/channels/muse-canary"]);
@@ -121,7 +114,7 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
       ] as const) {
         const result = yield* enrichMuseSnapshot({
           snapshot: { ...snapshot, version: current },
-          maintenanceCapabilities,
+          versionSource,
           enableProviderUpdateChecks: true,
           environment: {},
         }).pipe(
@@ -149,7 +142,7 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
       ]) {
         const result = yield* enrichMuseSnapshot({
           ...input,
-          maintenanceCapabilities,
+          versionSource,
           environment: {},
         }).pipe(
           Effect.provide(ProviderLatestVersions.layer),
@@ -172,7 +165,7 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
       ]) {
         const result = yield* enrichMuseSnapshot({
           snapshot,
-          maintenanceCapabilities,
+          versionSource,
           enableProviderUpdateChecks: true,
           environment: {},
         }).pipe(
@@ -188,45 +181,5 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
         expect(result.versionAdvisory?.status).toBe("unknown");
       }
     }),
-  );
-
-  it.effect("updates only a recognized launcher at the resolved instance path", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "muse-maintenance-" });
-        const binaryPath = `${directory}/custom muse`;
-        const context = {
-          binaryPath,
-          resolvedCommandPath: binaryPath,
-          realCommandPath: binaryPath,
-          platform: "linux" as const,
-          env: { MUSE_CHANNEL: "muse-canary" },
-        };
-        yield* fs.writeFileString(
-          binaryPath,
-          "#!/bin/bash\n# muse-code/launcher-2\n# MUSE_SYNC_UPDATE\n",
-        );
-        const result = yield* museMaintenance.resolve(context);
-        expect(result.update).toMatchObject({
-          executable: binaryPath,
-          args: ["--version"],
-          lockKey: `muse:${binaryPath}`,
-          env: {
-            MUSE_CHANNEL: "muse-canary",
-            MUSE_NO_AUTO_UPDATE: "0",
-            MUSE_SYNC_UPDATE: "1",
-            MUSE_UPDATE_INTERVAL_SECONDS: "0",
-          },
-        });
-        expect(result.update?.command).toBe(
-          `MUSE_CHANNEL=muse-canary MUSE_NO_AUTO_UPDATE=0 MUSE_SYNC_UPDATE=1 MUSE_UPDATE_INTERVAL_SECONDS=0 '${binaryPath}' --version`,
-        );
-        expect(result.compareVersions).toBe(compareMuseVersions);
-        yield* fs.writeFileString(binaryPath, "standalone binary");
-        expect((yield* museMaintenance.resolve(context)).update).toBeNull();
-        expect((yield* museMaintenance.resolve(null)).update).toBeNull();
-      }),
-    ),
   );
 });
