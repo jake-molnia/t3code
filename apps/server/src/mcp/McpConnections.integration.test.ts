@@ -34,6 +34,15 @@ const decodeSearch = Schema.decodeUnknownSync(
   }),
 );
 
+const decodePause = Schema.decodeUnknownSync(
+  Schema.Struct({
+    structuredContent: Schema.Struct({
+      status: Schema.Literal("waiting_for_interaction"),
+      executionId: Schema.String,
+    }),
+  }),
+);
+
 const firstProject = ProjectId.make("c0a80101-1234-4567-89ab-000000000001");
 const secondProject = ProjectId.make("c0a80101-1234-4567-89ab-000000000002");
 const firstThread = ThreadId.make("thread:executor-first");
@@ -91,6 +100,7 @@ const domain = McpConnections.layer.pipe(
 const remoteMcp = Effect.acquireRelease(
   Effect.promise(async () => {
     const calls: string[] = [];
+    let token: string | undefined;
     const server = NodeHttp.createServer(async (request, response) => {
       if (request.method === "GET") {
         response.writeHead(405).end();
@@ -108,6 +118,10 @@ const remoteMcp = Effect.acquireRelease(
         response.writeHead(202).end();
         return;
       }
+      if (token && request.headers.authorization !== `Bearer ${token}`) {
+        response.writeHead(401).end();
+        return;
+      }
       let result: unknown;
       if (rpc.method === "initialize")
         result = {
@@ -117,11 +131,11 @@ const remoteMcp = Effect.acquireRelease(
         };
       else if (rpc.method === "tools/list")
         result = {
-          tools: ["read", "write"].map((name) => ({
+          tools: ["read", "write", "approve"].map((name) => ({
             name,
             description: `${name} fixture data`,
             inputSchema: { type: "object", properties: {}, additionalProperties: false },
-            annotations: { readOnlyHint: true },
+            annotations: { readOnlyHint: name !== "approve", destructiveHint: name === "approve" },
           })),
         };
       else if (rpc.method === "tools/call") {
@@ -143,7 +157,14 @@ const remoteMcp = Effect.acquireRelease(
     const address = server.address();
     if (!address || typeof address === "string")
       throw new Error("MCP fixture did not bind a TCP port");
-    return { server, calls, url: `http://127.0.0.1:${address.port}/mcp` };
+    return {
+      server,
+      calls,
+      setToken: (value: string) => {
+        token = value;
+      },
+      url: `http://127.0.0.1:${address.port}/mcp`,
+    };
   }),
   ({ server }) =>
     Effect.promise(
@@ -175,7 +196,7 @@ if (installedRuntime) {
           const connection = state.connections[0];
           if (!connection) throw new Error("Connected MCP missing from settings");
           const tools = yield* service.tools(connection.id);
-          expect(tools.map((tool) => tool.name).sort()).toEqual(["read", "write"]);
+          expect(tools.map((tool) => tool.name).sort()).toEqual(["approve", "read", "write"]);
           const read = tools.find((tool) => tool.name === "read");
           const write = tools.find((tool) => tool.name === "write");
           if (!read || !write) throw new Error("Remote tool catalog incomplete");
@@ -227,6 +248,51 @@ if (installedRuntime) {
             ),
           ).toContain("tool_blocked");
           expect(fixture.calls).toEqual(["read", "write"]);
+          const beforeReconnect = (yield* service.list).access;
+          for (const token of ["first-token", "replacement-token"]) {
+            fixture.setToken(token);
+            yield* service.connect(
+              {
+                connectionId: connection.id,
+                name: "Fixture",
+                url: fixture.url,
+                auth: { type: "token", token },
+              },
+              "browser-session",
+            );
+            expect((yield* service.list).access).toEqual(beforeReconnect);
+            yield* call(secondThread, "execute", `return await tools.${writePath}({});`);
+          }
+          expect(fixture.calls).toEqual(["read", "write", "write", "write"]);
+          const approve = tools.find((tool) => tool.name === "approve");
+          if (!approve) throw new Error("Approval tool missing");
+          yield* service.setAccess({
+            projectIds: [firstProject],
+            connectionId: connection.id,
+            tools: { mode: "selected", toolIds: [approve.id] },
+          });
+          const paused = decodePause(
+            yield* call(
+              firstThread,
+              "execute",
+              `return await tools.${approve.id.replace(/^tools\./, "")}({});`,
+            ),
+          );
+          const resume = {
+            threadId: firstThread,
+            sessionId: "provider-session",
+            executionId: paused.structuredContent.executionId,
+            action: "accept" as const,
+            content: "{}",
+          };
+          expect(
+            (yield* service.resume({ ...resume, threadId: secondThread }).pipe(Effect.result))._tag,
+          ).toBe("Failure");
+          expect(fixture.calls).not.toContain("approve");
+          expect(yield* service.resume(resume)).toMatchObject({
+            structuredContent: { status: "completed" },
+          });
+          expect(fixture.calls.at(-1)).toBe("approve");
         }).pipe(Effect.provide(domain));
       }).pipe(
         Effect.scoped,

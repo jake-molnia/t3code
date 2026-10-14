@@ -110,6 +110,7 @@ function fixture() {
     patterns: string[];
   }> = [];
   let available = true;
+  let oauthFailures = 0;
   let sequence = 0;
   let yieldThreadLookup = false;
   const dependencies = Layer.mergeAll(
@@ -145,88 +146,99 @@ function fixture() {
     Layer.mock(ExecutorRuntime.ExecutorRuntime)({
       status: Effect.sync(() => ({ available })),
       request: (method, path, body) =>
-        Effect.sync(() => {
-          requests.push({ method, path, body });
-          const url = new URL(path, "http://executor.test");
-          if (method === "GET" && url.pathname === "/api/connections") return [...connections];
-          if (method === "GET" && url.pathname === "/api/integrations") return [...integrations];
-          if (method === "GET" && url.pathname === "/api/tools") return [...catalog];
-          if (path === "/api/toolkits" && method === "GET") return { toolkits: [...toolkits] };
-          if (path === "/api/toolkits" && method === "POST") {
-            const input = decodeToolkit(body);
-            const row = { id: `toolkit-${++sequence}`, owner: input.owner, slug: input.slug };
-            toolkits.push(row);
-            grants.set(row.id, []);
-            return row;
+        Effect.suspend(() => {
+          if (path === "/api/oauth/complete" && oauthFailures > 0) {
+            oauthFailures--;
+            requests.push({ method, path, body });
+            return Effect.fail(
+              new ExecutorRuntime.ExecutorRuntimeError({
+                operation: "exchange authorization code",
+              }),
+            );
           }
-          const match = /^\/api\/toolkits\/([^/]+)\/connections(?:\/([^/]+))?$/.exec(path);
-          if (match?.[1]) {
-            const rows = grants.get(match[1]);
-            if (!rows) throw new Error(`Unknown toolkit: ${path}`);
-            if (method === "GET") return { connections: [...rows] };
-            if (method === "POST") {
-              const row = {
-                id: `grant-${++sequence}`,
-                ...decodeGrant(body),
-              };
-              rows.push(row);
+          return Effect.sync(() => {
+            requests.push({ method, path, body });
+            const url = new URL(path, "http://executor.test");
+            if (method === "GET" && url.pathname === "/api/connections") return [...connections];
+            if (method === "GET" && url.pathname === "/api/integrations") return [...integrations];
+            if (method === "GET" && url.pathname === "/api/tools") return [...catalog];
+            if (path === "/api/toolkits" && method === "GET") return { toolkits: [...toolkits] };
+            if (path === "/api/toolkits" && method === "POST") {
+              const input = decodeToolkit(body);
+              const row = { id: `toolkit-${++sequence}`, owner: input.owner, slug: input.slug };
+              toolkits.push(row);
+              grants.set(row.id, []);
               return row;
             }
-            if (method === "DELETE") {
-              grants.set(
-                match[1],
-                rows.filter((row) => row.id !== match[2]),
-              );
+            const match = /^\/api\/toolkits\/([^/]+)\/connections(?:\/([^/]+))?$/.exec(path);
+            if (match?.[1]) {
+              const rows = grants.get(match[1]);
+              if (!rows) throw new Error(`Unknown toolkit: ${path}`);
+              if (method === "GET") return { connections: [...rows] };
+              if (method === "POST") {
+                const row = {
+                  id: `grant-${++sequence}`,
+                  ...decodeGrant(body),
+                };
+                rows.push(row);
+                return row;
+              }
+              if (method === "DELETE") {
+                grants.set(
+                  match[1],
+                  rows.filter((row) => row.id !== match[2]),
+                );
+                return {};
+              }
+            }
+            if (path === "/api/mcp/probe") return { versionNegotiation: "legacy" };
+            if (path === "/api/mcp/servers" && method === "POST") {
+              const input = decodeIntegration(body);
+              integrations.push({
+                slug: input.slug,
+                name: input.name,
+                kind: "mcp",
+                displayUrl: input.endpoint,
+              });
+              return { slug: input.slug };
+            }
+            if (path === "/api/connections" && method === "POST") {
+              const input = decodeConnection(body);
+              connections.push({
+                ...input,
+                address: `tools.${input.integration}.${input.owner}.${input.name}`,
+                identityLabel: "Fixture account",
+              });
               return {};
             }
-          }
-          if (path === "/api/mcp/probe") return { versionNegotiation: "legacy" };
-          if (path === "/api/mcp/servers" && method === "POST") {
-            const input = decodeIntegration(body);
-            integrations.push({
-              slug: input.slug,
-              name: input.name,
-              kind: "mcp",
-              displayUrl: input.endpoint,
-            });
-            return { slug: input.slug };
-          }
-          if (path === "/api/connections" && method === "POST") {
-            const input = decodeConnection(body);
-            connections.push({
-              ...input,
-              address: `tools.${input.integration}.${input.owner}.${input.name}`,
-              identityLabel: "Fixture account",
-            });
-            return {};
-          }
-          if (path === "/api/oauth/probe")
-            return {
-              authorizationUrl: "https://auth.example.test/authorize",
-              tokenUrl: "https://auth.example.test/token",
-              registrationEndpoint: "https://auth.example.test/register",
-              scopesSupported: ["read"],
-            };
-          if (path === "/api/oauth/clients/register-dynamic" || path === "/api/oauth/clients")
-            return {};
-          if (path === "/api/oauth/start")
-            return {
-              status: "redirect",
-              authorizationUrl: "https://auth.example.test/authorize?state=fixture",
-              state: "fixture",
-            };
-          if (path === "/api/oauth/complete") return {};
-          if (path === "/api/connections/org/t3_fixture/main" && method === "DELETE") {
-            connections.length = 0;
-            return {};
-          }
-          if (path === "/api/mcp/servers/t3_fixture" && method === "DELETE") return {};
-          if (path === "/api/mcp/servers/t3_fixture" && method === "GET")
-            return { config: { endpoint: "https://mcp.example.test" } };
-          if (path === "/api/mcp/servers/t3_fixture/auth" && method === "POST") return {};
-          if (path === "/api/connections/org/t3_fixture/main/refresh" && method === "POST")
-            return {};
-          throw new Error(`Unexpected upstream request: ${method} ${path}`);
+            if (path === "/api/oauth/probe")
+              return {
+                authorizationUrl: "https://auth.example.test/authorize",
+                tokenUrl: "https://auth.example.test/token",
+                registrationEndpoint: "https://auth.example.test/register",
+                scopesSupported: ["read"],
+              };
+            if (path === "/api/oauth/clients/register-dynamic" || path === "/api/oauth/clients")
+              return {};
+            if (path === "/api/oauth/start")
+              return {
+                status: "redirect",
+                authorizationUrl: "https://auth.example.test/authorize?state=fixture",
+                state: "fixture",
+              };
+            if (path === "/api/oauth/complete") return {};
+            if (path === "/api/connections/org/t3_fixture/main" && method === "DELETE") {
+              connections.length = 0;
+              return {};
+            }
+            if (path === "/api/mcp/servers/t3_fixture" && method === "DELETE") return {};
+            if (path === "/api/mcp/servers/t3_fixture" && method === "GET")
+              return { config: { endpoint: "https://mcp.example.test" } };
+            if (path === "/api/mcp/servers/t3_fixture/auth" && method === "POST") return {};
+            if (path === "/api/connections/org/t3_fixture/main/refresh" && method === "POST")
+              return {};
+            throw new Error(`Unexpected upstream request: ${method} ${path}`);
+          });
         }),
       callTool: (slug, session, name, args) =>
         Effect.sync(() => {
@@ -253,6 +265,9 @@ function fixture() {
     toolkits,
     grants,
     secrets,
+    failNextOAuth: () => {
+      oauthFailures++;
+    },
     responses,
     interleaveThreadLookups: () => {
       yieldThreadLookup = true;
@@ -302,7 +317,9 @@ describe("McpConnections", () => {
           /^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$/,
         );
         yield* assign(service, [firstProject, secondProject]);
-        f.responses.push({ structuredContent: { status: "paused", executionId: "execution-one" } });
+        f.responses.push({
+          structuredContent: { status: "waiting_for_interaction", executionId: "execution-one" },
+        });
         yield* invoke(service);
         const input = {
           threadId: root,
@@ -340,7 +357,9 @@ describe("McpConnections", () => {
     return Effect.gen(function* () {
       const service = yield* McpConnections.McpConnections;
       yield* assign(service);
-      f.responses.push({ structuredContent: { status: "paused", executionId: "execution-one" } });
+      f.responses.push({
+        structuredContent: { status: "waiting_for_interaction", executionId: "execution-one" },
+      });
       yield* invoke(service);
       f.interleaveThreadLookups();
       const input = {
@@ -631,6 +650,32 @@ describe("McpConnections", () => {
       }).pipe(Effect.provide(f.layer));
     },
   );
+
+  it.effect("keeps a failed OAuth callback retryable and serializes successful redemption", () => {
+    const f = fixture();
+    return Effect.gen(function* () {
+      const service = yield* McpConnections.McpConnections;
+      yield* authorize(service);
+      const input = { state: "fixture", code: "authorization-code" };
+      f.failNextOAuth();
+      expect((yield* service.completeAuth(input, managementSession).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      expect(f.secrets.size).toBe(1);
+      const results = yield* Effect.all(
+        [
+          service.completeAuth(input, managementSession).pipe(Effect.result),
+          service.completeAuth(input, managementSession).pipe(Effect.result),
+        ],
+        { concurrency: "unbounded" },
+      );
+      expect(results.map((result) => result._tag).sort()).toEqual(["Failure", "Success"]);
+      expect(f.secrets.size).toBe(0);
+      expect(f.requests.filter((request) => request.path === "/api/oauth/complete")).toHaveLength(
+        2,
+      );
+    }).pipe(Effect.provide(f.layer));
+  });
 
   it.effect("rejects expired OAuth state before exchanging the authorization code", () => {
     const f = fixture();

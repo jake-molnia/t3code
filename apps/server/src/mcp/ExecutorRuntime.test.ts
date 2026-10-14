@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -33,6 +34,7 @@ const fixture = Effect.gen(function* () {
   let mutations = 0;
   let initializations = 0;
   const paths: string[] = [];
+  let toolResponse: ((id: string | number | undefined) => Promise<Response> | Response) | undefined;
   const spawner = ChildProcessSpawner.make(() =>
     Effect.acquireRelease(
       Effect.sync(() => {
@@ -90,7 +92,9 @@ const fixture = Effect.gen(function* () {
       });
     }
     if (rpc.method === "notifications/initialized") return new Response(null, { status: 202 });
+    if (rpc.id === undefined) return new Response(null, { status: 202 });
     paths.push(url.pathname);
+    if (toolResponse) return toolResponse(rpc.id);
     return Response.json({
       jsonrpc: "2.0",
       id: rpc.id,
@@ -103,6 +107,9 @@ const fixture = Effect.gen(function* () {
       Layer.provide(Layer.succeed(HostProcess.Environment)({ T3_EXECUTOR_RUNTIME_DIR: directory })),
       Layer.provide(Layer.succeed(FetchHttpClient.Fetch)(fetch)),
     ),
+    setToolResponse: (handler: typeof toolResponse) => {
+      toolResponse = handler;
+    },
     counts: () => ({ starts, mutations, initializations }),
     paths,
     crash: () => {
@@ -145,6 +152,59 @@ describe("managed Executor runtime", () => {
       }).pipe(Effect.provide(host.layer));
     }).pipe(Effect.scoped, Effect.provide(base)),
   );
+  it.effect.each(["cancel", "request-error", "expired-session"] as const)(
+    "keeps another in-flight call alive after %s",
+    (failure) =>
+      Effect.gen(function* () {
+        const host = yield* fixture;
+        const firstStarted = Promise.withResolvers<void>();
+        const secondStarted = Promise.withResolvers<void>();
+        const firstResponse = Promise.withResolvers<Response>();
+        const secondResponse = Promise.withResolvers<Response>();
+        let firstId: string | number | undefined;
+        let requests = 0;
+        host.setToolResponse((id) => {
+          requests++;
+          if (requests === 1) {
+            firstId = id;
+            firstStarted.resolve();
+            return firstResponse.promise;
+          }
+          secondStarted.resolve();
+          return failure === "cancel"
+            ? secondResponse.promise
+            : new Response(null, { status: failure === "expired-session" ? 404 : 400 });
+        });
+        yield* Effect.gen(function* () {
+          const runtime = yield* ExecutorRuntime.ExecutorRuntime;
+          const execution = yield* runtime
+            .callTool("project", "thread", "execute", {})
+            .pipe(Effect.forkScoped);
+          yield* Effect.promise(() => firstStarted.promise);
+          const other = yield* runtime
+            .callTool("project", "thread", "execute", {})
+            .pipe(Effect.result, Effect.forkScoped);
+          yield* Effect.promise(() => secondStarted.promise);
+          if (failure === "cancel") yield* Fiber.interrupt(other);
+          else expect((yield* Fiber.join(other))._tag).toBe("Failure");
+          firstResponse.resolve(
+            Response.json({
+              jsonrpc: "2.0",
+              id: firstId,
+              result: { content: [{ type: "text", text: "completed once" }] },
+            }),
+          );
+          secondResponse.resolve(new Response(null, { status: 202 }));
+          expect(yield* Fiber.join(execution)).toMatchObject({
+            content: [{ text: "completed once" }],
+          });
+          host.setToolResponse(undefined);
+          yield* runtime.callTool("project", "thread", "execute", {});
+          expect(host.counts().initializations).toBe(failure === "expired-session" ? 2 : 1);
+        }).pipe(Effect.provide(host.layer));
+      }).pipe(Effect.scoped, Effect.provide(base)),
+  );
+
   it.effect(
     "isolates sessions by project and thread and reconnects after process replacement",
     () =>

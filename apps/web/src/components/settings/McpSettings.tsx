@@ -69,7 +69,9 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
       ? "Completing sign-in…"
       : "This sign-in was not started in this tab. Add the connection again.";
   });
-  const authStarted = useRef(false);
+  const authStarted = useRef<number | null>(null);
+  const [authRetry, setAuthRetry] = useState(false);
+  const [authAttempt, setAuthAttempt] = useState(0);
   const selected = selectedProjects.filter((id) => projects.some((project) => project.id === id));
 
   useEffect(() => {
@@ -77,12 +79,18 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
     const state = params.get("state");
     const code = params.get("code");
     const error = params.get("error");
-    if ((!code && !error) || !state || authStarted.current || !canCompleteAuth) return;
-    authStarted.current = true;
+    if ((!code && !error) || !state || authStarted.current === authAttempt || !canCompleteAuth)
+      return;
+    authStarted.current = authAttempt;
     if (sessionStorage.getItem(pendingAuthKey(state)) !== environmentId) return;
     const finish = async () => {
       const outcome =
         code && !error ? await completeAuth({ environmentId, input: { state, code } }) : null;
+      if (code && !error && outcome?._tag !== "Success") {
+        setAuthMessage("Sign-in could not be completed. Retry, or add the connection again.");
+        setAuthRetry(true);
+        return;
+      }
       setAuthMessage(
         outcome?._tag === "Success"
           ? "Connection added."
@@ -93,7 +101,7 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
       reload();
     };
     void finish();
-  }, [canCompleteAuth, completeAuth, environmentId, navigate, reload]);
+  }, [authAttempt, canCompleteAuth, completeAuth, environmentId, navigate, reload]);
 
   return (
     <SettingsPageContainer>
@@ -121,6 +129,22 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
             <p role="status" className="text-sm text-muted-foreground">
               {authMessage}
             </p>
+          ) : null}
+          {authRetry ? (
+            <div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!canCompleteAuth}
+                onClick={() => {
+                  setAuthRetry(false);
+                  setAuthMessage("Completing sign-in…");
+                  setAuthAttempt((attempt) => attempt + 1);
+                }}
+              >
+                Retry sign-in
+              </Button>
+            </div>
           ) : null}
           {AsyncResult.isFailure(result) ? (
             <div className="flex items-center gap-3">

@@ -82,7 +82,7 @@ const OAuthStart = Schema.Union([
 ]);
 const PendingExecution = Schema.Struct({
   structuredContent: Schema.Struct({
-    status: Schema.Literal("paused"),
+    status: Schema.Literal("waiting_for_interaction"),
     executionId: Schema.String,
   }),
 });
@@ -302,8 +302,8 @@ const make = Effect.gen(function* () {
     );
     if (pending.sessionId !== sessionId || pending.expiresAt < (yield* Clock.currentTimeMillis))
       return yield* failure("oauth");
-    yield* secrets.remove(key).pipe(Effect.mapError(() => failure("oauth")));
     yield* mutate("POST", "/api/oauth/complete", input);
+    yield* secrets.remove(key).pipe(Effect.mapError(() => failure("oauth")));
   }, lock.withPermits(1));
   const connect = Effect.fn("McpConnections.connect")(function* (
     input: McpConnectInput,
@@ -359,8 +359,8 @@ const make = Effect.gen(function* () {
           ? [
               {
                 slug: "header",
-                kind: "apikey",
-                placements: [{ carrier: "header", name: "Authorization", prefix: "Bearer " }],
+                type: "apiKey",
+                headers: { Authorization: ["Bearer ", { type: "variable", name: "token" }] },
               },
             ]
           : [

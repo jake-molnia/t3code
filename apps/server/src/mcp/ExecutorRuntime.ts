@@ -1,6 +1,9 @@
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
@@ -83,7 +86,10 @@ const make = Effect.gen(function* () {
   const scope = yield* Effect.scope;
   const lock = yield* Semaphore.make(1);
   const runtimeDir = env.T3_EXECUTOR_RUNTIME_DIR;
-  const sessions = new Map<string, { client: Promise<Client>; lastUsed: number; active: number }>();
+  const sessions = new Map<
+    string,
+    { client: Promise<Client>; lastUsed: number; active: number; retired: boolean }
+  >();
   let running: {
     child: ChildProcessSpawner.ChildProcessHandle;
     origin: string;
@@ -242,7 +248,6 @@ const make = Effect.gen(function* () {
       const runtime = yield* ensure;
       const key = encodeJson([toolkitSlug, sessionKey]);
       const now = yield* Clock.currentTimeMillis;
-      let ownedClient: Promise<Client> | undefined;
       return yield* Effect.tryPromise({
         try: async (signal) => {
           for (const [id, entry] of sessions) {
@@ -277,19 +282,39 @@ const make = Effect.gen(function* () {
               setProtocolVersion: (version) => transport.setProtocolVersion(version),
             };
             // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Transport exposes callback properties.
-            transport.onclose = () => protocolTransport.onclose?.();
+            transport.onclose = () => {
+              if (sessions.get(key) === entry) sessions.delete(key);
+              protocolTransport.onclose?.();
+            };
             // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Transport exposes callback properties.
-            transport.onerror = (error) => protocolTransport.onerror?.(error);
+            transport.onerror = (error) => {
+              // A missing upstream session needs a new handshake. Let other requests finish
+              // before closing its client; request cancellation is never session invalidation.
+              if (error instanceof StreamableHTTPError && error.code === 404 && entry) {
+                entry.retired = true;
+                if (sessions.get(key) === entry) sessions.delete(key);
+                if (entry.active === 0)
+                  void entry.client.then((value) => value.close()).catch(() => undefined);
+              }
+              protocolTransport.onerror?.(error);
+            };
             // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Transport exposes callback properties.
             transport.onmessage = (message) => protocolTransport.onmessage?.(message);
             entry = {
-              client: client.connect(protocolTransport).then(() => client),
+              client: client
+                .connect(protocolTransport)
+                .then(() => client)
+                .catch(async (error: unknown) => {
+                  if (sessions.get(key) === entry) sessions.delete(key);
+                  await client.close().catch(() => undefined);
+                  throw error;
+                }),
               lastUsed: now,
               active: 0,
+              retired: false,
             };
             sessions.set(key, entry);
           }
-          ownedClient = entry.client;
           entry.lastUsed = now;
           entry.active++;
           try {
@@ -300,19 +325,12 @@ const make = Effect.gen(function* () {
             });
           } finally {
             entry.active--;
+            if (entry.active === 0 && entry.retired)
+              await entry.client.then((value) => value.close()).catch(() => undefined);
           }
         },
         catch: () => failure("run the project tool"),
-      }).pipe(
-        Effect.onError(() =>
-          Effect.promise(async () => {
-            const client = sessions.get(key)?.client;
-            if (client !== ownedClient) return;
-            sessions.delete(key);
-            await client?.then((value) => value.close()).catch(() => undefined);
-          }),
-        ),
-      );
+      });
     },
   );
 
