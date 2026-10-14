@@ -1,8 +1,59 @@
-import { describe, it, expect } from "@effect/vitest";
+import { describe, it, expect, afterEach, vi } from "@effect/vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
-import { harnessDefaults, sandboxPolicy, validateHarnessLaunch } from "./HarnessDefaults.ts";
+import {
+  harnessDefaults,
+  sandboxPolicy,
+  validateHarnessLaunch,
+  deploymentHarnessDefaults,
+} from "./HarnessDefaults.ts";
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe("sandbox harness defaults", () => {
+  it("requires a bundled routing manifest only in explicit gateway mode", () => {
+    vi.stubEnv("T3_HARNESS_DEFAULTS_FILE", "");
+    vi.stubEnv("T3_GATEWAY_HARNESS_CONFIG_FILE", "");
+    vi.stubEnv("T3_GATEWAY_URL", "");
+    const instance = { driver: ProviderDriverKind.make("codex"), config: { setupMode: "managed" } };
+    expect(deploymentHarnessDefaults()(instance)).toBe(instance);
+    vi.stubEnv("T3_GATEWAY_URL", "http://gateway");
+    expect(() => deploymentHarnessDefaults()).toThrow("requires T3_GATEWAY_HARNESS_CONFIG_FILE");
+  });
+  it("owns routing in gateway mode while preserving unrelated native settings", () => {
+    const apply = harnessDefaults(
+      JSON.stringify({
+        codex: {
+          config: { setupMode: "existing", launchArgs: "${T3_GATEWAY_URL}/v1" },
+          environment: [
+            { name: "OPENAI_API_KEY", value: "${T3_GATEWAY_API_KEY}", sensitive: true },
+          ],
+        },
+      }),
+      { T3_GATEWAY_URL: "http://gateway", T3_GATEWAY_API_KEY: "gateway-key" },
+      "gateway",
+    );
+    const instance = {
+      driver: ProviderDriverKind.make("codex"),
+      config: { setupMode: "managed", launchArgs: "native-route", binaryPath: "/native/codex" },
+      environment: [
+        { name: "OPENAI_API_KEY", value: "native-key", sensitive: true },
+        { name: "CUSTOM", value: "kept", sensitive: false },
+      ],
+    };
+    expect(apply(instance)).toEqual({
+      ...instance,
+      config: {
+        setupMode: "existing",
+        launchArgs: "http://gateway/v1",
+        binaryPath: "/native/codex",
+      },
+      environment: [
+        { name: "OPENAI_API_KEY", value: "gateway-key", sensitive: true },
+        { name: "CUSTOM", value: "kept", sensitive: false },
+      ],
+    });
+    expect(apply({ ...instance, enabled: false })).toEqual({ ...instance, enabled: false });
+  });
   it("resolves operator credentials privately and preserves native instance settings", () => {
     const apply = harnessDefaults(
       JSON.stringify({
@@ -17,7 +68,7 @@ describe("sandbox harness defaults", () => {
     );
     const input = {
       driver: ProviderDriverKind.make("codex"),
-      config: { binaryPath: "/opt/codex", setupMode: "managed" },
+      config: { binaryPath: "/opt/codex", setupMode: "existing" },
     };
     const result = apply(input);
     expect(result.config).toEqual({
@@ -28,9 +79,9 @@ describe("sandbox harness defaults", () => {
     expect(result.environment).toEqual([
       { name: "OPENAI_API_KEY", value: "private", sensitive: true },
     ]);
-    expect(input.config.setupMode).toBe("managed");
+    expect(input.config.setupMode).toBe("existing");
   });
-  it("rejects missing operator variables and incompatible model authentication", () => {
+  it("rejects missing operator variables without blocking native account providers", () => {
     const apply = harnessDefaults(
       JSON.stringify({
         codex: { environment: [{ name: "OPENAI_API_KEY", value: "${MISSING}", sensitive: true }] },
@@ -55,6 +106,38 @@ describe("sandbox harness defaults", () => {
       false,
     );
   });
+  it("keeps native account configuration ahead of optional operator defaults", () => {
+    const apply = harnessDefaults(
+      JSON.stringify({
+        codex: {
+          config: { setupMode: "${UNUSED_MODE}", binaryPath: "codex" },
+          environment: [{ name: "OPENAI_API_KEY", value: "${UNUSED_SECRET}", sensitive: true }],
+        },
+      }),
+      {},
+    );
+    const native = {
+      driver: ProviderDriverKind.make("codex"),
+      config: { setupMode: "managed" },
+      environment: [{ name: "OPENAI_API_KEY", value: "", sensitive: true }],
+    };
+    expect(apply(native)).toEqual({
+      ...native,
+      config: { setupMode: "managed", binaryPath: "codex" },
+    });
+  });
+  it.each(["codex", "claudeAgent", "cursor", "grok", "opencode", "pi", "muse"])(
+    "preserves %s native settings without an operator manifest",
+    (driver) => {
+      const instance = {
+        driver: ProviderDriverKind.make(driver),
+        enabled: true,
+        config: { customModels: [{ id: "account-model" }] },
+        environment: [{ name: "ACCOUNT_CREDENTIAL", value: "private", sensitive: true }],
+      };
+      expect(harnessDefaults(undefined, {})(instance)).toBe(instance);
+    },
+  );
   it("enforces full access without changing plan mode or cwd", () => {
     expect(
       sandboxPolicy({

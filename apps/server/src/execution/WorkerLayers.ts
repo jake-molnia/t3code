@@ -1,10 +1,9 @@
 import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
-import { deploymentHarnessDefaults } from "./HarnessDefaults.ts";
+import { deploymentHarnessDefaults, prepareHarnessState } from "./HarnessDefaults.ts";
 import * as UsageService from "../usage/UsageService.ts";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
 import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain";
-import { prepareHarnessState } from "./HarnessDefaults.ts";
 import * as CredentialSources from "./credentialSources.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -115,7 +114,6 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
       Layer.effect(
         ProviderConfigurationOverrides,
         Effect.gen(function* () {
-          // Config bootstraps the retained harness home before variables are expanded.
           yield* ServerConfig.ServerConfig;
           return yield* Effect.try(() => deploymentHarnessDefaults());
         }),

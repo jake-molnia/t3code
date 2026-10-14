@@ -49,14 +49,6 @@ with urllib.request.urlopen(request, timeout=2) as response:
 assert identity['workspaceId'] == 'image-smoke'
 assert identity['podUid'] == 'smoke-pod'
 assert identity['protocolVersion'] == 1
-with urllib.request.urlopen('http://127.0.0.1:8085/healthz', timeout=2) as response:
-    assert json.load(response)['status'] in ('alive', 'expired')
-with urllib.request.urlopen('http://127.0.0.1:8085/?folder=/workspace', timeout=3) as response:
-    assert '<html' in response.read().decode().lower()
-with urllib.request.urlopen('http://127.0.0.1:18091/v2/computer/info', timeout=2) as response:
-    assert json.load(response)['data']['available'] is True
-with urllib.request.urlopen('http://127.0.0.1:9222/json/version', timeout=2) as response:
-    assert json.load(response)['webSocketDebuggerUrl'].startswith('ws://127.0.0.1:9222/')
 try:
     urllib.request.urlopen('http://127.0.0.1:8083/v1/identity', timeout=2)
     raise AssertionError('Unauthenticated worker identity was accepted')
@@ -78,6 +70,7 @@ try:
         result = subprocess.run(['docker', 'exec', name, 'python3', '-c', probe], capture_output=True, text=True)
         if result.returncode == 0:
             if worker:
+                # Exercise service readiness through the worker as soon as core execution is up.
                 subprocess.run(['docker', 'exec', name, 'python3', '/opt/t3/smoke-session.py'], check=True)
             print(f'{args.target} real entrypoint passed with deployment user/filesystem/capability settings and no external network.')
             break

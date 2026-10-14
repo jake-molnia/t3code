@@ -17,6 +17,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import * as P from "./worker/PreviewProtocol.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -32,6 +33,8 @@ import { createExecutionWorker } from "../execution/ExecutionWorker.ts";
 import { createExecutionClient, ExecutionTransportError } from "../execution/ExecutionClient.ts";
 import { listenWorker } from "../execution/WorkerHttpServer.ts";
 import { captureRunPromise } from "../execution/EffectHttpBoundary.ts";
+
+const decodeAutomation = Schema.decodeUnknownSync(P.Automation);
 
 const layer = Layer.mergeAll(
   PreviewManager.layer,
@@ -542,3 +545,86 @@ it.layer(layer, { excludeTestServices: true })("remote browser transport", (it) 
     { timeout: 60_000 },
   );
 });
+
+it.effect("reconnects automation after a timed-out request without replaying its action", () =>
+  Effect.gen(function* () {
+    const sent = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const run = yield* captureRunPromise;
+    const operations: string[] = [];
+    const client = {
+      ...createExecutionClient({
+        endpoint: "http://worker.test",
+        token: "test-token",
+        identity: {
+          workspaceId: "workspace",
+          allocationId: "one",
+          generation: 1,
+          incarnation: "one",
+          podUid: "one",
+          protocolVersion: 1,
+        },
+      }),
+      call: async (_method: string, input: unknown) => {
+        const { request } = decodeAutomation(input);
+        operations.push(request.operation);
+        if (request.operation === "click") {
+          await run(Deferred.succeed(sent, undefined));
+          await run(Deferred.await(release));
+        }
+        return request.tabId === "missing"
+          ? {
+              ok: false,
+              error: { _tag: "PreviewAutomationTabNotFoundError", message: "Missing tab" },
+            }
+          : { ok: true, result: { available: true } };
+      },
+    };
+    const context = yield* Layer.build(RemotePreview.brokerLayer).pipe(
+      Effect.provide(
+        Layer.mock(RuntimeClient.RuntimeClient)({
+          enabled: true,
+          forThread: () => Effect.succeed(client),
+          observeThread: () => Effect.succeed({ kind: "stopped" }),
+        }),
+      ),
+    );
+    const broker = Context.get(context, Broker.PreviewAutomationBroker);
+    const scope = {
+      environmentId: C.EnvironmentId.make("central-env"),
+      capabilities: new Set(["preview"] as const),
+      issuedAt: 0,
+      requestNamespace: "test",
+      client: undefined,
+      thread: {
+        threadId: C.ThreadId.make("thread"),
+        providerSessionId: "session",
+        providerInstanceId: C.ProviderInstanceId.make("codex"),
+      },
+    };
+    const action = yield* broker
+      .invoke<void>({ scope, operation: "click", input: {}, timeoutMs: 1 })
+      .pipe(Effect.flip, Effect.forkChild);
+    yield* Deferred.await(sent);
+    yield* TestClock.adjust("1001 millis");
+    expect((yield* Fiber.join(action))._tag).toBe("PreviewAutomationTimeoutError");
+    expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toEqual({
+      available: true,
+    });
+    expect(
+      (yield* broker
+        .invoke<void>({
+          scope,
+          operation: "snapshot",
+          input: {},
+          tabId: C.PreviewTabId.make("missing"),
+        })
+        .pipe(Effect.flip))._tag,
+    ).toBe("PreviewAutomationTabNotFoundError");
+    expect(yield* broker.invoke({ scope, operation: "open", input: {} })).toEqual({
+      available: true,
+    });
+    yield* Deferred.succeed(release, undefined);
+    expect(operations).toEqual(["click", "status", "snapshot", "open"]);
+  }).pipe(Effect.provide(layer)),
+);

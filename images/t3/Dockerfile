@@ -40,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY images/t3/install-code-server.sh /tmp/
 RUN sh /tmp/install-code-server.sh "${TARGETARCH}" /opt/code-server
 
-FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:75ba12eae619c4944d51e35bdf8998655ec7342a0a8a92d3139073397b77bf2b AS t3-worker
+FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:accc2fdce07aa859dc86a59549e0d12baea04aeced200533475281e7f0347d84 AS t3-worker
 ARG TARGETARCH
 RUN test "$TARGETARCH" = amd64 \
     && apt-get update && apt-get install -y --no-install-recommends ca-certificates git git-lfs openssh-client python3 python3-venv ripgrep tini lsof procps chromium make g++ libffi8 libssl3t64 libbz2-1.0 libuuid1 zlib1g \
@@ -49,7 +49,7 @@ RUN test "$TARGETARCH" = amd64 \
     && mkdir -p /workspace && chown node:node /workspace
 COPY --from=desktop-tools /opt/code-server /opt/code-server
 COPY --from=go-toolchain /usr/local/go /usr/local/go
-COPY images/t3/harness-configs /opt/t3/harness-configs
+COPY images/t3/harness-configs/gateway.json /opt/t3/gateway-harnesses.json
 COPY --from=worker-package /out/worker /opt/t3
 COPY --from=harnesses /opt/harnesses /opt/harnesses
 COPY --from=harnesses /opt/native/bin /opt/native/bin
@@ -64,9 +64,9 @@ RUN ln -sfn /usr/local/bin/opencode /usr/local/bin/opencode2 \
 ENV PATH=/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_modules/.bin:/opt/native/bin:$PATH \
     AZURE_EXTENSION_DIR=/opt/azure/extensions AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no AZURE_CORE_COLLECT_TELEMETRY=no \
     T3_WORKSPACE_ROOT=/workspace T3_WORKER_STATE_DIR=/workspace/.t3-worker \
+    T3_GATEWAY_HARNESS_CONFIG_FILE=/opt/t3/gateway-harnesses.json \
     T3_WORKER_PORT=8083 T3_BROWSER_EXECUTABLE=/usr/bin/chromium \
     T3CODE_SERVER_BROWSER_SANDBOX=0 SANDBOX_CHROMIUM_SANDBOX=disabled \
-    T3_HARNESS_DEFAULTS_FILE=/opt/t3/harness-configs/defaults.json \
     T3_ACP_MCP_NODE=/usr/local/bin/node T3_ACP_MCP_ENTRYPOINT=/opt/t3/dist/bin.mjs \
     HOME=/workspace/home CODEX_HOME=/workspace/home/.codex \
     DISABLE_AUTOUPDATER=1 MUSE_NO_AUTO_UPDATE=1

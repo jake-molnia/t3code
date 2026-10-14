@@ -30,34 +30,6 @@
     },
     {
       "bundles": ["assets", "web"],
-      "license": "CC0-1.0",
-      "name": "Folder_Whoosh.wav by BaggoNotes",
-      "sourceUrl": "https://freesound.org/people/BaggoNotes/sounds/704258/",
-      "generatedNotices": [
-        {
-          "licenseId": "CC0-1.0",
-          "preamble": [
-            "The bundled snap-shot-whoosh.mp3 is derived from Folder_Whoosh.wav by BaggoNotes:\nhttps://freesound.org/people/BaggoNotes/sounds/704258/\n\nThe original sound is dedicated to the public domain under CC0 1.0 Universal."
-          ]
-        }
-      ]
-    },
-    {
-      "bundles": ["assets", "web"],
-      "license": "CC0-1.0",
-      "name": "Contarex camera shutter.wav by Tonik1105",
-      "sourceUrl": "https://freesound.org/people/Tonik1105/sounds/520684/",
-      "generatedNotices": [
-        {
-          "licenseId": "CC0-1.0",
-          "preamble": [
-            "The bundled snap-shot-click.mp3 is derived from Contarex camera shutter.wav by Tonik1105:\nhttps://freesound.org/people/Tonik1105/sounds/520684/\n\nThe original sound is dedicated to the public domain under CC0 1.0 Universal."
-          ]
-        }
-      ]
-    },
-    {
-      "bundles": ["assets", "web"],
       "license": "MIT",
       "name": "libghostty-vt",
       "noticeFile": "native/libghostty-vt/LICENSE",
@@ -193,13 +165,6 @@
       "generatedNotice": {
         "licenseId": "BSD-2-Clause",
         "copyrights": ["Copyright (c) 2026 Samuel Attard and Electron contributors"]
-      }
-    },
-    {
-      "repositoryUrl": "https://github.com/xa11y/xa11y",
-      "generatedNotice": {
-        "licenseId": "MIT",
-        "copyrights": ["Copyright (c) 2025 Stephen Crowe"]
       }
     },
     {

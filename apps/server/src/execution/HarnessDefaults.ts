@@ -26,6 +26,7 @@ const decodeConfig = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schem
 export function harnessDefaults(
   text: string | undefined,
   environment: NodeJS.ProcessEnv = process.env,
+  mode: "defaults" | "gateway" = "defaults",
 ): (instance: ProviderInstanceConfig) => ProviderInstanceConfig {
   const defaults = text === undefined ? {} : decodeDefaults(text);
   const expand = (value: string): string =>
@@ -45,18 +46,26 @@ export function harnessDefaults(
   };
   return (instance) => {
     const override = defaults[instance.driver];
-    if (!override) return instance;
+    if (!override || instance.enabled === false) return instance;
     const variables = new Map((instance.environment ?? []).map((entry) => [entry.name, entry]));
     for (const entry of override.environment ?? [])
-      variables.set(entry.name, { ...entry, value: expand(entry.value) });
+      if (mode === "gateway" || !variables.has(entry.name))
+        variables.set(entry.name, { ...entry, value: expand(entry.value) });
+    const config = decodeConfig(instance.config ?? {});
+    const configured =
+      override.config === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(override.config)
+              .filter(([key]) => mode === "gateway" || !(key in config))
+              .map(([key, value]) => [key, expandConfig(value)]),
+          );
     return {
       ...instance,
-      ...(override.config
+      ...(configured
         ? {
-            config: {
-              ...decodeConfig(instance.config ?? {}),
-              ...decodeConfig(expandConfig(override.config)),
-            },
+            config:
+              mode === "gateway" ? { ...config, ...configured } : { ...configured, ...config },
           }
         : {}),
       environment: [...variables.values()],
@@ -82,7 +91,12 @@ export function validateHarnessLaunch(
 
 export function deploymentHarnessDefaults() {
   const path = process.env.T3_HARNESS_DEFAULTS_FILE;
-  return harnessDefaults(path ? NodeFS.readFileSync(path, "utf8") : undefined);
+  const defaults = harnessDefaults(path ? NodeFS.readFileSync(path, "utf8") : undefined);
+  if (!process.env.T3_GATEWAY_URL) return defaults;
+  const gatewayPath = process.env.T3_GATEWAY_HARNESS_CONFIG_FILE;
+  if (!gatewayPath) throw new Error("Gateway execution requires T3_GATEWAY_HARNESS_CONFIG_FILE");
+  const gateway = harnessDefaults(NodeFS.readFileSync(gatewayPath, "utf8"), process.env, "gateway");
+  return (instance: ProviderInstanceConfig) => gateway(defaults(instance));
 }
 
 export function sandboxPolicy(
