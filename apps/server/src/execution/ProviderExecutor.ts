@@ -79,7 +79,10 @@ export const makeProviderExecutor = (options: {
         else nativeTurns.delete(event.providerTurn.id);
       }
       if (event.type === "runtime_request.updated") {
-        if (event.runtimeRequest.status === "pending")
+        if (
+          event.runtimeRequest.status === "pending" &&
+          event.runtimeRequest.responseCapability.type !== "message"
+        )
           pendingCallbacks.set(event.runtimeRequest.id, sessionId);
         else pendingCallbacks.delete(event.runtimeRequest.id);
       }
