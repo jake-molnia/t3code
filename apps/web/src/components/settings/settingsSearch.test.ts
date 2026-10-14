@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId } from "@t3tools/contracts";
 
 import {
@@ -12,6 +12,17 @@ import {
   SETTINGS_SEARCH_ITEMS,
   type SettingsSearchItem,
 } from "./settingsSearch";
+
+const branding = vi.hoisted((): { channel: "latest" | "nightly" | null } => ({ channel: null }));
+vi.mock("../../branding", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../branding")>()),
+  get HOSTED_APP_CHANNEL() {
+    return branding.channel;
+  },
+}));
+afterEach(() => {
+  branding.channel = null;
+});
 
 const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
@@ -136,6 +147,21 @@ describe("searchSettings", () => {
     expect(searchSettings("fork revision").map((item) => item.id)).toContain("app-version");
     expect(searchSettings("update track")).toEqual([]);
   });
+
+  it.each(["latest", "nightly"] as const)(
+    "finds channel navigation in hosted %s builds",
+    (channel) => {
+      branding.channel = channel;
+      for (const query of ["web app channel", "update track"]) {
+        expect(searchSettings(query)).toContainEqual(
+          expect.objectContaining({
+            id: "update-track",
+            to: "/settings/general",
+          }),
+        );
+      }
+    },
+  );
 
   it("hides macOS-only settings on other platforms", () => {
     vi.stubGlobal("navigator", { platform: "Win32" });

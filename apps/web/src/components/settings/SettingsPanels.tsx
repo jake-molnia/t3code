@@ -1,3 +1,4 @@
+import { HostedAppChannelSection } from "./HostedAppChannelSection";
 import { ServerVersionSection } from "./ServerVersionSection";
 import { SettingsGroup } from "./SettingsGroup";
 import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
@@ -3052,6 +3053,7 @@ export function GeneralSettingsPanel() {
 
       <SettingsSection id="about" title="About">
         <ServerVersionSection />
+        <HostedAppChannelSection />
         <SettingsRow
           {...searchableSetting("privacy-policy")}
           description="How we handle your data, including the anonymous usage data T3 Code collects."

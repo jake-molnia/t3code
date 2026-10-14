@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { SERVER_IMAGE_BUILDS_URL } from "@t3tools/contracts";
+import { APP_VERSION } from "../../branding";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { primaryServerConfigAtom, serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
@@ -14,6 +15,15 @@ export function ServerVersionSection() {
   const notice = useEnvironmentQuery(
     environmentId && build ? serverEnvironment.releaseNotice({ environmentId, input: {} }) : null,
   );
+  if (environmentId === null) {
+    return (
+      <SettingsRow
+        id={searchableSetting("app-version").id}
+        title="Web app version"
+        description={APP_VERSION}
+      />
+    );
+  }
   const release = notice.data;
   return (
     <SettingsRow
