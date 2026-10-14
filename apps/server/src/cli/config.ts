@@ -349,8 +349,6 @@ export const resolveServerConfig = (
     const shellEnvironmentPrepared = bootstrap?.shellEnvironmentPrepared;
     const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
     const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
-    const desktopBrowserFd = bootstrap?.desktopBrowserFd;
-    const desktopBrowserControlFd = bootstrap?.desktopBrowserControlFd;
     const resourceMonitorPath = bootstrap?.resourceMonitorPath;
     const logWebSocketEvents = Option.getOrElse(
       resolveOptionPrecedence(
@@ -449,8 +447,6 @@ export const resolveServerConfig = (
       ...(shellEnvironmentPrepared === undefined ? {} : { shellEnvironmentPrepared }),
       desktopTelemetryFd,
       desktopTelemetryControlFd,
-      desktopBrowserFd,
-      desktopBrowserControlFd,
       resourceMonitorPath,
       logWebSocketEvents,
       tailscaleServeEnabled,

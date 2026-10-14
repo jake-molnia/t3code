@@ -4,6 +4,7 @@ import type * as NodeStream from "node:stream";
 import * as Schema from "effect/Schema";
 import { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import { authorized, sameIdentity } from "./ExecutionWorker.ts";
+import { waitForService } from "./ServiceReadiness.ts";
 
 export const workerIdePrefix = "/v1/ide/";
 export const ideIdentityHeader = "x-t3-ide-identity";
@@ -14,6 +15,9 @@ export type WorkerIdeOptions = {
   acquireLease: () => Promise<(() => void) | undefined>;
 };
 const decodeIdentity = Schema.decodeUnknownSync(Schema.fromJsonString(ExecutionIdentity));
+const decodeHealth = Schema.decodeUnknownSync(
+  Schema.Struct({ status: Schema.Literals(["alive", "expired"]) }),
+);
 
 /** Only the authenticated worker port can reach the loopback IDE. */
 export function createWorkerIdeProxy(options: WorkerIdeOptions) {
@@ -68,6 +72,26 @@ export function createWorkerIdeProxy(options: WorkerIdeOptions) {
     downstream.once("close", release);
     return release;
   };
+  let ready = false;
+  const waitUntilReady = async (downstream: NodeHttp.ServerResponse | NodeStream.Duplex) => {
+    if (ready) return;
+    const abort = new AbortController();
+    const cancel = () => abort.abort();
+    downstream.once("close", cancel);
+    if (downstream.destroyed) cancel();
+    try {
+      await waitForService(new URL("/healthz", origin), {
+        signal: abort.signal,
+        accept: async (response) => {
+          decodeHealth(await response.json());
+          return true;
+        },
+      });
+      ready = true;
+    } finally {
+      downstream.off("close", cancel);
+    }
+  };
   return {
     matches: (path: string) => path.startsWith(workerIdePrefix),
     async request(incoming: NodeHttp.IncomingMessage, outgoing: NodeHttp.ServerResponse) {
@@ -83,6 +107,8 @@ export function createWorkerIdeProxy(options: WorkerIdeOptions) {
       }
       let upstream: NodeHttp.ClientRequest;
       try {
+        await waitUntilReady(outgoing);
+        if (outgoing.destroyed) return;
         upstream = outgoingRequest(incoming);
       } catch (error) {
         release();
@@ -128,6 +154,8 @@ export function createWorkerIdeProxy(options: WorkerIdeOptions) {
       }
       let upstream: NodeHttp.ClientRequest;
       try {
+        await waitUntilReady(downstream);
+        if (downstream.destroyed) return;
         upstream = outgoingRequest(incoming);
       } catch (error) {
         release();

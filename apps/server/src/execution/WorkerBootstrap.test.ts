@@ -21,6 +21,7 @@ import { ConfigureProvider } from "./WorkerProviders.ts";
 import { createExecutionClient } from "./ExecutionClient.ts";
 import { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 
+const encodeConfigureProvider = Schema.encodeSync(Schema.toCodecJson(ConfigureProvider));
 const decodeUsageExport = Schema.decodeUnknownSync(WorkerUsage.Export);
 const decodeUsageChunk = Schema.decodeUnknownSync(WorkerUsage.Chunk);
 const decodeUsageHistory = Schema.decodeUnknownSync(Schema.fromJsonString(UsageHistory.History));
@@ -53,6 +54,9 @@ function spawnWorker(root: string, port: number, token: string) {
       T3_ALLOCATION_ID: `allocation-${port}`,
       T3_ALLOCATION_GENERATION: "1",
       T3_POD_UID: `test-pod-${port}`,
+      // Gateway availability must not gate worker startup or native account providers.
+      APERTURE_UPSTREAM: "http://127.0.0.1:1",
+      T3_HARNESS_DEFAULTS_FILE: "",
     },
   });
 }
@@ -96,7 +100,7 @@ test("standalone worker boots native driver and workspace services without a con
     const instanceId = ProviderInstanceId.make("codex");
     await client.transient(
       "configureProvider",
-      Schema.encodeSync(Schema.toCodecJson(ConfigureProvider))({
+      encodeConfigureProvider({
         instanceId,
         config: { driver: ProviderDriverKind.make("codex") },
         settings: DEFAULT_SERVER_SETTINGS,
@@ -104,6 +108,20 @@ test("standalone worker boots native driver and workspace services without a con
     );
     const capabilities = await client.call("getCapabilities", { instanceId, input: null });
     expect(capabilities).toHaveProperty("sessions");
+    for (const kind of ["claudeAgent", "cursor", "grok", "opencode", "pi", "muse"]) {
+      const nativeInstanceId = ProviderInstanceId.make(kind);
+      await client.transient(
+        "configureProvider",
+        encodeConfigureProvider({
+          instanceId: nativeInstanceId,
+          config: { driver: ProviderDriverKind.make(kind), enabled: true },
+          settings: DEFAULT_SERVER_SETTINGS,
+        }),
+      );
+      expect(
+        await client.call("getCapabilities", { instanceId: nativeInstanceId, input: null }),
+      ).toHaveProperty("sessions");
+    }
     await client.call("workspace.prepare", { cwd: "source" });
     const git = async (args: string[], cwd = "source") =>
       Schema.decodeUnknownSync(WorkerProtocol.ScriptResult)(
