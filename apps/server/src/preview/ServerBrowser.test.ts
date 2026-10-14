@@ -34,6 +34,7 @@ import * as PreviewBrowser from "./PreviewBrowser.ts";
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
   ServerBrowserContexts: class {
+    private readonly headful = new WeakSet<object>();
     private readonly onClose: ((context: BrowserContext) => void) | undefined;
     constructor(options: { onContextClose?: (context: BrowserContext) => void }) {
       this.onClose = options.onContextClose;
@@ -43,11 +44,15 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       if (contextFailure) throw contextFailure;
       await contextGate?.promise;
       const context = makeContext(this.onClose);
+      if (profileId === "default" || profileId === "incognito") this.headful.add(context);
       contexts.push(context);
       return context as unknown as BrowserContext;
     }
     async scratchPage() {
       return makeContext().page as unknown as Page;
+    }
+    isHeadfulContext(context: BrowserContext) {
+      return this.headful.has(context);
     }
     async connectDesktopPage(endpoint: string) {
       const context = makeContext();
@@ -150,6 +155,21 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
   return context;
 }
 
+function snapshotSessions(
+  context: ReturnType<typeof makeContext>,
+  send: (method: string) => Promise<Record<string, unknown> | undefined>,
+) {
+  const open = context.newCDPSession;
+  context.newCDPSession = async () => {
+    const session = await open();
+    const normal = session.send.getMockImplementation()!;
+    session.send.mockImplementation(
+      async (method, input) => (await send(method)) ?? normal(method, input),
+    );
+    return session;
+  };
+}
+
 const contexts: ReturnType<typeof makeContext>[] = [];
 /** The profile and isolation each headless tab asked its context for. */
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
@@ -250,6 +270,306 @@ const ready = Effect.gen(function* () {
   const tabId = PreviewTabId.make(opened.tabId!);
   return { browser, broker, tabId };
 });
+
+it.live("serializes activation and captures the requested tab for two agents", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const second = yield* broker.invoke<PreviewAutomationStatus>({
+        scope: asSession("agent-b"),
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const painting = Promise.withResolvers<void>();
+      const painted = Promise.withResolvers<void>();
+      let foreground = -1;
+      const order: string[] = [];
+      for (const [index, context] of contexts.entries()) {
+        snapshotSessions(context, async (method) => {
+          if (method === "Page.bringToFront") {
+            foreground = index;
+            order.push(`front-${index}`);
+          }
+          if (method === "Page.captureScreenshot") {
+            if (index === 0) {
+              painting.resolve();
+              await painted.promise;
+            }
+            expect(foreground).toBe(index);
+            order.push(`capture-${index}`);
+            return { data: Buffer.from(`tab-${index}`).toString("base64") };
+          }
+        });
+      }
+      const first = yield* broker
+        .invoke<PreviewAutomationSnapshot>({ scope, tabId, operation: "snapshot", input: {} })
+        .pipe(Effect.forkScoped);
+      yield* Effect.promise(() => painting.promise);
+      const next = yield* broker
+        .invoke<PreviewAutomationSnapshot>({
+          scope: asSession("agent-b"),
+          tabId: second.tabId!,
+          operation: "snapshot",
+          input: {},
+        })
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      painted.resolve();
+      expect((yield* Fiber.join(first)).screenshot.data).toBe(
+        Buffer.from("tab-0").toString("base64"),
+      );
+      expect((yield* Fiber.join(next)).screenshot.data).toBe(
+        Buffer.from("tab-1").toString("base64"),
+      );
+      expect(order).toEqual(["front-0", "capture-0", "front-1", "capture-1"]);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("keeps observations and snapshots beside a human-controlled tab focus-neutral", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      const second = yield* broker.invoke<PreviewAutomationStatus>({
+        scope: asSession("agent-b"),
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope: asSession("agent-b"),
+        tabId,
+        operation: "snapshot",
+        input: {},
+      });
+      const viewer = yield* browser.attachViewer(viewerInput(second.tabId!, true));
+      yield* viewer.input({ type: "takeControl" });
+      yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope,
+        tabId,
+        operation: "snapshot",
+        input: {},
+      });
+      yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope,
+        tabId: second.tabId!,
+        operation: "snapshot",
+        input: {},
+      });
+      for (const context of contexts)
+        for (const session of context.sessions)
+          expect(session.send.mock.calls.some(([method]) => method === "Page.bringToFront")).toBe(
+            false,
+          );
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("activates an owned tab before waiting for its stalled initial viewer capture", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      const painting = Promise.withResolvers<void>();
+      const activated = Promise.withResolvers<void>();
+      let first = true;
+      snapshotSessions(contexts[0]!, async (method) => {
+        if (method === "Page.bringToFront") activated.resolve();
+        if (method === "Page.captureScreenshot" && first) {
+          first = false;
+          painting.resolve();
+          await activated.promise;
+        }
+      });
+      yield* browser.attachViewer(viewerInput(tabId, false));
+      yield* Effect.promise(() => painting.promise);
+      const snapshot = yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope,
+        tabId,
+        operation: "snapshot",
+        input: {},
+        timeoutMs: 500,
+      });
+      expect(snapshot.screenshot.data).toBe("ZnJhbWU=");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("does not activate headless profile contexts for snapshots", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker } = yield* ready;
+      yield* browser.reportProfiles({
+        profiles: [{ id: "work", name: "Work", kind: "persistent" }],
+        defaultProfileId: "default",
+      });
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { profileId: "work", reuseExistingTab: false, show: false },
+      });
+      yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope,
+        tabId: opened.tabId!,
+        operation: "snapshot",
+        input: {},
+      });
+      for (const session of contexts[1]!.sessions)
+        expect(session.send.mock.calls.some(([method]) => method === "Page.bringToFront")).toBe(
+          false,
+        );
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("rechecks ownership when a snapshot acquires the browser capture permit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      const second = yield* broker.invoke<PreviewAutomationStatus>({
+        scope: asSession("agent-b"),
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const viewer = yield* browser.attachViewer(viewerInput(second.tabId!, true));
+      const painting = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      snapshotSessions(contexts[0]!, async (method) => {
+        if (method === "Page.captureScreenshot") {
+          painting.resolve();
+          await finish.promise;
+        }
+      });
+      const held = yield* broker
+        .invoke<PreviewAutomationSnapshot>({ scope, tabId, operation: "snapshot", input: {} })
+        .pipe(Effect.forkScoped);
+      yield* Effect.promise(() => painting.promise);
+      const queued = yield* broker
+        .invoke<PreviewAutomationSnapshot>({
+          scope: asSession("agent-b"),
+          tabId: second.tabId!,
+          operation: "snapshot",
+          input: {},
+        })
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const takeover = yield* viewer.input({ type: "takeControl" }).pipe(Effect.forkScoped);
+      let control = yield* Queue.take(viewer.output);
+      while (control._tag !== "control" || control.controller !== "you")
+        control = yield* Queue.take(viewer.output);
+      finish.resolve();
+      yield* Fiber.join(held);
+      expect((yield* Fiber.join(queued))._tag).toBe("PreviewAutomationControlInterruptedError");
+      yield* Fiber.join(takeover);
+      for (const session of contexts[1]!.sessions)
+        expect(session.send.mock.calls.some(([method]) => method === "Page.bringToFront")).toBe(
+          false,
+        );
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("detaches a stalled snapshot session and lets takeover and the next capture drain", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      const context = contexts[0]!;
+      const painting = Promise.withResolvers<void>();
+      let stalled = false;
+      snapshotSessions(context, async (method) => {
+        if (method === "Page.captureScreenshot" && !stalled) {
+          stalled = true;
+          painting.resolve();
+          return new Promise(() => {});
+        }
+      });
+      const pending = yield* broker
+        .invoke<PreviewAutomationSnapshot>({
+          scope,
+          tabId,
+          operation: "snapshot",
+          input: {},
+          timeoutMs: 100,
+        })
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.promise(() => painting.promise);
+      const takeover = yield* viewer.input({ type: "takeControl" }).pipe(Effect.forkScoped);
+      expect((yield* Fiber.join(pending))._tag).toBe("PreviewAutomationTimeoutError");
+      yield* Fiber.join(takeover);
+      expect(context.sessions.at(-1)!.detach).toHaveBeenCalledTimes(1);
+      expect(context.sessions[0]!.detach).not.toHaveBeenCalled();
+      yield* viewer.input({ type: "releaseControl" });
+      const snapshot = yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope,
+        tabId,
+        operation: "snapshot",
+        input: {},
+        timeoutMs: 500,
+      });
+      expect(snapshot.screenshot.data).toBe("ZnJhbWU=");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live.each(["control", "browser"] as const)(
+  "never activates a snapshot whose deadline expired in the %s queue",
+  (queue) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { broker, tabId } = yield* ready;
+        const target =
+          queue === "control"
+            ? tabId
+            : (yield* broker.invoke<PreviewAutomationStatus>({
+                scope: asSession("agent-b"),
+                operation: "open",
+                input: { reuseExistingTab: false, show: false },
+              })).tabId!;
+        const painting = Promise.withResolvers<void>();
+        const finish = Promise.withResolvers<void>();
+        let first = true;
+        let activations = 0;
+        for (const context of contexts)
+          snapshotSessions(context, async (method) => {
+            if (method === "Page.bringToFront") activations++;
+            if (method === "Page.captureScreenshot" && first) {
+              first = false;
+              painting.resolve();
+              await finish.promise;
+            }
+          });
+        const held = yield* broker
+          .invoke<PreviewAutomationSnapshot>({
+            scope,
+            tabId,
+            operation: "snapshot",
+            input: {},
+            timeoutMs: 1000,
+          })
+          .pipe(Effect.forkScoped);
+        yield* Effect.promise(() => painting.promise);
+        const expired = yield* broker
+          .invoke<PreviewAutomationSnapshot>({
+            scope: queue === "control" ? scope : asSession("agent-b"),
+            tabId: target,
+            operation: "snapshot",
+            input: {},
+            timeoutMs: 30,
+          })
+          .pipe(Effect.flip);
+        expect(expired._tag).toBe("PreviewAutomationTimeoutError");
+        finish.resolve();
+        yield* Fiber.join(held);
+        yield* broker.invoke<PreviewAutomationSnapshot>({
+          scope: queue === "control" ? scope : asSession("agent-b"),
+          tabId: target,
+          operation: "snapshot",
+          input: {},
+          timeoutMs: 500,
+        });
+        expect(activations).toBe(2);
+      }),
+    ).pipe(Effect.provide(layer)),
+);
 /** Fills a viewer's output the way a viewer that stopped reading leaves it. */
 const stallViewer = (
   viewer: ServerBrowser.ServerBrowserViewer,

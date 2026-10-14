@@ -45,6 +45,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -54,6 +55,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -378,6 +380,26 @@ const DOWNLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 
 const tabKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
 
+const snapshotWait = <A>(signal: AbortSignal, pending: Promise<A>): Promise<A> =>
+  new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+    if (signal.aborted) abort();
+  });
+
 const pushBounded = <A>(
   buffer: Array<A>,
   entry: A,
@@ -490,6 +512,7 @@ const make = Effect.gen(function* () {
   // The fix every host error names, rendered for how this server was launched.
 
   const tabs = new Map<string, ServerTab>();
+  const snapshotPermit = yield* Semaphore.make(1);
   const pendingTabs = new Map<string, Promise<ServerTab>>();
   /** Sessions closed while their tab was still opening; the open discards its page. */
   const closedPendingTabs = new Set<string>();
@@ -1487,27 +1510,109 @@ const make = Effect.gen(function* () {
   };
 
   // Scaled captures repaint every screencast; pause them to avoid leaking that frame.
-  const withScreencastsPaused = <A>(tab: ServerTab, capture: () => Promise<A>): Promise<A> =>
+  const withScreencastsPaused = <A>(
+    tab: ServerTab,
+    signal: AbortSignal,
+    capture: () => Promise<A>,
+  ): Promise<A> =>
     withCaptureLock(tab, async () => {
+      signal.throwIfAborted();
       tab.capturing += 1;
       const recording = tab.recording;
       try {
-        await Promise.all([
-          ...[...tab.viewers].map((viewer) => viewer.pause()),
-          recording?.session.send("Page.stopScreencast").catch(constVoid),
-        ]);
+        await snapshotWait(
+          signal,
+          Promise.all([
+            ...[...tab.viewers].map((viewer) => viewer.pause()),
+            recording?.session.send("Page.stopScreencast").catch(constVoid),
+          ]),
+        );
+        signal.throwIfAborted();
         return await capture();
       } finally {
         tab.capturing -= 1;
         // Viewers that attached during the capture start here too.
-        await Promise.all([
-          ...[...tab.viewers].map((viewer) => viewer.resume()),
-          recording && tab.recording === recording
-            ? recording.session.send("Page.startScreencast", RECORDING_SCREENCAST).catch(constVoid)
-            : undefined,
-        ]);
+        await snapshotWait(
+          signal,
+          Promise.all([
+            ...[...tab.viewers].map((viewer) => viewer.resume()),
+            recording && tab.recording === recording
+              ? recording.session
+                  .send("Page.startScreencast", RECORDING_SCREENCAST)
+                  .catch(constVoid)
+              : undefined,
+          ]),
+        ).catch(constVoid);
       }
     });
+
+  const captureSnapshot = async (
+    tab: ServerTab,
+    request: PreviewAutomationRequest,
+    access: { activate: boolean; deadline: number; signal: AbortSignal },
+  ) => {
+    const { signal } = access;
+    signal.throwIfAborted();
+    const remaining = access.deadline - Date.now();
+    const timedOut = () =>
+      new ServerBrowserPage.ServerBrowserOperationError(
+        "PreviewAutomationTimeoutError",
+        "The preview snapshot timed out.",
+      );
+    if (remaining <= 0) throw timedOut();
+    const generation = tab.control.generation;
+    const check = () => {
+      signal.throwIfAborted();
+      if (Date.now() >= access.deadline) throw timedOut();
+      if (
+        access.activate &&
+        (generation !== tab.control.generation ||
+          !tab.control.agentCanActNow(request.agentSessionId ?? ""))
+      )
+        throw new BrowserControlInterrupted();
+    };
+    const capture = snapshotPermit.withPermit(
+      Effect.tryPromise({
+        try: async () => {
+          check();
+          const opening = tab.page.context().newCDPSession(tab.page);
+          // A late session allocation must not survive its cancelled request.
+          void opening.then((session) => {
+            if (signal.aborted) void session.detach().catch(constVoid);
+          }, constVoid);
+          const session = await snapshotWait(signal, opening);
+          try {
+            check();
+            if (
+              access.activate &&
+              contexts.isHeadfulContext(tab.page.context()) &&
+              ![...tabs.values()].some(
+                (other) => other !== tab && other.control.controller !== null,
+              )
+            )
+              await snapshotWait(signal, session.send("Page.bringToFront"));
+            check();
+            return await snapshotWait(
+              signal,
+              withScreencastsPaused(tab, signal, async () => {
+                check();
+                return snapshotWait(
+                  signal,
+                  ServerBrowserPage.snapshot({ ...tab, cdp: session, renderScale: RENDER_SCALE }),
+                );
+              }),
+            );
+          } finally {
+            void session.detach().catch(constVoid);
+          }
+        },
+        catch: ServerBrowserPage.toOperationError,
+      }),
+    );
+    const result = await Effect.runPromise(Effect.exit(capture), { signal });
+    if (Exit.isFailure(result)) throw Cause.squash(result.cause);
+    return result.value;
+  };
 
   const stopRecording = (tab: ServerTab) =>
     withCaptureLock(tab, async () => {
@@ -1680,7 +1785,11 @@ const make = Effect.gen(function* () {
     }
   };
 
-  const runOperation = async (request: PreviewAutomationRequest): Promise<unknown> => {
+  const runOperation = async (
+    request: PreviewAutomationRequest,
+    signal: AbortSignal,
+  ): Promise<unknown> => {
+    const deadline = Date.now() + request.timeoutMs;
     const input = request.input;
     switch (request.operation) {
       case "status":
@@ -1854,7 +1963,7 @@ const make = Effect.gen(function* () {
             "A browser dialog is pending. Read preview_status.",
             "dialogPending",
           );
-        return executeTabOperation(tab, request);
+        return executeTabOperation(tab, request, { activate: false, deadline, signal });
       });
     }
     return tab.control.agent(agentSessionId, async () => {
@@ -1865,14 +1974,18 @@ const make = Effect.gen(function* () {
         );
       const generation = tab.control.generation;
       try {
-        return await executeTabOperation(tab, request);
+        return await executeTabOperation(tab, request, { activate: true, deadline, signal });
       } finally {
         if (generation !== tab.control.generation) ServerBrowserPage.invalidateRefs(tab.page);
       }
     });
   };
 
-  const executeTabOperation = async (tab: ServerTab, request: PreviewAutomationRequest) => {
+  const executeTabOperation = async (
+    tab: ServerTab,
+    request: PreviewAutomationRequest,
+    snapshotAccess: { activate: boolean; deadline: number; signal: AbortSignal },
+  ) => {
     const input = request.input;
     switch (request.operation) {
       case "navigate": {
@@ -1908,9 +2021,7 @@ const make = Effect.gen(function* () {
         return { tabId: tab.tabId, colorScheme };
       }
       case "snapshot": {
-        return withScreencastsPaused(tab, () =>
-          ServerBrowserPage.snapshot({ ...tab, renderScale: RENDER_SCALE }),
-        );
+        return captureSnapshot(tab, request, snapshotAccess);
       }
       case "click": {
         const clickInput = input as PreviewAutomationClickInput;
@@ -1964,9 +2075,24 @@ const make = Effect.gen(function* () {
 
   const handleRequest = (connectionId: string, request: PreviewAutomationRequest) =>
     Effect.tryPromise({
-      try: () => runOperation(request).finally(() => markUsed(request)),
+      try: (signal) => runOperation(request, signal).finally(() => markUsed(request)),
       catch: ServerBrowserPage.toOperationError,
     }).pipe(
+      (operation) =>
+        request.operation === "snapshot"
+          ? operation.pipe(
+              Effect.timeout(request.timeoutMs),
+              Effect.catchTags({
+                TimeoutError: () =>
+                  Effect.fail(
+                    new ServerBrowserPage.ServerBrowserOperationError(
+                      "PreviewAutomationTimeoutError",
+                      "The preview snapshot timed out.",
+                    ),
+                  ),
+              }),
+            )
+          : operation,
       Effect.match({
         onSuccess: (result) => ({ ok: true as const, result }),
         onFailure: (error) => ({

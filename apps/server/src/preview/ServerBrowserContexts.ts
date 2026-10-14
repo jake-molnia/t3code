@@ -96,9 +96,14 @@ export class ServerBrowserContexts {
   private browser: Promise<Browser> | undefined;
   private closing: Promise<void> | undefined;
   private readonly readinessAbort = new AbortController();
+  private readonly headfulContexts = new WeakSet<BrowserContext>();
 
   constructor(options: Options) {
     this.options = options;
+  }
+
+  isHeadfulContext(context: BrowserContext) {
+    return this.headfulContexts.has(context);
   }
 
   private async launchOptions() {
@@ -191,12 +196,15 @@ export class ServerBrowserContexts {
     if (this.options.cdpEndpoint) {
       const context = (await this.sharedBrowser()).contexts()[0];
       if (!context) throw new Error("The sandbox desktop browser has no default context.");
+      this.headfulContexts.add(context);
       return context;
     }
     const contextOptions = { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 };
     if (isolationKey !== undefined || profileId === INCOGNITO_BROWSER_PROFILE_ID) {
       const browser = await this.sharedBrowser();
-      return browser.newContext(contextOptions);
+      const context = await browser.newContext(contextOptions);
+      if (this.options.cdpEndpoint) this.headfulContexts.add(context);
+      return context;
     }
     const directory = this.profileDirectory(profileId);
     const options = await this.launchOptions();
