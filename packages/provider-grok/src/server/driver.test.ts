@@ -44,41 +44,37 @@ const noSpawner = ChildProcessSpawner.make(() =>
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
 it.layer(layerTest)("GrokDriver", (it) => {
-  it.effect.skipIf(windowsHost)("updates through the configured executable's own updater", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-grok-driver-" });
-      const grokHome = path.join(tempDir, "Grok Home");
-      const binaryPath = path.join(grokHome, "bin", "grok");
-      yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
-      yield* fs.writeFileString(binaryPath, "#!/bin/sh\n");
-      yield* fs.chmod(binaryPath, 0o755);
+  it.effect.skipIf(windowsHost)(
+    "reads release metadata without probing or updating the configured executable",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-grok-driver-" });
+        const grokHome = path.join(tempDir, "Grok Home");
+        const binaryPath = path.join(grokHome, "bin", "grok");
+        yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+        yield* fs.writeFileString(binaryPath, "#!/bin/sh\n");
+        yield* fs.chmod(binaryPath, 0o755);
 
-      const instance = yield* GrokDriver.create({
-        instanceId: ProviderInstanceId.make("grok-update"),
-        displayName: "Grok test",
-        enabled: false,
-        environment: [{ name: "GROK_HOME", value: grokHome, sensitive: false }],
-        config: { ...GrokDriver.defaultConfig(), binaryPath },
-      });
+        const instance = yield* GrokDriver.create({
+          instanceId: ProviderInstanceId.make("grok-update"),
+          displayName: "Grok test",
+          enabled: false,
+          environment: [{ name: "GROK_HOME", value: grokHome, sensitive: false }],
+          config: { ...GrokDriver.defaultConfig(), binaryPath },
+        });
 
-      const capabilities = yield* instance.snapshot.resolveMaintenance();
-      expect(capabilities.packageName).toBe("@xai-official/grok");
-      expect(capabilities.update).toMatchObject({
-        command: `'${binaryPath}' update`,
-        executable: binaryPath,
-        args: ["update"],
-      });
-      // `grok update` installs under GROK_HOME, so it must target this instance's home.
-      expect(capabilities.update?.env?.GROK_HOME).toBe(grokHome);
-    }).pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
-      Effect.scoped,
-    ),
+        const capabilities = yield* instance.snapshot.getVersionSource();
+        expect(capabilities.packageName).toBe("@xai-official/grok");
+        expect(capabilities).not.toHaveProperty("update");
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
+        Effect.scoped,
+      ),
   );
 
-  it.effect("stays manual-only when the configured executable does not exist", () =>
+  it.effect("never installs a missing configured executable", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -90,7 +86,8 @@ it.layer(layerTest)("GrokDriver", (it) => {
         environment: [],
         config: { ...GrokDriver.defaultConfig(), binaryPath: path.join(tempDir, "grok") },
       });
-      expect((yield* instance.snapshot.resolveMaintenance()).update).toBeNull();
+      expect(yield* instance.snapshot.getVersionSource()).not.toHaveProperty("update");
+      expect(yield* fs.readDirectory(tempDir)).toEqual([]);
     }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
       Effect.scoped,

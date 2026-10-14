@@ -45,8 +45,8 @@ capabilities, never the driver kind.
   MCP servers, run hooks, or launch a login. Keep heavier probes behind an explicit refresh.
 - **T3 MCP tools.** Inject the thread's MCP server so agents can use T3's tools, and make a turn
   survive when that server is unreachable.
-- **Updates.** Run an update only through the installer that provably owns the binary; otherwise
-  leave it manual. See [`providerMaintenance.ts`](../../apps/server/src/provider/providerMaintenance.ts).
+- **Updates.** Pin executables in the sandbox image build. Expose read-only version and compatibility
+  diagnostics; never add a runtime installer or updater. See [provider binaries](./providers.md#provider-binaries-belong-to-the-sandbox-image).
 
 ## Tests
 

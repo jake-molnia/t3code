@@ -33,7 +33,6 @@ import {
   type ProviderInstance,
 } from "@t3tools/provider-core/server/driver";
 import { providerModelsFromSettings } from "@t3tools/provider-core/server/snapshotProbe";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -65,10 +64,9 @@ const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
 // is detected on the next refresh.
 const PROBE_SUCCESS_TTL_MS = 15 * 60 * 1_000;
 const EMPTY_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
-const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
-  provider: DRIVER_KIND,
+const VERSION_SOURCE = {
   packageName: null,
-});
+};
 
 const makeUnsupportedTextGeneration = (): ProviderTextGeneration => {
   const unsupported = (operation: string) =>
@@ -166,7 +164,7 @@ export function acpRegistrySnapshotReadiness(
         installed: false,
         version: inspection.version,
         status: "warning",
-        message: `ACP Registry agent '${inspection.agentId}' has not been prepared on this environment.`,
+        message: `ACP Registry agent '${inspection.agentId}' requires an executable supplied by the sandbox image. Configure its executable path.`,
       };
     case "failed":
       return {
@@ -222,7 +220,6 @@ function baseSnapshot(
     auth: { ...input.auth, canLogout: input.auth.canLogout ?? false },
     checkedAt: input.checkedAt,
     setup: {
-      canInstall: false,
       ...(input.documentationUrl ? { documentationUrl: input.documentationUrl } : {}),
       canAuthenticate:
         input.installed &&
@@ -627,7 +624,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       const snapshot = yield* makeManagedServerProvider<
         ProviderSnapshotSettings<AcpRegistrySettings>
       >({
-        resolveMaintenance: () => Effect.succeed(MAINTENANCE),
+        getVersionSource: () => Effect.succeed(VERSION_SOURCE),
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,

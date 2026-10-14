@@ -109,19 +109,13 @@ describe("collectRestartingMachines", () => {
 });
 
 describe("runUpdateEverything", () => {
-  it("restarts servers after providers finish and installs this app last", async () => {
+  it("installs this app after updating servers", async () => {
     const calls: string[] = [];
-    let finishProviders = () => {};
     const run = runUpdateEverything({
       downloadLocal: async () => {
         calls.push("download");
         return true;
       },
-      updateProviders: () =>
-        new Promise<void>((resolve) => {
-          calls.push("providers");
-          finishProviders = resolve;
-        }),
       updateServers: async () => {
         calls.push("servers");
       },
@@ -130,20 +124,14 @@ describe("runUpdateEverything", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(calls).toEqual(["download", "providers"]);
-    finishProviders();
     await run;
-    expect(calls).toEqual(["download", "providers", "servers", "install"]);
+    expect(calls).toEqual(["download", "servers", "install"]);
   });
 
   it("still updates remote machines when the local download fails", async () => {
     const calls: string[] = [];
     await runUpdateEverything({
       downloadLocal: async () => false,
-      updateProviders: async () => {
-        calls.push("providers");
-      },
       updateServers: async () => {
         calls.push("servers");
       },
@@ -152,7 +140,7 @@ describe("runUpdateEverything", () => {
       },
     });
 
-    expect(calls).toEqual(["providers", "servers"]);
+    expect(calls).toEqual(["servers"]);
   });
 });
 
@@ -176,31 +164,14 @@ describe("describeUpdateEverything", () => {
             targetVersion: "0.0.50",
           },
         ],
-        providerMachines: [
-          { environmentId: alvin, label: "alvin", providers: ["Codex", "Claude"] },
-          { environmentId: EnvironmentId.make("box"), label: "box", providers: ["Cursor"] },
-        ],
       }),
     ).toEqual({
-      summary: "Update this app, 2 servers, and 3 providers",
+      summary: "Update this app and 2 servers",
       lines: [
         "This app: 0.0.50, restarts last",
-        "alvin: server to 0.0.50, Codex, Claude",
+        "alvin: server to 0.0.50",
         "studio: desktop app update",
-        "box: Cursor",
       ],
     });
-  });
-
-  it("reads naturally with one kind of update", () => {
-    expect(
-      describeUpdateEverything({
-        localVersion: null,
-        servers: [],
-        providerMachines: [
-          { environmentId: EnvironmentId.make("alvin"), label: "alvin", providers: ["Codex"] },
-        ],
-      }).summary,
-    ).toBe("Update 1 provider");
   });
 });

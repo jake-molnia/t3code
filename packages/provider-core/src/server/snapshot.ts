@@ -1,17 +1,13 @@
 import type { ProviderUsageLimitsUpdate, ServerProvider } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
-import type { ProviderMaintenanceCapabilities } from "./maintenance.ts";
+import type { ProviderVersionSource } from "./versionAdvisory.ts";
 
 export interface ManagedServerProvider {
-  /**
-   * Ownership-derived update capabilities. Cached between reads; pass
-   * `{ fresh: true }` before executing an update so it never trusts a
-   * resolution older than the click.
-   */
-  readonly resolveMaintenance: (options?: {
+  /** Read-only release metadata for version notices and explicit refreshes. */
+  readonly getVersionSource: (options?: {
     readonly fresh?: boolean;
-  }) => Effect.Effect<ProviderMaintenanceCapabilities>;
+  }) => Effect.Effect<ProviderVersionSource>;
   readonly getSnapshot: Effect.Effect<ServerProvider>;
   readonly refresh: Effect.Effect<ServerProvider>;
   readonly streamChanges: Stream.Stream<ServerProvider>;

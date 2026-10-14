@@ -18,9 +18,9 @@ work through the same generic integration.
 1. Open **Settings → Providers**.
 2. Select **Add provider** and search the ACP Registry.
 3. Search for the agent and select **Add** on its result.
-4. Confirm the name and instance ID, then complete the agent's sign-in step.
+4. Confirm the name and instance ID, enter the executable name or path supplied by your sandbox image, then complete the agent's sign-in step.
 
-Search only shows agents that can run on the connected server. Registry agents are third-party
+Search shows platform-compatible registry entries. Your deployment administrator must include the selected executable in the sandbox image before it can run. Registry agents are third-party
 code; review an agent's source and license before adding it.
 
 ## Add a local command
@@ -125,7 +125,7 @@ for those actions.
 
 ## Advanced configuration
 
-- **Executable override** runs an existing local executable instead of the managed distribution,
-  keeping the registry-declared arguments and environment.
+- **Executable** selects the required image-supplied executable, keeping the registry-declared
+  arguments and environment. Use a local ACP command to supply your own arguments.
 - **Authentication method** picks a specific method when the agent advertises more than one.
 - **Custom models** adds model IDs the agent does not report.

@@ -65,7 +65,6 @@ import type {
 } from "@t3tools/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -1215,13 +1214,10 @@ it.layer(
             displayName: undefined,
             enabled: true,
             snapshot: {
-              resolveMaintenance: () =>
-                Effect.succeed(
-                  makeManualOnlyProviderMaintenanceCapabilities({
-                    provider: cachedProvider.driver,
-                    packageName: null,
-                  }),
-                ),
+              getVersionSource: () =>
+                Effect.succeed({
+                  packageName: null,
+                }),
               getSnapshot: Effect.succeed(pendingProvider),
               refresh: Ref.get(nextProvider),
               streamChanges: Stream.empty,
@@ -1361,13 +1357,10 @@ it.layer(
           displayName: undefined,
           enabled: true,
           snapshot: {
-            resolveMaintenance: () =>
-              Effect.succeed(
-                makeManualOnlyProviderMaintenanceCapabilities({
-                  provider: codexDriver,
-                  packageName: null,
-                }),
-              ),
+            getVersionSource: () =>
+              Effect.succeed({
+                packageName: null,
+              }),
             getSnapshot: Effect.succeed(initialProvider),
             refresh: Ref.update(refreshCalls, (count) => count + 1).pipe(
               Effect.andThen(Effect.never),
@@ -1467,13 +1460,10 @@ it.layer(
           displayName: undefined,
           enabled: true,
           snapshot: {
-            resolveMaintenance: () =>
-              Effect.succeed(
-                makeManualOnlyProviderMaintenanceCapabilities({
-                  provider: driver,
-                  packageName: null,
-                }),
-              ),
+            getVersionSource: () =>
+              Effect.succeed({
+                packageName: null,
+              }),
             getSnapshot: Effect.succeed(provider),
             refresh: Effect.succeed(provider),
             streamChanges: Stream.empty,
@@ -1735,13 +1725,10 @@ it.layer(
             displayName: undefined,
             enabled: true,
             snapshot: {
-              resolveMaintenance: () =>
-                Effect.succeed(
-                  makeManualOnlyProviderMaintenanceCapabilities({
-                    provider: codexDriver,
-                    packageName: null,
-                  }),
-                ),
+              getVersionSource: () =>
+                Effect.succeed({
+                  packageName: null,
+                }),
               getSnapshot: Effect.succeed(codexProvider),
               refresh: Ref.update(codexRefreshCalls, (count) => count + 1).pipe(
                 Effect.as(codexProvider),
@@ -1762,13 +1749,10 @@ it.layer(
             displayName: undefined,
             enabled: true,
             snapshot: {
-              resolveMaintenance: () =>
-                Effect.succeed(
-                  makeManualOnlyProviderMaintenanceCapabilities({
-                    provider: openCodeDriver,
-                    packageName: null,
-                  }),
-                ),
+              getVersionSource: () =>
+                Effect.succeed({
+                  packageName: null,
+                }),
               getSnapshot: Effect.succeed(failedOpenCodeProvider),
               refresh: Ref.update(openCodeRefreshCalls, (count) => count + 1).pipe(
                 Effect.andThen(Ref.get(catalogSnapshot)),
@@ -1935,13 +1919,10 @@ it.layer(
             displayName: undefined,
             enabled: true,
             snapshot: {
-              resolveMaintenance: () =>
-                Effect.succeed(
-                  makeManualOnlyProviderMaintenanceCapabilities({
-                    provider: driver,
-                    packageName: null,
-                  }),
-                ),
+              getVersionSource: () =>
+                Effect.succeed({
+                  packageName: null,
+                }),
               getSnapshot: Effect.succeed(provider),
               refresh: Effect.gen(function* () {
                 yield* Ref.update(refreshCalls, (count) => count + 1);
@@ -2045,13 +2026,10 @@ it.layer(
           displayName: undefined,
           enabled: true,
           snapshot: {
-            resolveMaintenance: () =>
-              Effect.succeed(
-                makeManualOnlyProviderMaintenanceCapabilities({
-                  provider: cursorDriver,
-                  packageName: null,
-                }),
-              ),
+            getVersionSource: () =>
+              Effect.succeed({
+                packageName: null,
+              }),
             getSnapshot: Effect.succeed(initialProvider),
             refresh: Effect.succeed(refreshedProvider),
             streamChanges: Stream.fromPubSub(changes),
@@ -2173,13 +2151,10 @@ it.layer(
             displayName: undefined,
             enabled: true,
             snapshot: {
-              resolveMaintenance: () =>
-                Effect.succeed(
-                  makeManualOnlyProviderMaintenanceCapabilities({
-                    provider: openCodeDriver,
-                    packageName: null,
-                  }),
-                ),
+              getVersionSource: () =>
+                Effect.succeed({
+                  packageName: null,
+                }),
               getSnapshot: Effect.succeed(initialProvider),
               refresh: Effect.succeed(authoritativeProvider),
               streamChanges: Stream.fromPubSub(changes),
@@ -2276,13 +2251,10 @@ it.layer(
           displayName: undefined,
           enabled: true,
           snapshot: {
-            resolveMaintenance: () =>
-              Effect.succeed(
-                makeManualOnlyProviderMaintenanceCapabilities({
-                  provider: codexDriver,
-                  packageName: null,
-                }),
-              ),
+            getVersionSource: () =>
+              Effect.succeed({
+                packageName: null,
+              }),
             getSnapshot: Effect.succeed(cachedProvider),
             refresh: Effect.die(new Error("simulated refresh failure")),
             streamChanges: Stream.empty,
@@ -2377,13 +2349,10 @@ it.layer(
           displayName: undefined,
           enabled: true,
           snapshot: {
-            resolveMaintenance: () =>
-              Effect.succeed(
-                makeManualOnlyProviderMaintenanceCapabilities({
-                  provider: provider.driver,
-                  packageName: null,
-                }),
-              ),
+            getVersionSource: () =>
+              Effect.succeed({
+                packageName: null,
+              }),
             getSnapshot: Effect.succeed(provider),
             refresh: Effect.succeed(provider),
             streamChanges: Stream.empty,
