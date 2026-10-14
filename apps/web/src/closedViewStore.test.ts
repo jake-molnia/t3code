@@ -41,7 +41,7 @@ describe("closedViewStore", () => {
       await useClosedViewStore.persist.rehydrate();
       expect(useClosedViewStore.persist.hasHydrated()).toBe(true);
       expect(useClosedViewStore.getState().entries).toEqual([]);
-      expect(await storage!.getItem(name!)).toEqual({ state: { entries: [] }, version: 2 });
+      expect(await storage!.getItem(name!)).toEqual({ state: { entries: [] }, version: 3 });
     },
   );
 
@@ -81,7 +81,7 @@ describe("closedViewStore", () => {
       const { storage, name } = useClosedViewStore.persist.getOptions();
       await storage!.setItem(name!, {
         state: { entries: [entry as ClosedViewEntry, ...useClosedViewStore.getState().entries] },
-        version: 1,
+        version: 2,
       });
       await useClosedViewStore.persist.rehydrate();
       expect(useClosedViewStore.persist.hasHydrated()).toBe(true);
