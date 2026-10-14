@@ -5,12 +5,9 @@ import {
   OrchestrationV2StoredEvent,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2Run,
-  type OrchestrationV2ProviderTurn,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type ModelSelection,
-  type RuntimeMode,
-  type ProviderInteractionMode,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
@@ -28,8 +25,7 @@ import * as Schema from "effect/Schema";
 
 import { ackRemoteEvent, remoteEventEnvelope } from "../execution/RemoteProviderAdapter.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
-import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
-import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -70,71 +66,6 @@ export const ProviderEventIngestorV2Error = Schema.Union([
   ProviderEventPublishError,
 ]);
 export type ProviderEventIngestorV2Error = typeof ProviderEventIngestorV2Error.Type;
-
-export interface ProviderTurnAnalyticsContext {
-  readonly modelSelection: ModelSelection;
-  readonly runtimeMode?: RuntimeMode;
-  readonly interactionMode?: ProviderInteractionMode;
-}
-
-export class ProviderTurnAnalytics extends Context.Reference<{
-  readonly record: (properties: Readonly<Record<string, unknown>>) => Effect.Effect<void>;
-}>("t3/orchestration-v2/ProviderTurnAnalytics", {
-  defaultValue: () => ({ record: () => Effect.void }),
-}) {}
-
-export const layerAnalytics = Layer.effect(
-  ProviderTurnAnalytics,
-  Effect.gen(function* () {
-    const analytics = yield* AnalyticsService.AnalyticsService;
-    return {
-      record: (properties: Readonly<Record<string, unknown>>) =>
-        analytics.record("provider.turn.completed", properties),
-    };
-  }),
-);
-
-function providerTurnAnalyticsProperties(input: {
-  readonly driver: ProviderAdapter.ProviderAdapterV2Event["driver"];
-  readonly providerTurn: OrchestrationV2ProviderTurn;
-  readonly context?: ProviderTurnAnalyticsContext;
-}): Readonly<Record<string, unknown>> {
-  const usage = input.providerTurn.turnTokenUsage;
-  const modelSelection = input.context?.modelSelection;
-  const effort = modelSelection
-    ? (getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
-      getModelSelectionStringOptionValue(modelSelection, "effort"))
-    : undefined;
-  return {
-    provider: input.driver,
-    terminalStatus: input.providerTurn.status,
-    usageStatus: usage?.usageStatus ?? "unavailable",
-    usageScope: usage?.usageScope ?? "main_agent",
-    ...(usage ? { hasSubagents: usage.hasSubagents } : {}),
-    ...(usage?.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
-    ...(usage?.cachedInputTokens === undefined
-      ? {}
-      : { cachedInputTokens: usage.cachedInputTokens }),
-    ...(usage?.cacheCreationTokens === undefined
-      ? {}
-      : { cacheCreationTokens: usage.cacheCreationTokens }),
-    ...(usage?.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
-    ...(usage?.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
-    ...(modelSelection ? { model: modelSelection.model, mixedModels: false } : {}),
-    ...(effort ? { effort } : {}),
-    ...(input.context?.runtimeMode ? { runtimeMode: input.context.runtimeMode } : {}),
-    ...(input.context?.interactionMode ? { interactionMode: input.context.interactionMode } : {}),
-    ...(input.providerTurn.startedAt && input.providerTurn.completedAt
-      ? {
-          durationMs: Math.max(
-            0,
-            DateTime.toEpochMillis(input.providerTurn.completedAt) -
-              DateTime.toEpochMillis(input.providerTurn.startedAt),
-          ),
-        }
-      : {}),
-  };
-}
 
 type TodoListPlan = Extract<OrchestrationV2PlanArtifact, { readonly kind: "todo_list" }>;
 
@@ -260,7 +191,6 @@ export interface ProviderEventIngestInput {
   readonly nodeId?: NodeId;
   readonly rawEventId?: RawEventId;
   readonly event: ProviderAdapter.ProviderAdapterV2Event;
-  readonly analyticsContext?: ProviderTurnAnalyticsContext;
 }
 
 export interface ProviderEventIngestorV2Shape {
@@ -317,9 +247,7 @@ export const layer: Layer.Layer<
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
-    const analytics = yield* ProviderTurnAnalytics;
     const agentScope = yield* AgentScope;
-    const completedTurnAnalytics = new Set<string>();
 
     const makeDomainEvent = (
       input: ProviderEventIngestInput,
@@ -797,35 +725,6 @@ export const layer: Layer.Layer<
           ),
           Effect.tap(() =>
             input.event.type === "turn.terminal" ? Effect.void : ackRemoteEvent(input.event),
-          ),
-          Effect.tap((storedEvents) =>
-            Effect.gen(function* () {
-              if (storedEvents.length === 0 || input.event.type !== "provider_turn.updated") return;
-              const providerTurn = input.event.providerTurn;
-              if (
-                providerTurn.status !== "completed" &&
-                providerTurn.status !== "failed" &&
-                providerTurn.status !== "interrupted" &&
-                providerTurn.status !== "cancelled"
-              )
-                return;
-              const key = `${input.providerInstanceId}:${providerTurn.id}`;
-              if (completedTurnAnalytics.has(key)) return;
-              completedTurnAnalytics.add(key);
-              if (completedTurnAnalytics.size > 4096) {
-                const oldest = completedTurnAnalytics.values().next().value;
-                if (oldest !== undefined) completedTurnAnalytics.delete(oldest);
-              }
-              yield* analytics.record(
-                providerTurnAnalyticsProperties({
-                  driver: input.event.driver,
-                  providerTurn,
-                  ...(input.analyticsContext === undefined
-                    ? {}
-                    : { context: input.analyticsContext }),
-                }),
-              );
-            }),
           ),
           (effect) =>
             input.event.type === "app_thread.created"
