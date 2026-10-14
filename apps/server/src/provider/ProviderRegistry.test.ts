@@ -2859,6 +2859,7 @@ it.layer(
             );
 
             assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
+              "antigravity",
               "claudeAgent",
               "codex",
               "cursor",
@@ -2873,6 +2874,11 @@ it.layer(
             const museProvider = providers.find((provider) => provider.driver === "muse");
             assert.strictEqual(museProvider?.enabled, false);
             assert.strictEqual(museProvider?.status, "disabled");
+            const antigravityProvider = providers.find(
+              (provider) => provider.driver === "antigravity",
+            );
+            assert.strictEqual(antigravityProvider?.enabled, false);
+            assert.strictEqual(antigravityProvider?.status, "disabled");
             assert.strictEqual(cursorSpawned, false);
           }).pipe(Effect.provide(runtimeServices));
         }),
