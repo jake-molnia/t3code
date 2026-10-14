@@ -17,6 +17,26 @@ Prefer a container? See [Dev container](../internals/devcontainer.md) for VS Cod
 
 ## Choosing a dev process
 
+### MCP runtime
+
+The `t3-web` image includes a pinned Executor backend and Bun runtime in `/opt/executor`.
+T3 starts it on loopback when MCP settings or tools need it. Executor's database and
+encryption keys live in `<stateDir>/executor`; preserve that directory together with
+T3's secrets directory when restoring a server. Execution workers receive neither.
+
+For local development, set `T3_EXECUTOR_RUNTIME_DIR` to a packaged Executor directory
+containing `t3-supervisor.mjs` and `apps/host-selfhost/dist-server/serve.js`, and
+`T3_EXECUTOR_BUN` to Bun 1.3.11. `images/t3/Dockerfile` records the pinned source and
+packaging command. Without the packaged runtime, MCP settings report it unavailable.
+Run the real runtime test with `T3_EXECUTOR_TEST_RUNTIME` pointing to that directory.
+
+Set `EXECUTOR_ALLOW_LOCAL_NETWORK=true` only when integrations need private or loopback
+endpoints, including local MCP test fixtures. This also permits Executor's integration
+runtime to contact private addresses. The default leaves upstream network restrictions
+enabled. Stdio MCP processes remain disabled in the head container.
+
+### Web development
+
 Use `vp run dev` for server and web, or `vp run dev:desktop` for the Electron client.
 `dev:server` and `dev:web` start those processes separately.
 See the [mobile README](../../apps/mobile/README.md) for native builds and Metro.

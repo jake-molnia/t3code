@@ -6,6 +6,8 @@ export interface T3McpToolPresentation {
 }
 
 export type T3McpToolSummaryAction =
+  | "integration-search"
+  | "integration-execute"
   | "capabilities"
   | "delegate"
   | "task-status"
@@ -86,6 +88,19 @@ const T3_MCP_SERVER_ALIASES = new Set(["t3-code", "t3_code", "t3code"]);
 
 // Cards, activity rows, summaries, and provider identity recovery share this inventory.
 const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
+  executor_search: tool(
+    ["Search", "Searching", "Searched", "connected tools"],
+    "integration-search",
+  ),
+  executor_schema: tool(
+    ["Inspect", "Inspecting", "Inspected", "a connected tool"],
+    "integration-search",
+  ),
+  executor_execute: tool(["Run", "Running", "Ran", "connected tools"], "integration-execute"),
+  executor_resume: tool(
+    ["Resume", "Resuming", "Resumed", "connected tools"],
+    "integration-execute",
+  ),
   link_pull_request: tool(
     ["Link", "Linking", "Linked", "a pull request"],
     "link-pr",

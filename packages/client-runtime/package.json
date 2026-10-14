@@ -414,6 +414,10 @@
     "./pull-request-markdown": {
       "types": "./src/pullRequestMarkdown.ts",
       "default": "./src/pullRequestMarkdown.ts"
+    },
+    "./state/mcp-connections": {
+      "types": "./src/state/mcpConnections.ts",
+      "default": "./src/state/mcpConnections.ts"
     }
   },
   "scripts": {
