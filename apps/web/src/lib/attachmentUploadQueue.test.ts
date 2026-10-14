@@ -377,59 +377,63 @@ describe("attachmentUploadQueue", () => {
     );
   });
 
-  it("uploads images immediately and sends attachment references", async () => {
-    const image = {
-      ...makeImage("image-1"),
-      source: {
-        kind: "snap-shot" as const,
-        capturedAt: "2026-08-24T11:00:00.000Z",
-        appName: "Terminal",
-        windowTitle: "Tests",
-      },
-    };
-    startAttachmentUpload({ environmentId: firstEnvironment, image });
-    await Promise.resolve();
+  it.each([false, true])(
+    "uploads ordinary and historical images without capture metadata (legacy: %s)",
+    async (legacy) => {
+      const image = {
+        ...makeImage("image-1"),
+        ...(legacy
+          ? {
+              source: {
+                kind: "snap-shot",
+                capturedAt: "2026-08-24T11:00:00.000Z",
+                appName: "Terminal",
+                windowTitle: "Tests",
+              },
+            }
+          : {}),
+      };
+      startAttachmentUpload({ environmentId: firstEnvironment, image });
+      await Promise.resolve();
 
-    const request = TestXmlHttpRequest.requests[0]!;
-    expect(request.method).toBe("POST");
-    expect(request.url).toBe(
-      "https://environment.test/api/attachments/upload/pending-environment-1-image-1.png",
-    );
-    request.progress(1, 3);
-    expect(readAttachmentUpload(image.id)).toMatchObject({ status: "uploading", progress: 1 / 3 });
+      const request = TestXmlHttpRequest.requests[0]!;
+      expect(request.method).toBe("POST");
+      expect(request.url).toBe(
+        "https://environment.test/api/attachments/upload/pending-environment-1-image-1.png",
+      );
+      request.progress(1, 3);
+      expect(readAttachmentUpload(image.id)).toMatchObject({
+        status: "uploading",
+        progress: 1 / 3,
+      });
 
-    const settled = awaitAttachmentUploads([image.id]);
-    request.complete();
-    await settled;
+      const settled = awaitAttachmentUploads([image.id]);
+      request.complete();
+      await settled;
 
-    expect(getUploadedAttachments({ environmentId: firstEnvironment, images: [image] })).toEqual([
-      {
-        type: "image",
-        id: "pending-environment-1-image-1.png",
-        name: "image-1.png",
-        mimeType: "image/png",
-        sizeBytes: 3,
-        source: {
-          kind: "snap-shot",
-          capturedAt: "2026-08-24T11:00:00.000Z",
-          appName: "Terminal",
-          windowTitle: "Tests",
+      expect(getUploadedAttachments({ environmentId: firstEnvironment, images: [image] })).toEqual([
+        {
+          type: "image",
+          id: "pending-environment-1-image-1.png",
+          name: "image-1.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
         },
-      },
-    ]);
+      ]);
 
-    releaseDraftAttachments([image]);
-    expect(readAttachmentUpload(image.id)).toBeUndefined();
-    expect(mocks.runAtomCommand).toHaveBeenCalledWith(
-      expect.anything(),
-      mocks.removeUpload,
-      {
-        environmentId: firstEnvironment,
-        input: { attachmentId: "pending-environment-1-image-1.png" },
-      },
-      expect.anything(),
-    );
-  });
+      releaseDraftAttachments([image]);
+      expect(readAttachmentUpload(image.id)).toBeUndefined();
+      expect(mocks.runAtomCommand).toHaveBeenCalledWith(
+        expect.anything(),
+        mocks.removeUpload,
+        {
+          environmentId: firstEnvironment,
+          input: { attachmentId: "pending-environment-1-image-1.png" },
+        },
+        expect.anything(),
+      );
+    },
+  );
 
   it("uploads generic files and sends file attachment references", async () => {
     const file = {

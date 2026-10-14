@@ -115,12 +115,5 @@ rewriting an identical entry while the portal may be reading it. On Wayland, Ele
 shortcut-registration result only confirms submission; it does not confirm desktop consent or
 an active binding.
 
-Native modules never load in the Electron main process on the startup path, and the two the
-snapshot feature keeps are isolated: `@crowecawcaw/xa11y` runs only in forked Node-mode children
-(`SnapShotAccessibilityWorker`, `RegionSnapShotWorker`) and a worker thread, and `ffi-rs` loads
-lazily inside `WindowsForeground.ts` for a handful of Win32 calls. macOS window lookup shells out
-to `osascript` instead of a native addon. A crash or stall in any of these must not take the app
-down, so new native capability goes in a child with a deadline, not an `import` in main.
-
 See the [glossary](./glossary.md) for shared terms and the
 [development runbook](../operations/development.md) for setup and checks.

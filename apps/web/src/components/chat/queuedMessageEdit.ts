@@ -47,7 +47,6 @@ export async function prepareQueuedEditAttachments(input: {
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
       dataUrl: await input.readImage(image.file),
-      ...(image.source ? { source: image.source } : {}),
     })),
   );
   return [...input.existingAttachments, ...images, ...files];
