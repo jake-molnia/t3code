@@ -9227,7 +9227,6 @@ export default function ChatView(props: ChatViewProps) {
           mimeType: attachment.mimeType,
           sizeBytes: attachment.sizeBytes,
           dataUrl: await readFileAsDataUrl(attachment.file),
-          ...(attachment.source ? { source: attachment.source } : {}),
         };
       }),
     );
@@ -9502,7 +9501,6 @@ export default function ChatView(props: ChatViewProps) {
             mimeType: attachment.mimeType,
             sizeBytes: attachment.sizeBytes,
             previewUrl: attachment.previewUrl,
-            ...(attachment.source ? { source: attachment.source } : {}),
           }
         : {
             type: "file" as const,
