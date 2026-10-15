@@ -10,6 +10,14 @@ import { trackRemoteSessionSetup } from "./RemoteSessionSetup.ts";
 import * as AttachmentStaging from "../agentRuntime/AttachmentStaging.ts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as Config from "effect/Config";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as ServerConfig from "../config.ts";
+import { providerModelsFromSettings } from "@t3tools/provider-core/server/snapshotProbe";
+import {
+  readProviderStatusCache,
+  resolveProviderStatusCachePath,
+} from "../provider/providerStatusCache.ts";
 import * as Option from "effect/Option";
 import * as C from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -38,6 +46,9 @@ import type { ExecutionClient } from "./ExecutionClient.ts";
 
 const decodeSnapshot = Schema.decodeUnknownEffect(Schema.toCodecJson(C.ServerProvider));
 const isCodexSettings = Schema.is(C.CodexSettings);
+const configuredModels = Schema.decodeUnknownOption(
+  Schema.Struct({ customModels: Schema.optional(Schema.Array(C.CustomModelSetting)) }),
+);
 const encodeRpcValue = Schema.encodeEffect(Schema.toCodecJson(ConfigureProvider));
 const encodeReviewGuideInput = Schema.encodeUnknownSync(Schema.toCodecJson(ReviewGuideInput));
 const encodeRpcValueSync = Schema.encodeUnknownSync(Schema.toCodecJson(CommitInput));
@@ -50,6 +61,22 @@ export const makeRemoteDrivers = Effect.gen(function* () {
   const runtime = yield* Runtime.RuntimeClient;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const settings = yield* Settings.ServerSettingsService;
+  const serverConfig = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const fileSystem = yield* Effect.serviceOption(FileSystem.FileSystem);
+  const path = yield* Effect.serviceOption(Path.Path);
+  const loadCachedSnapshot = (instanceId: C.ProviderInstanceId) =>
+    Effect.gen(function* () {
+      if (Option.isNone(serverConfig) || Option.isNone(fileSystem) || Option.isNone(path))
+        return undefined;
+      return yield* resolveProviderStatusCachePath({
+        cacheDir: serverConfig.value.providerStatusCacheDir,
+        instanceId,
+      }).pipe(
+        Effect.flatMap(readProviderStatusCache),
+        Effect.provideService(FileSystem.FileSystem, fileSystem.value),
+        Effect.provideService(Path.Path, path.value),
+      );
+    });
   const workspaceRouting = yield* Effect.serviceOption(WorkspaceRouting.WorkspaceRouting);
   const setupTracker = yield* Effect.serviceOption(WorktreeSetupTracker.WorktreeSetupTracker);
   const attachments = yield* Effect.serviceOption(AttachmentStaging.AttachmentStaging);
@@ -287,7 +314,35 @@ export const makeRemoteDrivers = Effect.gen(function* () {
             return { ...disabled, availability: "available" };
           }),
         );
+        const cached = input.enabled ? yield* loadCachedSnapshot(instanceId) : undefined;
         let lastSnapshot: C.ServerProvider | undefined;
+        if (
+          cached?.instanceId === instanceId &&
+          cached.driver === driver.driverKind &&
+          cached.enabled === input.enabled
+        ) {
+          const config = configuredModels(input.config);
+          const { accentColor: _cachedAccent, ...presentation } = cached;
+          const capabilities = new Map(
+            cached.models.map((model) => [model.slug, model.capabilities]),
+          );
+          lastSnapshot = {
+            ...presentation,
+            displayName: input.displayName ?? driver.metadata.displayName,
+            ...(input.accentColor ? { accentColor: input.accentColor } : {}),
+            models:
+              cached.modelsComplete === true
+                ? cached.models
+                : providerModelsFromSettings(
+                    cached.models.filter((model) => !model.isCustom),
+                    Option.isSome(config) ? (config.value.customModels ?? []) : [],
+                    null,
+                  ).map((model) => ({
+                    ...model,
+                    capabilities: model.capabilities ?? capabilities.get(model.slug) ?? null,
+                  })),
+          };
+        }
         const snapshot = (method: string, wake: boolean) =>
           Effect.gen(function* () {
             if (!input.enabled) return yield* disabledSnapshot;
