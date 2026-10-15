@@ -10,6 +10,7 @@ import { trackRemoteSessionSetup } from "./RemoteSessionSetup.ts";
 import * as AttachmentStaging from "../agentRuntime/AttachmentStaging.ts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as Config from "effect/Config";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as C from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -23,6 +24,10 @@ import { BUILT_IN_DRIVERS } from "../provider/builtInDrivers.ts";
 import * as Runtime from "../agentRuntime/RuntimeClient.ts";
 import * as Settings from "../serverSettings.ts";
 import { buildUnavailableProviderSnapshot } from "../provider/unavailableProviderSnapshot.ts";
+import {
+  buildServerProvider,
+  providerModelsFromSettings,
+} from "@t3tools/provider-core/server/snapshotProbe";
 import { createRemoteProviderAdapter } from "./RemoteProviderAdapter.ts";
 import {
   CommitInput,
@@ -44,6 +49,9 @@ const encodeRpcValueSync = Schema.encodeUnknownSync(Schema.toCodecJson(CommitInp
 const encodeRpcValueSync2 = Schema.encodeUnknownSync(Schema.toCodecJson(PrInput));
 const encodeRpcValueSync3 = Schema.encodeUnknownSync(Schema.toCodecJson(BranchInput));
 const encodeRpcValueSync4 = Schema.encodeUnknownSync(Schema.toCodecJson(TitleInput));
+const configuredModels = Schema.decodeUnknownOption(
+  Schema.Struct({ customModels: Schema.optional(Schema.Array(C.CustomModelSetting)) }),
+);
 
 /** Keep upstream driver schemas and metadata; replace only their execution factory. */
 export const makeRemoteDrivers = Effect.gen(function* () {
@@ -283,15 +291,41 @@ export const makeRemoteDrivers = Effect.gen(function* () {
           }),
         );
         let lastSnapshot: C.ServerProvider | undefined;
+        const pendingSnapshot = Effect.gen(function* () {
+          const config = configuredModels(input.config);
+          return {
+            ...buildServerProvider({
+              driver: driver.driverKind,
+              presentation: { displayName: input.displayName ?? driver.metadata.displayName },
+              enabled: input.enabled,
+              checkedAt: DateTime.formatIso(yield* DateTime.now),
+              models: providerModelsFromSettings(
+                [],
+                Option.isSome(config) ? (config.value.customModels ?? []) : [],
+                null,
+              ),
+              probe: {
+                installed: false,
+                version: null,
+                status: "warning",
+                auth: { status: "unknown" },
+                message: "Provider status has not been checked. Refresh to start its sandbox.",
+              },
+            }),
+            instanceId,
+            driver: driver.driverKind,
+            ...(input.accentColor ? { accentColor: input.accentColor } : {}),
+          } satisfies C.ServerProvider;
+        });
         const snapshot = (method: string, wake: boolean) =>
           Effect.gen(function* () {
             if (!input.enabled) return yield* disabledSnapshot;
             let client: ExecutionClient;
-            if (wake || lastSnapshot === undefined) {
+            if (wake) {
               client = yield* utility;
             } else {
               const observation = yield* runtime.observeWorkspace(`t3:utility:${instanceId}`);
-              if (observation.kind === "stopped") return lastSnapshot;
+              if (observation.kind === "stopped") return lastSnapshot ?? (yield* pendingSnapshot);
               client = observation.client;
               if (!configuredUtility || !sameIdentity(configuredUtility, client.identity)) {
                 yield* configure(client, false);
