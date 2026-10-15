@@ -46,6 +46,7 @@ COPY images/t3/install-code-server.sh /tmp/
 RUN sh /tmp/install-code-server.sh "${TARGETARCH}" /opt/code-server
 
 FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:accc2fdce07aa859dc86a59549e0d12baea04aeced200533475281e7f0347d84 AS t3-worker
+USER 0:0
 ARG TARGETARCH
 RUN test "$TARGETARCH" = amd64 \
     && apt-get update && apt-get install -y --no-install-recommends ca-certificates git git-lfs openssh-client python3 python3-venv ripgrep tini lsof procps chromium make g++ libffi8 libssl3t64 libbz2-1.0 libuuid1 zlib1g \
@@ -94,6 +95,25 @@ ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/t3-worker-entrypoint"]
 FROM worker-build AS web-build
 RUN pnpm exec tsc --noEmit -p apps/web/tsconfig.json && pnpm --filter @t3tools/web build
 
+# Executor runs in the head container with its own pinned dependency tree.
+FROM oven/bun:1.3.11@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7 AS executor-build
+RUN apt-get update && apt-get install -y --no-install-recommends git python3 make g++ ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src/executor
+RUN git init . \
+    && git remote add origin https://github.com/UsefulSoftwareCo/executor.git \
+    && git fetch --depth=1 origin 906bee5efc9b2bfc0d9341cd471a701314136144 \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = 906bee5efc9b2bfc0d9341cd471a701314136144
+RUN bun install --frozen-lockfile --ignore-scripts
+COPY images/t3/executor-policy.test.ts packages/plugins/toolkits/src/t3-policy-probe.test.ts
+RUN cd packages/plugins/toolkits && bun run --bun test src/t3-policy-probe.test.ts
+RUN bun run apps/host-selfhost/scripts/package-runtime.ts
+COPY images/t3/executor-supervisor.mjs .selfhost-runtime/t3-supervisor.mjs
+RUN cp LICENSE .selfhost-runtime/LICENSE \
+    && mkdir -p .selfhost-runtime/bin \
+    && cp /usr/local/bin/bun .selfhost-runtime/bin/bun
+
 FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bdcd73c103b096988922d7 AS t3-web
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini python3 \
     && rm -rf /var/lib/apt/lists/* \
@@ -105,11 +125,13 @@ COPY --from=cliproxy-build /src/cliproxy/LICENSE /opt/t3/licenses/CLIProxyAPI/LI
 COPY images/t3/head-entrypoint.py images/t3/test_head_entrypoint.py /opt/t3/
 RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_head_entrypoint.py \
     && rm /opt/t3/test_head_entrypoint.py
+COPY --from=executor-build /src/executor/.selfhost-runtime /opt/executor
 COPY images/t3/smoke-web.py images/t3/migrate-execution-profiles.py images/t3/test_migrate_execution_profiles.py /opt/t3/
 RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_migrate_execution_profiles.py \
     && rm /opt/t3/test_migrate_execution_profiles.py
 ARG T3_SOURCE_REVISION
-ENV HOME=/data T3CODE_HOME=/data/t3 T3_SOURCE_REVISION=${T3_SOURCE_REVISION}
+ENV HOME=/data T3CODE_HOME=/data/t3 T3_SOURCE_REVISION=${T3_SOURCE_REVISION} \
+    T3_EXECUTOR_RUNTIME_DIR=/opt/executor T3_EXECUTOR_BUN=/opt/executor/bin/bun
 USER 1000:1000
 WORKDIR /data
 RUN python3 /opt/t3/smoke-web.py /opt/t3

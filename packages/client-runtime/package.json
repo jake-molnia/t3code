@@ -99,10 +99,6 @@
       "types": "./src/providerUpdateRequiredModels.ts",
       "default": "./src/providerUpdateRequiredModels.ts"
     },
-    "./voice-input": {
-      "types": "./src/voice-input/index.ts",
-      "default": "./src/voice-input/index.ts"
-    },
     "./t3ToolSummary": {
       "types": "./src/t3ToolSummary.ts",
       "default": "./src/t3ToolSummary.ts"
@@ -190,10 +186,6 @@
     "./state/project-grouping": {
       "types": "./src/state/projectGrouping.ts",
       "default": "./src/state/projectGrouping.ts"
-    },
-    "./state/relay": {
-      "types": "./src/state/relayDiscovery.ts",
-      "default": "./src/state/relayDiscovery.ts"
     },
     "./state/review": {
       "types": "./src/state/review.ts",
@@ -362,6 +354,10 @@
     "./pull-request-markdown": {
       "types": "./src/pullRequestMarkdown.ts",
       "default": "./src/pullRequestMarkdown.ts"
+    },
+    "./state/mcp-connections": {
+      "types": "./src/state/mcpConnections.ts",
+      "default": "./src/state/mcpConnections.ts"
     },
     "./state/previewStreamAccess": {
       "types": "./src/state/previewStreamAccess.ts",

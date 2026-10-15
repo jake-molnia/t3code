@@ -61,6 +61,13 @@ export function SettingsScopeSentence() {
     environments,
     onChange: scope.selectScope,
   };
+  if (pathname === "/settings/mcp") {
+    return (
+      <p className="flex min-w-0 flex-wrap items-center gap-1.5 px-3 text-base text-muted-foreground sm:px-4">
+        Connections on <EnvironmentScopeMenu {...props} />
+      </p>
+    );
+  }
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-3 text-base text-muted-foreground sm:px-4">
       {/* Each connective stays with its picker so a wrap never strands "on". */}

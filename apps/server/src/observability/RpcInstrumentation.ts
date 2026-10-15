@@ -15,6 +15,14 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * prefix. Adding an RPC to `WsRpcGroup` without a label is a type error.
  */
 const RPC_AGGREGATES = {
+  [WS_METHODS.mcpConnectionsList]: "mcpConnections",
+  [WS_METHODS.mcpConnectionsTools]: "mcpConnections",
+  [WS_METHODS.mcpConnectionsConnect]: "mcpConnections",
+  [WS_METHODS.mcpConnectionsRemove]: "mcpConnections",
+  [WS_METHODS.mcpConnectionsRefresh]: "mcpConnections",
+  [WS_METHODS.mcpConnectionsSetAccess]: "mcpConnections",
+  [WS_METHODS.mcpConnectionsCompleteAuth]: "mcpConnections",
+
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: "orchestration",

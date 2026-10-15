@@ -92,13 +92,6 @@ export function addProjectRemoteSourceProvider(
   return source === "url" ? null : source;
 }
 
-/** A clone source named in a route or link, or `url` for anything this client does not ship. */
-export function parseAddProjectRemoteSource(
-  value: string | null | undefined,
-): AddProjectRemoteSource {
-  return (value ? sourceControlClients.find(value)?.kind : undefined) ?? "url";
-}
-
 const GITHUB_REPOSITORY_SHORTHAND =
   /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]+(?:\.git)?$/;
 

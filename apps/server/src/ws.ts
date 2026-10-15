@@ -1,4 +1,5 @@
 import * as ModelGateway from "./modelGateway/ModelGateway.ts";
+import * as McpConnections from "./mcp/McpConnections.ts";
 import * as ServerVersion from "./environment/ServerVersion.ts";
 import * as ExecutionPools from "./agentRuntime/ExecutionPools.ts";
 import * as AgentRuntimeClient from "./agentRuntime/RuntimeClient.ts";
@@ -1189,6 +1190,7 @@ const layerWsRpc = (
       const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const mcpConnections = yield* McpConnections.McpConnections;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -2070,6 +2072,17 @@ const layerWsRpc = (
               Effect.andThen(subscribeOrchestrationV2Thread(input)),
             ),
           ),
+        [WS_METHODS.mcpConnectionsList]: () => mcpConnections.list,
+        [WS_METHODS.mcpConnectionsConnect]: (input) =>
+          mcpConnections.connect(input, currentSessionId),
+        [WS_METHODS.mcpConnectionsCompleteAuth]: (input) =>
+          mcpConnections.completeAuth(input, currentSessionId),
+        [WS_METHODS.mcpConnectionsRemove]: ({ connectionId }) =>
+          mcpConnections.remove(connectionId),
+        [WS_METHODS.mcpConnectionsRefresh]: ({ connectionId }) =>
+          mcpConnections.refresh(connectionId),
+        [WS_METHODS.mcpConnectionsTools]: ({ connectionId }) => mcpConnections.tools(connectionId),
+        [WS_METHODS.mcpConnectionsSetAccess]: (input) => mcpConnections.setAccess(input),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
@@ -3139,6 +3152,7 @@ export const WS_RPC_SERVER_OPTIONS = {
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
+    const mcpConnections = yield* McpConnections.McpConnections;
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const pullRequests = yield* PullRequestService.PullRequestService;
@@ -3189,6 +3203,7 @@ export const layer = Layer.unwrap(
         }).pipe(
           Effect.provide(
             layerWsRpc(session, clientOrigin, previewAutomationBroker, serverBrowser).pipe(
+              Layer.provide(Layer.succeed(McpConnections.McpConnections, mcpConnections)),
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees
               // their defects, not the rest of the server's.

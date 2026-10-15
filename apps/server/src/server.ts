@@ -1,5 +1,7 @@
 import * as InferenceProxy from "./modelGateway/InferenceProxy.ts";
 import * as ModelGateway from "./modelGateway/ModelGateway.ts";
+import * as McpConnections from "./mcp/McpConnections.ts";
+import * as ExecutorRuntime from "./mcp/ExecutorRuntime.ts";
 import * as ServerVersion from "./environment/ServerVersion.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import * as RemoteUsageHistory from "./agentRuntime/UsageHistory.ts";
@@ -592,6 +594,7 @@ const layerMakeRoutes = Layer.mergeAll(
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
   ),
 ).pipe(
+  Layer.provide(McpConnections.layer.pipe(Layer.provide(ExecutorRuntime.layer))),
   // Guides read through the same pull request service as every other surface.
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),

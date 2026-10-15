@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import * as C from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { captureRunPromise } from "../execution/EffectHttpBoundary.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -19,6 +20,7 @@ const layer = ServerConfig.layerTest(process.cwd(), { prefix: "attachment-centra
 it.layer(layer, { excludeTestServices: true })("attachment locality", (it) => {
   it.effect("verifies bytes in the worker and puts worker paths into reply-file answers", () =>
     Effect.gen(function* () {
+      const run = yield* captureRunPromise;
       const fs = yield* FileSystem.FileSystem;
       const central = yield* ServerConfig.ServerConfig;
       const workerContext = yield* Layer.build(
@@ -54,7 +56,7 @@ it.layer(layer, { excludeTestServices: true })("attachment locality", (it) => {
         call: async () => {
           throw new Error("Binary upload must not enter journal");
         },
-        transient: (method, input) => Effect.runPromise(worker.execute(method, input)),
+        transient: (method, input) => run(worker.execute(method, input)),
         events: async () => [],
         ack: async () => {},
         operationStatus: async () => ({ state: "missing" }),
