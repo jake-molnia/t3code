@@ -2,7 +2,8 @@ import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentAuthorizationError,
   EnvironmentId,
-  type RelayClientInstallProgressEvent,
+  type GitActionProgressEvent,
+  ExecutionPoolId,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
   WS_METHODS,
@@ -32,8 +33,9 @@ import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
   EnvironmentRpcRequestObserver,
+  RpcPermissionGuard,
   request,
-  runStream,
+  runStreamGuarded,
   subscribe,
   subscribeDynamicWithSession,
 } from "./client.ts";
@@ -45,13 +47,21 @@ const TARGET = new PrimaryConnectionTarget({
   wsBaseUrl: "wss://environment.example.test",
 });
 
-const INSTALL_CHECKING: RelayClientInstallProgressEvent = {
-  type: "progress",
-  stage: "checking",
+const COMMIT_STARTED: GitActionProgressEvent = {
+  kind: "phase_started",
+  cwd: "/workspace",
+  actionId: "test",
+  action: "commit",
+  phase: "commit",
+  label: "Commit",
 };
-const INSTALL_DOWNLOADING: RelayClientInstallProgressEvent = {
-  type: "progress",
-  stage: "downloading",
+const PUSH_STARTED: GitActionProgressEvent = {
+  kind: "phase_started",
+  cwd: "/workspace",
+  actionId: "test",
+  action: "commit",
+  phase: "push",
+  label: "Push",
 };
 
 function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
@@ -126,13 +136,13 @@ describe("environment RPC", () => {
     Effect.gen(function* () {
       const observations: string[] = [];
       const client = {
-        [WS_METHODS.cloudGetRelayClientStatus]: () =>
-          Effect.succeed({ status: "available", version: "2026.6.0" }),
+        [WS_METHODS.serverExecutionPools]: () =>
+          Effect.succeed({ defaultPoolId: ExecutionPoolId.make("gompers"), pools: [] }),
       } as unknown as WsRpcProtocolClient;
       const { activeSession, supervisor } = yield* makeHarness();
       yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
 
-      const result = yield* request(WS_METHODS.cloudGetRelayClientStatus, {}).pipe(
+      const result = yield* request(WS_METHODS.serverExecutionPools, {}).pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         Effect.provideService(
           EnvironmentRpcRequestObserver,
@@ -148,28 +158,33 @@ describe("environment RPC", () => {
         ),
       );
 
-      expect(result).toEqual({ status: "available", version: "2026.6.0" });
+      expect(result).toEqual({ defaultPoolId: ExecutionPoolId.make("gompers"), pools: [] });
       expect(observations).toEqual([
-        `start:${TARGET.environmentId}:${WS_METHODS.cloudGetRelayClientStatus}`,
-        `finish:${TARGET.environmentId}:${WS_METHODS.cloudGetRelayClientStatus}`,
+        `start:${TARGET.environmentId}:${WS_METHODS.serverExecutionPools}`,
+        `finish:${TARGET.environmentId}:${WS_METHODS.serverExecutionPools}`,
       ]);
     }),
   );
 
   it.effect("binds finite streaming commands to one active session", () =>
     Effect.gen(function* () {
-      const firstEvents = yield* Queue.unbounded<RelayClientInstallProgressEvent>();
-      const secondEvents = yield* Queue.unbounded<RelayClientInstallProgressEvent>();
+      const firstEvents = yield* Queue.unbounded<GitActionProgressEvent>();
+      const secondEvents = yield* Queue.unbounded<GitActionProgressEvent>();
       const firstClient = {
-        [WS_METHODS.cloudInstallRelayClient]: () => Stream.fromQueue(firstEvents),
+        [WS_METHODS.gitRunStackedAction]: () => Stream.fromQueue(firstEvents),
       } as unknown as WsRpcProtocolClient;
       const secondClient = {
-        [WS_METHODS.cloudInstallRelayClient]: () => Stream.fromQueue(secondEvents),
+        [WS_METHODS.gitRunStackedAction]: () => Stream.fromQueue(secondEvents),
       } as unknown as WsRpcProtocolClient;
       const { activeSession, supervisor } = yield* makeHarness();
 
       yield* SubscriptionRef.set(activeSession, Option.some(session(firstClient)));
-      const resultFiber = yield* runStream(WS_METHODS.cloudInstallRelayClient, {}).pipe(
+      const resultFiber = yield* runStreamGuarded(WS_METHODS.gitRunStackedAction, {
+        actionId: "test",
+        cwd: "/workspace",
+        action: "commit",
+      }).pipe(
+        Stream.provideService(RpcPermissionGuard, { authorize: () => Effect.void }),
         Stream.take(2),
         Stream.runCollect,
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -177,12 +192,12 @@ describe("environment RPC", () => {
       );
       yield* Effect.yieldNow;
 
-      yield* Queue.offer(firstEvents, INSTALL_CHECKING);
+      yield* Queue.offer(firstEvents, COMMIT_STARTED);
       yield* SubscriptionRef.set(activeSession, Option.some(session(secondClient)));
-      yield* Queue.offer(secondEvents, INSTALL_DOWNLOADING);
-      yield* Queue.offer(firstEvents, INSTALL_DOWNLOADING);
+      yield* Queue.offer(secondEvents, PUSH_STARTED);
+      yield* Queue.offer(firstEvents, PUSH_STARTED);
 
-      expect(yield* Fiber.join(resultFiber)).toEqual([INSTALL_CHECKING, INSTALL_DOWNLOADING]);
+      expect(yield* Fiber.join(resultFiber)).toEqual([COMMIT_STARTED, PUSH_STARTED]);
     }),
   );
 

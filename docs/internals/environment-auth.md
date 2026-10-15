@@ -1,8 +1,6 @@
 # Environment authentication
 
-The environment issues its own sessions and enforces their capabilities. Cloud
-identity and relay credentials belong to a separate trust boundary, described in
-[T3 Connect](./t3-connect.md). A relay token is never an environment login.
+The environment issues its own sessions and enforces their capabilities. Browser authorization and sandbox execution credentials belong to separate trust boundaries. An execution-worker token is never a browser login.
 
 ## Authority survives transport changes
 
@@ -50,8 +48,7 @@ parameters only pick targets; see
 [threadAccess](../../apps/server/src/mcp/threadAccess.ts).
 
 Issuer and resource URLs come from the request's Host and
-`X-Forwarded-Proto`, so one server answers over loopback, Tailscale Serve and a
-T3 Connect tunnel. A proxy that rewrites Host or drops the protocol header
+`X-Forwarded-Proto`, so the central service can answer through its configured reverse proxy. A proxy that rewrites Host or drops the protocol header
 breaks sign-in.
 
 Bearer and DPoP clients obtain short-lived WebSocket tickets through authenticated

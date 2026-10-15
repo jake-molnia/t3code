@@ -80,8 +80,8 @@ describe("requestLatencyState", () => {
     expect(getSlowRpcAckRequests()).toEqual([]);
   });
 
-  it("gives provider updates a longer threshold before warning", () => {
-    trackRpcRequestSent("1", WS_METHODS.serverUpdateServer, "server.updateProvider · env-1");
+  it("gives provider refreshes a longer threshold before warning", () => {
+    trackRpcRequestSent("1", WS_METHODS.serverRefreshProviders, "server.refreshProviders · env-1");
     vi.advanceTimersByTime(LONG_RUNNING_RPC_ACK_THRESHOLD_MS - 1);
     expect(getSlowRpcAckRequests()).toEqual([]);
 
@@ -89,7 +89,7 @@ describe("requestLatencyState", () => {
     expect(getSlowRpcAckRequests()).toMatchObject([
       {
         requestId: "1",
-        tag: "server.updateProvider · env-1",
+        tag: "server.refreshProviders · env-1",
         thresholdMs: LONG_RUNNING_RPC_ACK_THRESHOLD_MS,
       },
     ]);

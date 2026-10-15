@@ -43,10 +43,9 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
 import { requestConfirmDialog } from "../../confirmDialog";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
-import { Link } from "@tanstack/react-router";
+
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import {
   useEnvironment,
@@ -743,28 +742,7 @@ function WebhookEndpointField({
         </Button>
       </div>
       {note !== null ? <p className="text-xs text-muted-foreground">{note}</p> : null}
-      {endpoint.url !== null ? <WebhookDeliveryMode environmentId={environmentId} /> : null}
     </div>
-  );
-}
-
-/**
- * Whether T3 Connect forwards requests live or holds them while the
- * environment is offline. The setting is per environment and only readable
- * for this machine's own environment, so other environments show nothing.
- */
-function WebhookDeliveryMode({ environmentId }: { readonly environmentId: EnvironmentId }) {
-  const cloudLink = usePrimaryCloudLinkState();
-  if (cloudLink.target?.environmentId !== environmentId || cloudLink.data === null) return null;
-  return (
-    <p className="text-xs text-muted-foreground">
-      {cloudLink.data.holdWebhooksWhileOffline
-        ? "Held for up to 24 hours while this environment is offline. "
-        : "Forwarded live. Requests fail while this environment is offline. "}
-      <Link to="/settings/connections" className="underline underline-offset-2">
-        Change in Connections
-      </Link>
-    </p>
   );
 }
 

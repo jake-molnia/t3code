@@ -21,8 +21,8 @@ send shortcut. Click the send button to use the configured follow-up behavior.
 When an active turn has queued messages, `mod+Shift+Enter` sends the first as a
 steer. Change it under **Queue: Send First Queued Message as Steer** in Keybindings.
 
-Use `mod+shift+m` to choose a model and `mod+shift+h` to choose a host.
-To step a new thread to the next machine instead of opening the menu, bind
+Use `mod+shift+m` to choose a model and `mod+shift+h` to choose an execution pool.
+To step a new thread to the next execution pool instead of opening the menu, bind
 **Composer: Cycle Host** in Keybindings. It has no default shortcut.
 Use `mod+shift+e` for effort, `mod+shift+a` for access mode, `mod+shift+x` for the
 workspace, and `mod+shift+g` for the Git branch. The workspace menu includes the
@@ -64,7 +64,7 @@ Use the arrow keys and Return to choose a result, or `Cmd+1` through `Cmd+9` to
 choose directly. Escape or `Cmd+K` closes the palette. Start a search with `>`
 to show only actions.
 
-In a new thread, `Cmd+Shift+H` moves the draft to the next machine.
+In a new thread, `Cmd+Shift+H` opens the execution-pool menu.
 
 In the composer, Return sends and `Shift+Return` inserts a new line. `Cmd+Return`
 also sends. To make Return insert a new line instead, change the Return key
@@ -72,7 +72,7 @@ behavior in Settings → Keyboard.
 
 ## Edit the configuration file
 
-Keybindings live on the environment's machine, in
+Keybindings live on the central service, in
 `~/.t3/userdata/keybindings.json` by default. You can edit this file directly.
 It is a JSON array of rules:
 
@@ -158,13 +158,11 @@ through the pages you have visited, like a browser's back and forward buttons.
 
 ## Reserved shortcuts
 
-In the desktop app, `mod+w` closes the focused terminal or the active right-panel
-tab. When nothing remains to close, it closes the window. In a browser, `mod+w`
-closes the browser tab; rebind `rightPanel.close` and `terminal.close` to an available
+In a browser, `mod+w` closes the browser tab; rebind `rightPanel.close` and `terminal.close` to an available
 shortcut such as `alt+w`.
 
 `mod+shift+t` reopens the last closed tab across the app, including files,
-diffs, pull requests, browsers, and devices, in the order you closed them.
+diffs, pull requests, and browsers, in the order you closed them.
 A browser opens in a fresh session without its old page history. Incognito tabs
 can reopen until you reload or quit the app. This shortcut does not undo deleted work.
 Browsers also use it to reopen browser tabs; choose another binding in Settings
@@ -172,13 +170,3 @@ if the browser takes it first.
 
 Many defaults include `!terminalFocus` so they do not intercept terminal input.
 Keep that condition when remapping them if you want the same behavior.
-
-## Desktop quit shortcut
-
-Use `Cmd+Q` on macOS or `Ctrl+Q` on Windows and Linux. In the default **Hold** mode,
-hold for 1.2 seconds or press twice within 500 milliseconds. Holding requires
-keyboard repeat; if repeat is disabled, use two presses or the application menu.
-
-Change **Settings → General → Confirmations → Quit shortcut** to **Direct** for a
-single press or **Double press** for two presses only. Choosing **Quit** from the
-application menu always quits immediately.

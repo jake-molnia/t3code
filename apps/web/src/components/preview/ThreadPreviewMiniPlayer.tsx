@@ -90,17 +90,17 @@ const RESIZE_HANDLES: ReadonlyArray<{
   { direction: "southeast", className: "-bottom-2 -right-2 size-4 cursor-nwse-resize" },
 ];
 
-/** Floats the thread's browser tab or device stream over chat. */
+/** Floats the thread's browser tab over chat. */
 export function ThreadPreviewMiniPlayer({ threadRef, miniPlayer }: Props) {
   const { source } = miniPlayer;
-  return source.kind === "browser" ? (
+  return (
     <BrowserMiniPlayer
       key={source.tabId}
       threadRef={threadRef}
       tabId={source.tabId}
       miniPlayer={miniPlayer}
     />
-  ) : null;
+  );
 }
 
 function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly tabId: string }) {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId } from "@t3tools/contracts";
 
 import {
@@ -12,6 +12,17 @@ import {
   SETTINGS_SEARCH_ITEMS,
   type SettingsSearchItem,
 } from "./settingsSearch";
+
+const branding = vi.hoisted((): { channel: "latest" | "nightly" | null } => ({ channel: null }));
+vi.mock("../../branding", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../branding")>()),
+  get HOSTED_APP_CHANNEL() {
+    return branding.channel;
+  },
+}));
+afterEach(() => {
+  branding.channel = null;
+});
 
 const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
@@ -45,6 +56,22 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
 ];
 
 describe("searchSettings", () => {
+  it("keeps browser access and pool routing discoverable without machine setup", () => {
+    const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
+    expect(ids).toContain("connections-environment");
+    expect(ids).toContain("load-balancing");
+    for (const obsolete of [
+      "remote-environments",
+      "local-environment",
+      "wsl-backend",
+      "t3-connect",
+      "network-access",
+      "tailscale-https",
+      "publish-agent-activity",
+      "hold-webhooks-while-offline",
+    ])
+      expect(ids).not.toContain(obsolete);
+  });
   it.each(["OTel", "OTLP", "telemetry export", "Grafana"])(
     "finds environment telemetry settings for %s",
     (query) => {
@@ -100,7 +127,7 @@ describe("searchSettings", () => {
       searchSettings("remote pairing")
         .slice(0, 2)
         .map((item) => item.id),
-    ).toEqual(["network-access", "connections-environment"]);
+    ).toEqual(["connections-environment"]);
   });
 
   it("lists thread confirmations in panel order", () => {
@@ -126,20 +153,31 @@ describe("searchSettings", () => {
   });
 
   it("hides desktop-only settings from browser search", () => {
-    expect(SETTINGS_SEARCH_ITEMS.some((item) => item.id === "quit-confirmation")).toBe(true);
+    expect(SETTINGS_SEARCH_ITEMS.map((item) => item.id)).not.toContain("quit-confirmation");
     expect(searchSettings("hold to quit")).toEqual([]);
     expect(searchSettings("wsl")).toEqual([]);
     expect(searchSettings("update track")).toEqual([]);
   });
 
-  it("finds the About update rows", () => {
-    expect(searchSettings("check for updates").map((item) => item.id)).toContain("app-version");
-    expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "update-track")).toMatchObject({
-      title: "Update track",
-      to: "/settings/general",
-      releaseChannelOnly: true,
-    });
+  it("finds read-only server version information", () => {
+    expect(searchSettings("fork revision").map((item) => item.id)).toContain("app-version");
+    expect(searchSettings("update track")).toEqual([]);
   });
+
+  it.each(["latest", "nightly"] as const)(
+    "finds channel navigation in hosted %s builds",
+    (channel) => {
+      branding.channel = channel;
+      for (const query of ["web app channel", "update track"]) {
+        expect(searchSettings(query)).toContainEqual(
+          expect.objectContaining({
+            id: "update-track",
+            to: "/settings/general",
+          }),
+        );
+      }
+    },
+  );
 
   it("hides macOS-only settings on other platforms", () => {
     vi.stubGlobal("navigator", { platform: "Win32" });
@@ -148,16 +186,6 @@ describe("searchSettings", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-
-  it("registers the WSL backend as a desktop-only setting", () => {
-    expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "wsl-backend")).toMatchObject({
-      id: "wsl-backend",
-      title: "WSL backend",
-      to: "/settings/connections",
-      desktopOnly: true,
-      windowsOnly: true,
-    });
   });
 
   it("hides settings whose controls are unavailable", () => {
@@ -210,47 +238,6 @@ describe("searchSettings", () => {
       }).map((item) => item.id);
     expect(itemIds(false)).not.toContain("cursor-keychain-usage");
     expect(itemIds(true)).toContain("cursor-keychain-usage");
-  });
-
-  it("keeps the local toggle searchable without offering hidden host publishing controls", () => {
-    const availability = {
-      hasCloudPublicConfig: true,
-      hasEnvironment: true,
-      hasProviderSettingsEnvironment: true,
-      hasMacProviderSettingsEnvironment: false,
-      canManageLocalBackend: false,
-      isWslSettingsRowVisible: false,
-      hasThreadAutoSettlement: false,
-    };
-    const remoteOnly = filterAvailableSettingsSearchItems({
-      ...availability,
-      localEnvironmentDisabled: true,
-    }).map((item) => item.id);
-    expect(remoteOnly).toContain("local-environment");
-    expect(remoteOnly).not.toContain("t3-connect");
-    expect(remoteOnly).not.toContain("publish-agent-activity");
-    expect(remoteOnly).not.toContain("wsl-backend");
-    // Browsers without access:write still render CloudLinkRow for their host.
-    const browser = filterAvailableSettingsSearchItems(availability).map((item) => item.id);
-    expect(browser).toContain("publish-agent-activity");
-  });
-
-  it("offers webhook holding only while the managed tunnel is on, like its row", () => {
-    const availability = {
-      hasCloudPublicConfig: true,
-      hasEnvironment: true,
-      hasProviderSettingsEnvironment: true,
-      hasMacProviderSettingsEnvironment: false,
-      canManageLocalBackend: true,
-      isWslSettingsRowVisible: false,
-      hasThreadAutoSettlement: false,
-    };
-    const itemIds = (managedTunnelActive: boolean) =>
-      filterAvailableSettingsSearchItems({ ...availability, managedTunnelActive }).map(
-        (item) => item.id,
-      );
-    expect(itemIds(false)).not.toContain("hold-webhooks-while-offline");
-    expect(itemIds(true)).toContain("hold-webhooks-while-offline");
   });
 
   it("shows automatic settlement settings when the server supports them", () => {

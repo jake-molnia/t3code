@@ -17,7 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git python3 mak
 WORKDIR /src/t3
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm exec tsc --noEmit -p apps/server/tsconfig.json && pnpm --filter t3 build:bundle
+ARG T3_SOURCE_REVISION
+RUN pnpm exec tsc --noEmit -p apps/server/tsconfig.json \
+    && T3_BUILD_SOURCE_REVISION="$T3_SOURCE_REVISION" pnpm --filter t3 build:bundle
 FROM worker-build AS worker-package
 # Deploy changes pnpm workspace state; keep it separate from the web build.
 # pnpm preserves the locked, patched native dependency closure in a portable package.
@@ -64,7 +66,9 @@ RUN mv /usr/local/bin/opencode /usr/local/bin/opencode2 \
     && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
     && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs
+ARG T3_SOURCE_REVISION
 ENV PATH=/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_modules/.bin:/opt/native/bin:$PATH \
+    T3_SOURCE_REVISION=${T3_SOURCE_REVISION} \
     AZURE_EXTENSION_DIR=/opt/azure/extensions AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no AZURE_CORE_COLLECT_TELEMETRY=no \
     T3_WORKSPACE_ROOT=/workspace T3_WORKER_STATE_DIR=/workspace/.t3-worker \
     T3_GATEWAY_HARNESS_CONFIG_FILE=/opt/t3/gateway-harnesses.json \
@@ -104,7 +108,8 @@ RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_head_entrypoint.py \
 COPY images/t3/smoke-web.py images/t3/migrate-execution-profiles.py images/t3/test_migrate_execution_profiles.py /opt/t3/
 RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_migrate_execution_profiles.py \
     && rm /opt/t3/test_migrate_execution_profiles.py
-ENV HOME=/data T3CODE_HOME=/data/t3
+ARG T3_SOURCE_REVISION
+ENV HOME=/data T3CODE_HOME=/data/t3 T3_SOURCE_REVISION=${T3_SOURCE_REVISION}
 USER 1000:1000
 WORKDIR /data
 RUN python3 /opt/t3/smoke-web.py /opt/t3

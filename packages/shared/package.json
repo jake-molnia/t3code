@@ -279,10 +279,6 @@
       "types": "./src/terminalLabels.ts",
       "import": "./src/terminalLabels.ts"
     },
-    "./relayClient": {
-      "types": "./src/relayClient.ts",
-      "import": "./src/relayClient.ts"
-    },
     "./preview": {
       "types": "./src/preview.ts",
       "import": "./src/preview.ts"
@@ -354,10 +350,6 @@
     "./usageLimits": {
       "types": "./src/usageLimits.ts",
       "import": "./src/usageLimits.ts"
-    },
-    "./desktopAppControl": {
-      "types": "./src/desktopAppControl.ts",
-      "import": "./src/desktopAppControl.ts"
     },
     "./thirdPartyLicenses": {
       "types": "./src/thirdPartyLicenses.ts",

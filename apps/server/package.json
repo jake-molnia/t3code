@@ -4,7 +4,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pingdotgg/t3code",
+    "url": "https://github.com/jake-molnia/t3code",
     "directory": "apps/server"
   },
   "bin": {
@@ -69,7 +69,6 @@
     "@t3tools/provider-testing": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@t3tools/source-control-testing": "workspace:*",
-    "@t3tools/ssh": "workspace:*",
     "@t3tools/tailscale": "workspace:*",
     "@t3tools/web": "workspace:*",
     "@types/node": "catalog:",

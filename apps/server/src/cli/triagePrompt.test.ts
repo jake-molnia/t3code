@@ -38,37 +38,41 @@ it("launch prompt stays a single argv-safe line naming the prompt file", () => {
   assert.isBelow(launch.length, 1_000);
 });
 
-it("context file carries every path the playbook depends on", () => {
-  const context = buildTriageContext({
-    generatedAt: "2026-08-13T00:00:00.000Z",
-    version: "0.0.33",
-    releaseTag: "v0.0.33",
-    os: "linux x64 (7.0.0)",
-    nodeVersion: "v24.0.0",
-    launchedAs: "npx t3 triage",
-    server: "running (pid 42, http://127.0.0.1:4501)",
-    paths: {
-      stateDir: "/home/u/.t3/userdata",
-      dbPath: "/home/u/.t3/userdata/state.sqlite",
-      settingsPath: "/home/u/.t3/userdata/settings.json",
-      logsDir: "/home/u/.t3/userdata/logs",
-      serviceLogPath: "/home/u/.t3/userdata/logs/boot-service.log",
-      desktopBackendLogGlob: "/home/u/.t3/userdata/logs/server-child*.log*",
-      serverTracePath: "/home/u/.t3/userdata/logs/server.trace.ndjson",
-      providerEventLogPath: "/home/u/.t3/userdata/logs/provider/events.log",
-      terminalLogsDir: "/home/u/.t3/userdata/logs/terminals",
-      providerStatusCacheDir: "/home/u/.t3/caches",
-      secretsDir: "/home/u/.t3/userdata/secrets",
-      sourceCacheDir: "/home/u/.t3/source",
-    },
-  });
-  assert.include(context, "/home/u/.t3/userdata/state.sqlite");
-  assert.include(context, "/home/u/.t3/userdata/logs/server.trace.ndjson");
-  assert.include(context, "/home/u/.t3/userdata/logs/boot-service.log");
-  assert.include(context, "/home/u/.t3/userdata/logs/server-child*.log*");
-  assert.include(context, "/home/u/.t3/userdata/logs/provider/events.log");
-  assert.include(context, "/home/u/.t3/userdata/secrets");
-  assert.include(context, "/home/u/.t3/source");
-  assert.include(context, "npx t3 triage");
-  assert.include(context, "v0.0.33");
-});
+it.each(["a".repeat(40), null])(
+  "context carries deployment diagnostics and revision %s",
+  (sourceRevision) => {
+    const context = buildTriageContext({
+      generatedAt: "2026-08-13T00:00:00.000Z",
+      version: "0.0.33",
+      sourceRevision,
+      os: "linux x64 (7.0.0)",
+      nodeVersion: "v24.0.0",
+      launchedAs: "npx t3 triage",
+      server: "running (pid 42, http://127.0.0.1:4501)",
+      paths: {
+        stateDir: "/home/u/.t3/userdata",
+        dbPath: "/home/u/.t3/userdata/state.sqlite",
+        settingsPath: "/home/u/.t3/userdata/settings.json",
+        logsDir: "/home/u/.t3/userdata/logs",
+        serverTracePath: "/home/u/.t3/userdata/logs/server.trace.ndjson",
+        providerEventLogPath: "/home/u/.t3/userdata/logs/provider/events.log",
+        terminalLogsDir: "/home/u/.t3/userdata/logs/terminals",
+        providerStatusCacheDir: "/home/u/.t3/caches",
+        secretsDir: "/home/u/.t3/userdata/secrets",
+        sourceCacheDir: "/home/u/.t3/source",
+      },
+    });
+    assert.include(context, "/home/u/.t3/userdata/state.sqlite");
+    assert.include(context, "/home/u/.t3/userdata/logs/server.trace.ndjson");
+    assert.notInclude(context, "boot-service.log");
+    assert.notInclude(context, "server-child");
+    assert.include(context, "stdout and stderr collected by the deployment platform");
+    assert.include(context, "https://github.com/jake-molnia/t3code");
+    assert.include(context, "/home/u/.t3/userdata/logs/provider/events.log");
+    assert.include(context, "/home/u/.t3/userdata/secrets");
+    assert.include(context, "/home/u/.t3/source");
+    assert.include(context, "npx t3 triage");
+    assert.include(context, "Package version: 0.0.33");
+    assert.include(context, sourceRevision ?? "Not recorded; ask the deployment administrator");
+  },
+);

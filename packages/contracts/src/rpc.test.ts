@@ -32,6 +32,13 @@ describe("subscribeServerConfig payload compatibility", () => {
 });
 
 describe("WebSocket RPC contracts", () => {
+  it("offers release notices without server update mutations", () => {
+    const methods = [...WsRpcGroup.requests.keys()];
+    expect(methods).toContain("server.getReleaseNotice");
+    expect(methods).not.toContain("server.updateServer");
+    expect(methods).not.toContain("server.updateServerWithProgress");
+  });
+
   it("exposes only the V2 orchestration transport surface", () => {
     const methods = [...WsRpcGroup.requests.keys()];
 
