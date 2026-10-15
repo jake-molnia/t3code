@@ -15,6 +15,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { getBuildSourceRevision } from "../buildMetadata.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
@@ -186,8 +187,6 @@ export const make = Effect.gen(function* () {
   const identity = yield* ServerEnvironmentIdentity;
   const hostPlatform = yield* HostProcess.Platform;
   const hostArchitecture = yield* HostProcess.Architecture;
-  const hostEnvironment = yield* HostProcess.Environment;
-  const revision = hostEnvironment.T3_SOURCE_REVISION?.trim();
   const environmentId = yield* identity.getEnvironmentId;
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
@@ -203,7 +202,7 @@ export const make = Effect.gen(function* () {
     serverVersion: packageJson.version,
     build: {
       sourceRepository: SERVER_SOURCE_REPOSITORY,
-      revision: revision && /^[0-9a-f]{40}$/.test(revision) ? revision : null,
+      revision: getBuildSourceRevision(),
       packageVersion: packageJson.version,
       upstreamVersion: packageJson.version.replace(/\.sandbox\.\d+$/, ""),
     },

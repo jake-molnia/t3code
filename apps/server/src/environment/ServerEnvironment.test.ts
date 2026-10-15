@@ -82,36 +82,38 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
   it.effect.each([
     { revision: undefined, expected: null },
     { revision: "not-a-commit", expected: null },
-    { revision: "a".repeat(40), expected: "a".repeat(40) },
-  ])("reports only recorded fork revisions: $revision", ({ revision, expected }) =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const baseDir = yield* fs.makeTempDirectoryScoped();
-      const config = yield* makeServerConfig(baseDir);
-      yield* fs.makeDirectory(config.stateDir, { recursive: true });
-      const descriptor = yield* Effect.gen(function* () {
-        const environment = yield* ServerEnvironment.ServerEnvironment;
-        return yield* environment.getDescriptor;
-      }).pipe(
-        Effect.provide(
-          ServerEnvironment.layer.pipe(
-            Layer.provide(layerEmptySecretStore),
-            Layer.provide(ServerConfig.layer({ ...config, mode: "web" })),
+    { revision: "a".repeat(40), expected: null },
+  ])(
+    "does not attribute ambient image provenance to source execution: $revision",
+    ({ revision, expected }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped();
+        const config = yield* makeServerConfig(baseDir);
+        yield* fs.makeDirectory(config.stateDir, { recursive: true });
+        const descriptor = yield* Effect.gen(function* () {
+          const environment = yield* ServerEnvironment.ServerEnvironment;
+          return yield* environment.getDescriptor;
+        }).pipe(
+          Effect.provide(
+            ServerEnvironment.layer.pipe(
+              Layer.provide(layerEmptySecretStore),
+              Layer.provide(ServerConfig.layer({ ...config, mode: "web" })),
+            ),
           ),
-        ),
-        Effect.provideService(
-          HostProcess.Environment,
-          revision ? { T3_SOURCE_REVISION: revision } : {},
-        ),
-      );
-      expect(descriptor.build?.revision).toBe(expected);
-      expect(descriptor.build?.sourceRepository).toBe("jake-molnia/t3code");
-      expect(descriptor.build?.packageVersion).toBe(descriptor.serverVersion);
-      expect(descriptor.build?.upstreamVersion).toBe(
-        descriptor.serverVersion.replace(/\.sandbox\.\d+$/, ""),
-      );
-      expect(descriptor.capabilities).not.toHaveProperty("serverSelfUpdate");
-    }),
+          Effect.provideService(
+            HostProcess.Environment,
+            revision ? { T3_SOURCE_REVISION: revision } : {},
+          ),
+        );
+        expect(descriptor.build?.revision).toBe(expected);
+        expect(descriptor.build?.sourceRepository).toBe("jake-molnia/t3code");
+        expect(descriptor.build?.packageVersion).toBe(descriptor.serverVersion);
+        expect(descriptor.build?.upstreamVersion).toBe(
+          descriptor.serverVersion.replace(/\.sandbox\.\d+$/, ""),
+        );
+        expect(descriptor.capabilities).not.toHaveProperty("serverSelfUpdate");
+      }),
   );
   it.effect.each([
     { name: "missing", content: undefined },

@@ -323,6 +323,9 @@ export function createDevRunnerEnv({
         `http://${isDesktopMode ? DESKTOP_DEV_LOOPBACK_HOST : "localhost"}:${webPort}`,
     };
 
+    // Checkout processes do not run the enclosing image's source.
+    delete output.T3_SOURCE_REVISION;
+
     if (configuredBaseDir !== undefined) {
       output.T3CODE_HOME = resolvedBaseDir;
     } else {

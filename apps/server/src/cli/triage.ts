@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/cli";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { getBuildSourceRevision } from "../buildMetadata.ts";
 import * as ServerConfig from "../config.ts";
 import { resolveBaseDir } from "../os-jank.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
@@ -183,15 +184,13 @@ export const triageCommand = Command.make("triage", {
       yield* fs.makeDirectory(scratchDir, { recursive: true });
 
       const version = packageJson.version;
-      const sourceRevision = (yield* HostProcess.Environment).T3_SOURCE_REVISION?.trim();
       const contextFilePath = path.join(scratchDir, "context.md");
       yield* fs.writeFileString(
         contextFilePath,
         buildTriageContext({
           generatedAt: DateTime.formatIso(now),
           version,
-          sourceRevision:
-            sourceRevision && /^[0-9a-f]{40}$/.test(sourceRevision) ? sourceRevision : null,
+          sourceRevision: getBuildSourceRevision(),
           os: `${yield* HostProcess.Platform} ${yield* HostProcess.Architecture} (${NodeOS.release()})`,
           nodeVersion: process.version,
           launchedAs: yield* resolveCliCommand("triage"),

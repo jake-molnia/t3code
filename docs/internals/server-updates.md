@@ -5,11 +5,16 @@ replacement runtime, restarts itself to install it, or restores SQLite during an
 upgrade. Deployment rollback and database migration compatibility belong to the
 operator.
 
-`T3_SOURCE_REVISION` records the fork commit baked into both the central and
-worker images, including for worker-side triage. The sandbox image workflow
-passes its source SHA as a build argument and checks both runtime images. An image
-built outside that workflow must supply the same argument; absent or invalid metadata
-is displayed as unknown rather than inferred from the upstream package version.
+The sandbox image workflow supplies `T3_SOURCE_REVISION` to both runtime images.
+The shared bundle build passes it as `T3_BUILD_SOURCE_REVISION`, embedding the
+source revision in the artifact used by About and triage. Images built outside
+that workflow must supply the same build argument. Runtime environment values
+cannot override the artifact's identity.
+
+Source-checkout execution has no embedded revision and reports it as unknown,
+including when launched inside a worker built from another commit. The dev runner
+also clears the inherited image variable. A standalone bundle build can supply
+`T3_BUILD_SOURCE_REVISION` explicitly; omitting it keeps provenance unknown.
 The package version retains the fork's `.sandbox.N` suffix. The upstream baseline
 is that version before the sandbox suffix; neither identifies the deployed fork
 commit.

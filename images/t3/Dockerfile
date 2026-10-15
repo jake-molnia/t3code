@@ -8,7 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git python3 mak
 WORKDIR /src/t3
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm exec tsc --noEmit -p apps/server/tsconfig.json && pnpm --filter t3 build:bundle
+ARG T3_SOURCE_REVISION
+RUN pnpm exec tsc --noEmit -p apps/server/tsconfig.json \
+    && T3_BUILD_SOURCE_REVISION="$T3_SOURCE_REVISION" pnpm --filter t3 build:bundle
 FROM worker-build AS worker-package
 # Deploy changes pnpm workspace state; keep it separate from the web build.
 # pnpm preserves the locked, patched native dependency closure in a portable package.
