@@ -47,7 +47,6 @@ import { describe } from "vite-plus/test";
 import * as ResetCreditCoordinator from "../provider/resetCreditCoordinator.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import * as HostPowerMonitor from "../background/HostPowerMonitor.ts";
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CodexInstallation from "../provider/CodexInstallation.ts";
@@ -164,10 +163,7 @@ const layerServerSettings = ServerSettings.layerTest({
     },
   },
 });
-const layerBackgroundPolicy = BackgroundPolicy.layer.pipe(
-  Layer.provide(Layer.effect(HostPowerMonitor.HostPowerMonitor, HostPowerMonitor.make())),
-  Layer.provide(layerServerSettings),
-);
+const layerBackgroundPolicy = BackgroundPolicy.layer.pipe(Layer.provide(layerServerSettings));
 const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pipe(
   Layer.provide(
     Layer.mergeAll(

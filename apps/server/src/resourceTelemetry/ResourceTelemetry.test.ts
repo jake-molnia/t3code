@@ -1,5 +1,4 @@
 import type {
-  DesktopHostTelemetrySnapshot,
   ResourceMonitorProcessSample,
   ResourceMonitorSnapshotEvent,
 } from "@t3tools/contracts";
@@ -13,10 +12,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as DesktopTelemetryReceiver from "./DesktopTelemetryReceiver.ts";
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
 import * as ResourceAttribution from "./ResourceAttribution.ts";
 import * as ResourceTelemetry from "./ResourceTelemetry.ts";
@@ -65,14 +65,6 @@ function nativeSnapshot(input: {
       ioWriteBytes: input.childWriteBytes,
     }),
     processSample({
-      pid: 5_000,
-      ppid: 1,
-      startTimeMs: 300,
-      name: "electron",
-      command: "electron",
-      cpuTimeMs: input.sequence * 20,
-    }),
-    processSample({
       pid: 9_000,
       ppid: process.pid,
       startTimeMs: 400,
@@ -104,45 +96,8 @@ function nativeGeneration(
   return { generation, snapshot };
 }
 
-function desktopSnapshot(sampledAtUnixMs: number): DesktopHostTelemetrySnapshot {
-  const sampledAt = DateTime.makeUnsafe(sampledAtUnixMs);
-  return {
-    version: 1,
-    type: "desktopTelemetry",
-    sequence: 1,
-    sampledAtUnixMs,
-    electronPid: 5_000,
-    power: {
-      source: "electron-main",
-      idle: "false",
-      idleSeconds: 2,
-      locked: "false",
-      suspended: false,
-      onBattery: "true",
-      lowPowerMode: "unknown",
-      thermalState: "fair",
-      stale: false,
-      updatedAt: sampledAt,
-    },
-    speedLimitPercent: Option.some(90),
-    electronProcesses: [
-      {
-        pid: 5_000,
-        creationTimeMs: 300,
-        type: "Browser",
-        name: "electron",
-        cpuPercent: 2,
-        cumulativeCpuSeconds: 0.02,
-        idleWakeupsPerSecond: 3,
-        workingSetBytes: 4_096,
-        peakWorkingSetBytes: 8_192,
-      },
-    ],
-  };
-}
-
 describe("ResourceTelemetry", () => {
-  it.effect("enables live native and Electron collection only while changes are retained", () =>
+  it.effect("enables live native collection only while changes are retained", () =>
     Effect.gen(function* () {
       const sampledAtUnixMs = DateTime.toEpochMillis(yield* DateTime.now);
       const sample = nativeSnapshot({
@@ -152,8 +107,17 @@ describe("ResourceTelemetry", () => {
         childWriteBytes: 1_000,
       });
       const demandChanges = yield* Ref.make<ReadonlyArray<boolean>>([]);
+      const subscribed = yield* Deferred.make<void>();
       const layerNative = NativeTelemetryClient.layerTest({
-        sampleNow: Effect.succeed(nativeGeneration(sample, 0)),
+        snapshots: Stream.unwrap(
+          Effect.acquireRelease(
+            Ref.update(demandChanges, (changes) => [...changes, true]).pipe(
+              Effect.andThen(Deferred.succeed(subscribed, undefined)),
+            ),
+            () => Ref.update(demandChanges, (changes) => [...changes, false]),
+          ).pipe(Effect.as(Stream.never)),
+        ),
+        sampleNow: Deferred.await(subscribed).pipe(Effect.as(nativeGeneration(sample, 0))),
         health: Effect.succeed({
           status: "healthy",
           hello: Option.none(),
@@ -163,13 +127,8 @@ describe("ResourceTelemetry", () => {
           sampleIntervalMs: 1_000,
         }),
       });
-      const layerDesktop = DesktopTelemetryReceiver.layerTest({
-        latest: Effect.succeedSome(desktopSnapshot(sampledAtUnixMs)),
-        setDiagnosticsDemand: (enabled) =>
-          Ref.update(demandChanges, (changes) => [...changes, enabled]),
-      });
       const layerTelemetry = ResourceTelemetry.layer.pipe(
-        Layer.provide(Layer.mergeAll(layerNative, layerDesktop, ResourceAttribution.layer)),
+        Layer.provide(Layer.mergeAll(layerNative, ResourceAttribution.layer)),
       );
 
       const live = yield* Stream.runHead(
@@ -184,11 +143,57 @@ describe("ResourceTelemetry", () => {
     }),
   );
 
+  it.effect("shares native collection until the last subscriber releases it", () =>
+    Effect.gen(function* () {
+      const demandChanges = yield* Ref.make<ReadonlyArray<boolean>>([]);
+      const subscribed = yield* Deferred.make<void>();
+      const layerNative = NativeTelemetryClient.layerTest({
+        sampleNow: Effect.never,
+        snapshots: Stream.unwrap(
+          Effect.acquireRelease(
+            Ref.update(demandChanges, (changes) => [...changes, true]).pipe(
+              Effect.andThen(Deferred.succeed(subscribed, undefined)),
+            ),
+            () => Ref.update(demandChanges, (changes) => [...changes, false]),
+          ).pipe(Effect.as(Stream.never)),
+        ),
+      });
+      yield* Effect.gen(function* () {
+        const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
+        const first = yield* Scope.make();
+        const second = yield* Scope.make();
+        expect(yield* Ref.get(demandChanges)).toEqual([]);
+        yield* Scope.provide(first)(telemetry.subscribe);
+        yield* Deferred.await(subscribed);
+        yield* Scope.provide(second)(telemetry.subscribe);
+        expect(yield* Ref.get(demandChanges)).toEqual([true]);
+        yield* Scope.close(first, Exit.void);
+        expect(yield* Ref.get(demandChanges)).toEqual([true]);
+        yield* Scope.close(second, Exit.void);
+        expect(yield* Ref.get(demandChanges)).toEqual([true, false]);
+      }).pipe(
+        Effect.provide(
+          ResourceTelemetry.layer.pipe(
+            Layer.provide(Layer.mergeAll(layerNative, ResourceAttribution.layer)),
+          ),
+        ),
+      );
+    }),
+  );
+
   it.effect("releases live demand when acquisition is interrupted by an idle collector", () =>
     Effect.gen(function* () {
-      const sampledAtUnixMs = DateTime.toEpochMillis(yield* DateTime.now);
       const demandChanges = yield* Ref.make<ReadonlyArray<boolean>>([]);
+      const subscribed = yield* Deferred.make<void>();
       const layerNative = NativeTelemetryClient.layerTest({
+        snapshots: Stream.unwrap(
+          Effect.acquireRelease(
+            Ref.update(demandChanges, (changes) => [...changes, true]).pipe(
+              Effect.andThen(Deferred.succeed(subscribed, undefined)),
+            ),
+            () => Ref.update(demandChanges, (changes) => [...changes, false]),
+          ).pipe(Effect.as(Stream.never)),
+        ),
         sampleNow: Effect.never,
         health: Effect.succeed({
           status: "healthy",
@@ -199,13 +204,8 @@ describe("ResourceTelemetry", () => {
           sampleIntervalMs: 1_000,
         }),
       });
-      const layerDesktop = DesktopTelemetryReceiver.layerTest({
-        latest: Effect.succeedSome(desktopSnapshot(sampledAtUnixMs)),
-        setDiagnosticsDemand: (enabled) =>
-          Ref.update(demandChanges, (changes) => [...changes, enabled]),
-      });
       const layerTelemetry = ResourceTelemetry.layer.pipe(
-        Layer.provide(Layer.mergeAll(layerNative, layerDesktop, ResourceAttribution.layer)),
+        Layer.provide(Layer.mergeAll(layerNative, ResourceAttribution.layer)),
       );
 
       const resultFiber = yield* Stream.runHead(
@@ -213,61 +213,11 @@ describe("ResourceTelemetry", () => {
           const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
           return telemetry.changes;
         }).pipe(Stream.unwrap),
-      ).pipe(Effect.timeoutOption("10 millis"), Effect.provide(layerTelemetry), Effect.forkChild);
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("10 millis");
-      const result = yield* Fiber.join(resultFiber);
-
-      expect(Option.isNone(result)).toBe(true);
+      ).pipe(Effect.provide(layerTelemetry), Effect.forkChild);
+      yield* Deferred.await(subscribed);
+      yield* Fiber.interrupt(resultFiber);
       expect(yield* Ref.get(demandChanges)).toEqual([true, false]);
     }),
-  );
-
-  it.effect(
-    "attributes an initial Electron root from the identity recorded by the native snapshot",
-    () =>
-      Effect.gen(function* () {
-        const sampledAtUnixMs = DateTime.toEpochMillis(yield* DateTime.now);
-        const sample = nativeSnapshot({
-          sequence: 1,
-          sampledAtUnixMs,
-          childCpuTimeMs: 100,
-          childWriteBytes: 1_000,
-          externalProcesses: [{ pid: 5_000, startTimeMs: 300 }],
-        });
-        const desktop = {
-          ...desktopSnapshot(sampledAtUnixMs),
-          electronProcesses: [],
-        };
-        const layerNative = NativeTelemetryClient.layerTest({
-          sampleNow: Effect.succeed(nativeGeneration(sample, 0)),
-          health: Effect.succeed({
-            status: "healthy",
-            hello: Option.none(),
-            lastSampleAt: Option.none(),
-            lastError: Option.none(),
-            restartCount: 0,
-            sampleIntervalMs: 1_000,
-          }),
-        });
-        const layerDesktop = DesktopTelemetryReceiver.layerTest({
-          latest: Effect.succeedSome(desktop),
-        });
-        const layerTelemetry = ResourceTelemetry.layer.pipe(
-          Layer.provide(Layer.mergeAll(layerNative, layerDesktop, ResourceAttribution.layer)),
-        );
-
-        const snapshot = yield* Effect.gen(function* () {
-          const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
-          return yield* telemetry.refresh;
-        }).pipe(Effect.provide(layerTelemetry));
-
-        expect(snapshot.processes.find((entry) => entry.identity.pid === 5_000)?.category).toBe(
-          "electron-main",
-        );
-        expect(snapshot.groups.electron.processStarts).toBe(1);
-        expect(snapshot.groups.backend.processStarts).toBe(3);
-      }),
   );
 
   it.effect("rejects buffered snapshots from an earlier sidecar generation", () =>
@@ -301,13 +251,7 @@ describe("ResourceTelemetry", () => {
           }),
         });
         const layerTelemetry = ResourceTelemetry.layer.pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              layerNative,
-              DesktopTelemetryReceiver.layerTest(),
-              ResourceAttribution.layer,
-            ),
-          ),
+          Layer.provide(Layer.mergeAll(layerNative, ResourceAttribution.layer)),
         );
 
         yield* Effect.gen(function* () {
@@ -331,142 +275,7 @@ describe("ResourceTelemetry", () => {
     ),
   );
 
-  it.effect("retains desktop health changes while aggregate telemetry initializes", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const health = yield* Ref.make<DesktopTelemetryReceiver.DesktopTelemetryReceiverHealth>({
-          status: "starting",
-          lastSampleAt: Option.none(),
-          lastError: Option.none(),
-        });
-        const healthChanges =
-          yield* PubSub.sliding<DesktopTelemetryReceiver.DesktopTelemetryReceiverHealth>(4);
-        const healthSubscribed = yield* Deferred.make<void>();
-        const finishDesktopSnapshot = yield* Deferred.make<void>();
-        const layerDesktop = DesktopTelemetryReceiver.layerTest({
-          health: Ref.get(health),
-          subscribeHealth: Effect.gen(function* () {
-            const subscription = yield* PubSub.subscribe(healthChanges);
-            const latest = yield* Ref.get(health);
-            yield* Deferred.succeed(healthSubscribed, undefined);
-            return {
-              latest,
-              changes: Stream.fromSubscription(subscription),
-            };
-          }),
-          subscribe: Deferred.await(finishDesktopSnapshot).pipe(
-            Effect.as({
-              latest: Option.none(),
-              changes: Stream.empty,
-            }),
-          ),
-        });
-        const layerTelemetry = ResourceTelemetry.layer.pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              NativeTelemetryClient.layerTest(),
-              layerDesktop,
-              ResourceAttribution.layer,
-            ),
-          ),
-        );
-        const resultFiber = yield* Effect.gen(function* () {
-          const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
-          while (true) {
-            const snapshot = yield* telemetry.latest;
-            if (snapshot.health.desktop.status === "degraded") return snapshot;
-            yield* Effect.yieldNow;
-          }
-        }).pipe(Effect.provide(layerTelemetry), Effect.timeout("1 second"), Effect.forkChild);
-
-        yield* Deferred.await(healthSubscribed);
-        const degraded: DesktopTelemetryReceiver.DesktopTelemetryReceiverHealth = {
-          status: "degraded",
-          lastSampleAt: Option.none(),
-          lastError: Option.some("desktop telemetry failed"),
-        };
-        yield* Ref.set(health, degraded);
-        yield* PubSub.publish(healthChanges, degraded);
-        yield* Deferred.succeed(finishDesktopSnapshot, undefined);
-
-        const snapshot = yield* Fiber.join(resultFiber);
-        expect(snapshot.health.desktop.status).toBe("degraded");
-        expect(Option.getOrNull(snapshot.health.desktop.lastError)).toBe(
-          "desktop telemetry failed",
-        );
-      }),
-    ),
-  );
-
-  it.effect("atomically subscribes while a desktop update is being rebuilt", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const startedAt = DateTime.toEpochMillis(yield* DateTime.now);
-        const nextDesktopSnapshot = desktopSnapshot(startedAt + 1_000);
-        const desktopChanges = yield* PubSub.unbounded<DesktopHostTelemetrySnapshot>();
-        const rebuildStarted = yield* Deferred.make<void>();
-        const finishRebuild = yield* Deferred.make<void>();
-        const attributionReads = yield* Ref.make(0);
-        const layerAttribution = Layer.succeed(
-          ResourceAttribution.ResourceAttribution,
-          ResourceAttribution.ResourceAttribution.of({
-            record: () => Effect.void,
-            snapshot: Ref.updateAndGet(attributionReads, (count) => count + 1).pipe(
-              Effect.flatMap((count) =>
-                count === 1
-                  ? Effect.void
-                  : Deferred.succeed(rebuildStarted, undefined).pipe(
-                      Effect.andThen(Deferred.await(finishRebuild)),
-                    ),
-              ),
-              Effect.andThen(
-                Effect.succeed({
-                  readAt: DateTime.makeUnsafe(startedAt),
-                  entries: [],
-                }),
-              ),
-            ),
-          }),
-        );
-        const layerNative = NativeTelemetryClient.layerTest({
-          sampleNow: Effect.never,
-          health: Effect.succeed({
-            status: "healthy",
-            hello: Option.none(),
-            lastSampleAt: Option.none(),
-            lastError: Option.none(),
-            restartCount: 0,
-            sampleIntervalMs: 1_000,
-          }),
-        });
-        const layerDesktop = DesktopTelemetryReceiver.layerTest({
-          changes: Stream.fromPubSub(desktopChanges),
-        });
-        const layerTelemetry = ResourceTelemetry.layer.pipe(
-          Layer.provide(Layer.mergeAll(layerNative, layerDesktop, layerAttribution)),
-        );
-
-        yield* Effect.gen(function* () {
-          const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
-          yield* Effect.yieldNow;
-          yield* PubSub.publish(desktopChanges, nextDesktopSnapshot);
-          yield* Deferred.await(rebuildStarted);
-
-          const subscriptionFiber = yield* telemetry.subscribe.pipe(Effect.forkChild);
-          yield* Effect.yieldNow;
-          yield* Deferred.succeed(finishRebuild, undefined);
-          const subscription = yield* Fiber.join(subscriptionFiber);
-
-          expect(DateTime.toEpochMillis(subscription.latest.readAt)).toBe(
-            nextDesktopSnapshot.sampledAtUnixMs,
-          );
-          expect(subscription.latest.power).toEqual(nextDesktopSnapshot.power);
-        }).pipe(Effect.provide(layerTelemetry));
-      }),
-    ),
-  );
-
-  it.effect("combines native, Electron, attribution, retry, and history data", () =>
+  it.effect("combines native, attribution, retry, and history data", () =>
     Effect.gen(function* () {
       const startedAt = DateTime.toEpochMillis(yield* DateTime.now);
       const samples = [
@@ -490,9 +299,6 @@ describe("ResourceTelemetry", () => {
         }),
       ] as const;
       const sampleIndex = yield* Ref.make(0);
-      const externalProcesses = yield* Ref.make<
-        ReadonlyArray<{ readonly pid: number; readonly startTimeMs?: number }>
-      >([]);
       const retryCount = yield* Ref.make(0);
       const nativeHealth = yield* Ref.make<NativeTelemetryClient.NativeTelemetryClientHealth>({
         status: "healthy",
@@ -521,7 +327,6 @@ describe("ResourceTelemetry", () => {
       const nativeHealthChanges =
         yield* PubSub.sliding<NativeTelemetryClient.NativeTelemetryClientHealth>(4);
       const layerNative = NativeTelemetryClient.layerTest({
-        setExternalProcesses: (processes) => Ref.set(externalProcesses, processes),
         readHistory: () => Effect.succeed(samples.slice(0, 2)),
         sampleNow: Ref.modify(sampleIndex, (index) => {
           const sampleIndex = Math.min(index, samples.length - 1);
@@ -538,24 +343,14 @@ describe("ResourceTelemetry", () => {
           };
         }),
       });
-      const layerDesktop = DesktopTelemetryReceiver.layerTest({
-        latest: Effect.succeedSome(desktopSnapshot(startedAt)),
-        health: Effect.succeed({
-          status: "healthy",
-          lastSampleAt: Option.some(DateTime.makeUnsafe(startedAt)),
-          lastError: Option.none(),
-        }),
-      });
       const layerAttribution = ResourceAttribution.layer;
-      const layerDependencies = Layer.mergeAll(layerNative, layerDesktop, layerAttribution);
+      const layerDependencies = Layer.mergeAll(layerNative, layerAttribution);
       const layerTelemetry = ResourceTelemetry.layer.pipe(Layer.provide(layerDependencies));
       const layer = Layer.mergeAll(layerDependencies, layerTelemetry);
 
       yield* Effect.gen(function* () {
         const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
         const attribution = yield* ResourceAttribution.ResourceAttribution;
-
-        expect(yield* Ref.get(externalProcesses)).toEqual([{ pid: 5_000, startTimeMs: 300 }]);
 
         yield* attribution.record({
           component: "provider-event-log",
@@ -566,10 +361,7 @@ describe("ResourceTelemetry", () => {
         });
         const first = yield* telemetry.refresh;
         expect(first.groups.backend.processCount).toBe(2);
-        expect(first.groups.electron.processCount).toBe(1);
         expect(first.groups.monitor.processCount).toBe(1);
-        expect(first.power.onBattery).toBe("true");
-        expect(Option.getOrNull(first.speedLimitPercent)).toBe(90);
         expect(first.attribution.entries).toEqual([
           {
             component: "provider-event-log",

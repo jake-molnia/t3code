@@ -1,5 +1,4 @@
 import type {
-  DesktopHostTelemetrySnapshot,
   ResourceMonitorProcessSample,
   ResourceMonitorSnapshotEvent,
   ResourceTelemetryHealth,
@@ -14,8 +13,7 @@ import {
 } from "./ResourceTelemetryHistory.ts";
 
 const SERVER_PID = 100;
-const ELECTRON_PID = 200;
-const CHILD_PID = 300;
+const CHILD_PID = 200;
 const STARTED_AT_MS = DateTime.toEpochMillis(DateTime.makeUnsafe("2026-06-17T12:00:00.000Z"));
 
 function processSample(
@@ -47,13 +45,6 @@ function snapshot(
   const processes = [
     processSample({ pid: SERVER_PID, ppid: 1, startTimeMs: 10 }),
     processSample({
-      pid: ELECTRON_PID,
-      ppid: 1,
-      startTimeMs: 20,
-      name: "electron",
-      command: "electron",
-    }),
-    processSample({
       pid: CHILD_PID,
       ppid: SERVER_PID,
       startTimeMs: 30,
@@ -82,11 +73,6 @@ const health: ResourceTelemetryHealth = {
     lastSampleAt: Option.none(),
     lastError: Option.none(),
   },
-  desktop: {
-    status: "healthy",
-    lastSampleAt: Option.none(),
-    lastError: Option.none(),
-  },
   sidecarVersion: Option.some("0.1.0"),
   sidecarPid: Option.some(400),
   restartCount: 0,
@@ -96,41 +82,6 @@ const health: ResourceTelemetryHealth = {
   inaccessibleProcessCount: 0,
 };
 
-function desktopSnapshot(): DesktopHostTelemetrySnapshot {
-  const sampledAt = DateTime.makeUnsafe(STARTED_AT_MS + 1_000);
-  return {
-    version: 1,
-    type: "desktopTelemetry",
-    sequence: 1,
-    sampledAtUnixMs: STARTED_AT_MS + 1_000,
-    electronPid: ELECTRON_PID,
-    power: {
-      source: "electron-main",
-      idle: "false",
-      idleSeconds: 0,
-      locked: "false",
-      suspended: false,
-      onBattery: "false",
-      lowPowerMode: "unknown",
-      thermalState: "nominal",
-      stale: false,
-      updatedAt: sampledAt,
-    },
-    speedLimitPercent: Option.none(),
-    electronProcesses: [
-      {
-        pid: ELECTRON_PID,
-        creationTimeMs: 20,
-        type: "Browser",
-        cpuPercent: 999,
-        idleWakeupsPerSecond: 999,
-        workingSetBytes: 999_999,
-        peakWorkingSetBytes: 999_999,
-      },
-    ],
-  };
-}
-
 describe("buildResourceTelemetryHistory", () => {
   it("normalizes query bounds before requesting native history", () => {
     expect(normalizeResourceTelemetryHistoryInput({ windowMs: 0, bucketMs: 0 })).toEqual({
@@ -139,7 +90,7 @@ describe("buildResourceTelemetryHistory", () => {
     });
   });
 
-  it("replays native snapshots on demand without applying current Electron metrics", () => {
+  it("replays native snapshots on demand", () => {
     const history = buildResourceTelemetryHistory({
       readAt: DateTime.makeUnsafe(STARTED_AT_MS + 2_000),
       windowMs: 10_000,
@@ -147,7 +98,6 @@ describe("buildResourceTelemetryHistory", () => {
       sampleIntervalMs: 1_000,
       serverPid: SERVER_PID,
       sidecarPid: Option.some(400),
-      desktopSnapshot: Option.some(desktopSnapshot()),
       snapshots: [
         snapshot(1, STARTED_AT_MS, 100, 1_000),
         snapshot(2, STARTED_AT_MS + 1_000, 350, 5_000),
@@ -156,12 +106,11 @@ describe("buildResourceTelemetryHistory", () => {
     });
 
     const child = history.topProcesses.find((process) => process.identity.pid === CHILD_PID);
-    const electron = history.topProcesses.find((process) => process.identity.pid === ELECTRON_PID);
     expect(child?.sampleCount).toBe(2);
     expect(child?.cpuTimeMs).toBe(250);
     expect(child?.ioWriteBytes).toBe(4_000);
-    expect(electron?.category).toBe("electron-main");
-    expect(electron?.currentRssBytes).toBe(1_024);
+    expect(child?.category).toBe("server-child");
+    expect(child?.currentRssBytes).toBe(1_024);
     expect(history.buckets.reduce((total, bucket) => total + bucket.ioWriteBytes, 0)).toBe(4_000);
   });
 
@@ -175,7 +124,6 @@ describe("buildResourceTelemetryHistory", () => {
       sampleIntervalMs: 1_000,
       serverPid: SERVER_PID,
       sidecarPid: Option.none(),
-      desktopSnapshot: Option.none(),
       snapshots: [
         {
           ...first,
@@ -213,7 +161,6 @@ describe("buildResourceTelemetryHistory", () => {
       sampleIntervalMs: 1_000,
       serverPid: SERVER_PID,
       sidecarPid: Option.none(),
-      desktopSnapshot: Option.none(),
       snapshots: [
         first,
         {
@@ -230,24 +177,6 @@ describe("buildResourceTelemetryHistory", () => {
     expect(child?.ioWriteBytes).toBe(4_000);
   });
 
-  it("uses an exact current Electron identity for slightly older native samples", () => {
-    const history = buildResourceTelemetryHistory({
-      readAt: DateTime.makeUnsafe(STARTED_AT_MS + 2_000),
-      windowMs: 10_000,
-      bucketMs: 10_000,
-      sampleIntervalMs: 1_000,
-      serverPid: SERVER_PID,
-      sidecarPid: Option.none(),
-      desktopSnapshot: Option.some(desktopSnapshot()),
-      snapshots: [snapshot(1, STARTED_AT_MS, 100, 1_000)],
-      health,
-    });
-
-    expect(
-      history.topProcesses.find((process) => process.identity.pid === ELECTRON_PID)?.category,
-    ).toBe("electron-main");
-  });
-
   it("uses the preceding sample as a baseline without attributing pre-window deltas", () => {
     const readAtMs = STARTED_AT_MS + 10_000;
     const history = buildResourceTelemetryHistory({
@@ -257,7 +186,6 @@ describe("buildResourceTelemetryHistory", () => {
       sampleIntervalMs: 1_000,
       serverPid: SERVER_PID,
       sidecarPid: Option.none(),
-      desktopSnapshot: Option.none(),
       snapshots: [
         snapshot(1, STARTED_AT_MS, 100, 1_000),
         snapshot(2, STARTED_AT_MS + 5_000, 600, 6_000),
@@ -285,7 +213,6 @@ describe("buildResourceTelemetryHistory", () => {
       sampleIntervalMs: 1_000,
       serverPid: SERVER_PID,
       sidecarPid: Option.none(),
-      desktopSnapshot: Option.none(),
       snapshots: [
         snapshot(1, STARTED_AT_MS, 100, 1_000),
         snapshot(2, STARTED_AT_MS + 7_500, 850, 8_500),
@@ -297,61 +224,5 @@ describe("buildResourceTelemetryHistory", () => {
     expect(child?.cpuTimeMs).toBe(250);
     expect(child?.ioWriteBytes).toBe(2_500);
     expect(history.buckets.reduce((total, bucket) => total + bucket.ioWriteBytes, 0)).toBe(2_500);
-  });
-
-  it("replays the Electron root identity recorded with each native sample", () => {
-    const oldElectron = snapshot(1, STARTED_AT_MS, 100, 1_000);
-    const restartedElectron = snapshot(2, STARTED_AT_MS + 1_000, 200, 2_000);
-    const history = buildResourceTelemetryHistory({
-      readAt: DateTime.makeUnsafe(STARTED_AT_MS + 2_000),
-      windowMs: 10_000,
-      bucketMs: 10_000,
-      sampleIntervalMs: 1_000,
-      serverPid: SERVER_PID,
-      sidecarPid: Option.none(),
-      desktopSnapshot: Option.none(),
-      snapshots: [
-        {
-          ...oldElectron,
-          externalProcesses: [{ pid: ELECTRON_PID, startTimeMs: 20 }],
-        },
-        {
-          ...restartedElectron,
-          externalProcesses: [{ pid: 201, startTimeMs: 40 }],
-          processes: [
-            ...restartedElectron.processes.filter((process) => process.pid !== ELECTRON_PID),
-            processSample({
-              pid: ELECTRON_PID,
-              ppid: SERVER_PID,
-              startTimeMs: 999,
-              name: "reused",
-              command: "unrelated process",
-            }),
-            processSample({
-              pid: 201,
-              ppid: 1,
-              startTimeMs: 40,
-              name: "electron",
-              command: "electron",
-            }),
-          ],
-        },
-      ],
-      health,
-    });
-
-    expect(
-      history.topProcesses.find(
-        (process) => process.identity.pid === ELECTRON_PID && process.identity.startTimeMs === 20,
-      )?.category,
-    ).toBe("electron-main");
-    expect(
-      history.topProcesses.find(
-        (process) => process.identity.pid === ELECTRON_PID && process.identity.startTimeMs === 999,
-      )?.category,
-    ).toBe("server-child");
-    expect(history.topProcesses.find((process) => process.identity.pid === 201)?.category).toBe(
-      "electron-main",
-    );
   });
 });

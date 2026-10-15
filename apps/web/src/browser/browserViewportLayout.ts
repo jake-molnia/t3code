@@ -23,7 +23,7 @@ export interface BrowserViewportLayout {
 // on both sides, inside the toolbar's 1px bottom border. The bar scrolls
 // horizontally, which also clips anything that overflows vertically.
 export const BROWSER_DEVICE_TOOLBAR_HEIGHT = 38;
-export const BROWSER_VIEWPORT_RESIZE_RAIL_SIZE = 10;
+const BROWSER_VIEWPORT_RESIZE_RAIL_SIZE = 10;
 
 export type BrowserViewportResizeDirection =
   | "north"
@@ -70,7 +70,7 @@ export function resolveFittedBrowserViewport(
   return { _tag: "freeform", width: 1280, height: 800 };
 }
 
-export function resolveBrowserDeviceViewportArea(container: {
+function resolveBrowserDeviceViewportArea(container: {
   readonly width: number;
   readonly height: number;
 }): PreviewViewportSize {

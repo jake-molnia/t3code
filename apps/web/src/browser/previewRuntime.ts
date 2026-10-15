@@ -58,7 +58,7 @@ export function usePreviewAvailable(environmentId: EnvironmentId | null): boolea
  * app renders tabs of the server it launched, which drives them over the
  * desktop browser channel; every other client and environment streams them.
  */
-export function rendersServerTabNatively(
+function rendersServerTabNatively(
   environmentId: EnvironmentId,
   primaryEnvironmentId: EnvironmentId | null,
   snapshot: Pick<PreviewSessionSnapshot, "runtime"> | null | undefined,
