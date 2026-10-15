@@ -11,7 +11,6 @@ import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
 
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "./config.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -30,15 +29,12 @@ import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
-import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 
 it.effect("parks automatic pull until activation without delaying command readiness", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const activation = yield* Deferred.make<void>();
-      const prepared = yield* Deferred.make<void>();
-      const commitTrial = yield* Deferred.make<void>();
       const statusCalled = yield* Deferred.make<string>();
       const statusInterrupted = yield* Deferred.make<void>();
       const cwd = "/auto-pull-project";
@@ -147,13 +143,6 @@ it.effect("parks automatic pull until activation without delaying command readin
             }),
         }),
         Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
-        Layer.mock(ServiceLauncherClient.ServiceLauncherClient)({
-          managed: true,
-          prepareTrial: Deferred.succeed(prepared, undefined).pipe(
-            Effect.andThen(Deferred.await(commitTrial)),
-            Effect.as(undefined),
-          ),
-        }),
         Layer.mock(GitVcsDriver.GitVcsDriver)({
           statusDetails: (root) =>
             Deferred.succeed(statusCalled, root).pipe(
@@ -161,7 +150,6 @@ it.effect("parks automatic pull until activation without delaying command readin
               Effect.onInterrupt(() => Deferred.succeed(statusInterrupted, undefined)),
             ),
         }),
-        Layer.mock(AnalyticsService.AnalyticsService)({ record: () => Effect.void }),
         NodeCrypto.layer,
         Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
         Layer.mock(ExternalLauncher.ExternalLauncher)({}),
@@ -175,14 +163,6 @@ it.effect("parks automatic pull until activation without delaying command readin
         const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
         yield* startup.markHttpListening;
 
-        // A reverted, awaited pull reaches statusDetails instead of prepareTrial.
-        // Race the two receipts so that regression fails without a timeout.
-        yield* Effect.raceFirst(Deferred.await(prepared), Deferred.await(statusCalled));
-        expect(yield* Deferred.isDone(activation)).toBe(false);
-        expect(yield* Deferred.isDone(statusCalled)).toBe(false);
-        expect(yield* Deferred.isDone(prepared)).toBe(true);
-
-        yield* Deferred.succeed(commitTrial, undefined);
         yield* Deferred.await(activation);
         expect(yield* Deferred.await(statusCalled)).toBe(cwd);
         // statusDetails can never finish; readiness must not depend on it.

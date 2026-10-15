@@ -1,3 +1,4 @@
+import * as AntigravityInstallation from "../provider/AntigravityInstallation.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -122,6 +123,7 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
       ),
       // These provider tests never launch Codex.
       Layer.mock(CodexInstallation.CodexInstallation)({}),
+      Layer.mock(AntigravityInstallation.AntigravityInstallation)({}),
       Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
         getEnvironmentId: Effect.succeed(
           EnvironmentId.make("00000000-0000-4000-8000-000000000001"),

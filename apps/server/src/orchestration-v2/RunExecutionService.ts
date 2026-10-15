@@ -1266,11 +1266,6 @@ export const layer: Layer.Layer<
                     event.type === "provider_thread.updated" &&
                     event.providerThread.id === input.providerThread.id;
                   const storedEvents = yield* providerEventIngestor.ingestNormalized({
-                    analyticsContext: {
-                      modelSelection: input.modelSelection,
-                      runtimeMode: input.runtimePolicy.runtimeMode,
-                      interactionMode: input.runtimePolicy.interactionMode,
-                    },
                     providerSessionId: input.providerSessionId,
                     providerInstanceId: input.run.providerInstanceId,
                     threadId: input.run.threadId,

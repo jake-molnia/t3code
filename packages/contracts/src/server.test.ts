@@ -67,10 +67,10 @@ describe("ServerProvider", () => {
     expect(parsed.skills).toEqual([]);
     expect(parsed.supportedRuntimeModes).toEqual(["approval-required", "full-access"]);
     expect(parsed.versionAdvisory).toBeUndefined();
-    expect(parsed.updateState).toBeUndefined();
+    expect(parsed).not.toHaveProperty("updateState");
   });
 
-  it("defaults one-click update support when decoding older advisory snapshots", () => {
+  it("drops obsolete mutation capabilities when decoding older advisory snapshots", () => {
     const parsed = decodeServerProvider({
       instanceId: "codex",
       driver: "codex",
@@ -87,13 +87,16 @@ describe("ServerProvider", () => {
         status: "behind_latest",
         currentVersion: "1.0.0",
         latestVersion: "1.0.1",
+        canUpdate: true,
         updateCommand: "npm install -g @openai/codex@latest",
+
         checkedAt: "2026-04-10T00:00:00.000Z",
         message: "Update available.",
       },
     });
 
-    expect(parsed.versionAdvisory?.canUpdate).toBe(false);
+    expect(parsed.versionAdvisory).not.toHaveProperty("canUpdate");
+    expect(parsed.versionAdvisory).not.toHaveProperty("updateCommand");
   });
 
   it("decodes continuation group metadata", () => {

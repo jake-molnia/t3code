@@ -23,7 +23,7 @@ sections = [args.section] if args.section else ['harnesses', 'sourceControl']
 for section in sections:
     for name, artifact in manifest[section].items():
         kind = artifact['kind']
-        if kind not in ('binary', 'tar.gz', 'deb', 'wheel'):
+        if kind not in ('binary', 'tar.gz', 'deb', 'wheel', 'zip-pair'):
             continue
         expected = artifact['sha256']
         if len(expected) != 64 or not artifact['url'].startswith('https://'):
@@ -37,7 +37,17 @@ for section in sections:
                     output.write(chunk)
             if digest.hexdigest() != expected:
                 raise ValueError(f'Checksum mismatch: {name}')
-            if kind == 'deb':
+            if kind == 'zip-pair':
+                with zipfile.ZipFile(download) as archive:
+                    for member in (artifact['binary'], artifact['helper']):
+                        if Path(member).name != member:
+                            raise ValueError(f'Expected executable filename: {name}')
+                        installed = bin_dir / member
+                        with archive.open(member) as source, installed.open('wb') as output:
+                            shutil.copyfileobj(source, output)
+                        installed.chmod(0o755)
+                (bin_dir / f'{name}-version.json').write_text(json.dumps({'version': artifact['version']}))
+            elif kind == 'deb':
                 subprocess.run(['dpkg-deb', '--extract', str(download), str(args.prefix / name)], check=True)
             elif kind == 'wheel':
                 directory = args.prefix / 'extensions' / artifact['directory']

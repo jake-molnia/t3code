@@ -28,17 +28,7 @@ export const DesktopBackendBootstrap = Schema.Struct({
   otlpLogsUrl: Schema.optional(Schema.String),
   desktopTelemetryFd: Schema.optionalKey(PositiveInt),
   desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
-  /** Desktop -> server: the desktop's browser tabs, as newline-delimited JSON. */
-  desktopBrowserFd: Schema.optionalKey(PositiveInt),
-  /** Server -> desktop: commands for those tabs. */
-  desktopBrowserControlFd: Schema.optionalKey(PositiveInt),
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;
-
-/** Written to `<t3Home>/runtime` just before the desktop app stops its
-    backend to install an update. The updated app starts a new backend right
-    away, so a backend that sees a fresh marker at shutdown keeps its managed
-    tunnel. */
-export const DESKTOP_UPDATE_RESTART_MARKER_FILE = "desktop-update-restart";

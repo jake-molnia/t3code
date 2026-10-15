@@ -5,17 +5,10 @@ extensions, skills, context files, and native session history.
 
 ## Set Up Pi
 
-1. Install [Pi](https://pi.dev) on the machine running the T3 Code server. Pi requires Node.js
-   22.19 or newer; its platform installers can install Node if needed. T3 Code supports Pi
-   0.80.5 or newer.
+1. Your sandbox image must supply [Pi](https://pi.dev) 0.80.5 or newer. Contact your
+   deployment administrator if Pi is unavailable.
 2. Run `pi` in a terminal, then `/login` to connect your model provider or configure its API key.
 3. Open T3 Code Settings, enable Pi, and refresh the provider.
-
-For an npm installation, use:
-
-```sh
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-```
 
 If `pi` is not on the server's `PATH`, set Pi's binary path to the executable. Provider environment
 variables and launch arguments are also available for installations that need a custom agent
@@ -29,9 +22,7 @@ paste the final redirect URL or authorization code back into Pi when prompted. Y
 set your model provider's API-key environment variable in the Pi instance's settings; mark
 secret values as sensitive.
 
-Update installer-managed Pi with `pi update`. If another package manager owns the installation,
-update it through that manager instead. For example, a Nix profile installation uses
-`nix profile upgrade pi`.
+Provider versions change when your deployment administrator upgrades the sandbox image.
 
 ## What Carries Over
 

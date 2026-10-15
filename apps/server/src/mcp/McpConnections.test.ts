@@ -14,6 +14,10 @@ import * as ExecutorRuntime from "./ExecutorRuntime.ts";
 import * as McpConnections from "./McpConnections.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 
+const decodePolicy = Schema.decodeUnknownSync(
+  Schema.Struct({ pattern: Schema.String, action: Schema.String }),
+);
+
 const firstProject = ProjectId.make("a317acef-a957-4bd8-a7c0-3807dc72b630");
 const secondProject = ProjectId.make("project:second");
 const root = ThreadId.make("thread:root");
@@ -99,6 +103,7 @@ function fixture() {
   ];
   const toolkits: Array<{ id: string; owner: string; slug: string }> = [];
   const grants = new Map<string, Array<{ id: string; pattern: string }>>();
+  const policies = new Map<string, Array<{ id: string; pattern: string; action: string }>>();
   const secrets = new Map<string, Uint8Array>();
   const responses: unknown[] = [];
   const requests: Array<{ method: string; path: string; body: unknown }> = [];
@@ -111,6 +116,7 @@ function fixture() {
   }> = [];
   let available = true;
   let oauthFailures = 0;
+  let credentialFailures = 0;
   let sequence = 0;
   let yieldThreadLookup = false;
   const dependencies = Layer.mergeAll(
@@ -147,6 +153,13 @@ function fixture() {
       status: Effect.sync(() => ({ available })),
       request: (method, path, body) =>
         Effect.suspend(() => {
+          if (path === "/api/connections" && method === "POST" && credentialFailures > 0) {
+            credentialFailures--;
+            requests.push({ method, path, body });
+            return Effect.fail(
+              new ExecutorRuntime.ExecutorRuntimeError({ operation: "replace credential" }),
+            );
+          }
           if (path === "/api/oauth/complete" && oauthFailures > 0) {
             oauthFailures--;
             requests.push({ method, path, body });
@@ -169,6 +182,21 @@ function fixture() {
               toolkits.push(row);
               grants.set(row.id, []);
               return row;
+            }
+            const policyMatch = /^\/api\/toolkits\/([^/]+)\/policies(?:\/([^/]+))?$/.exec(path);
+            if (policyMatch?.[1]) {
+              const rows = policies.get(policyMatch[1]) ?? [];
+              if (method === "GET") return { policies: rows };
+              if (method === "POST") {
+                const row = { id: `policy-${++sequence}`, ...decodePolicy(body) };
+                policies.set(policyMatch[1], [...rows, row]);
+                return row;
+              }
+              policies.set(
+                policyMatch[1],
+                rows.filter((row) => row.id !== policyMatch[2]),
+              );
+              return {};
             }
             const match = /^\/api\/toolkits\/([^/]+)\/connections(?:\/([^/]+))?$/.exec(path);
             if (match?.[1]) {
@@ -231,7 +259,10 @@ function fixture() {
               connections.length = 0;
               return {};
             }
-            if (path === "/api/mcp/servers/t3_fixture" && method === "DELETE") return {};
+            if (path === "/api/mcp/servers/t3_fixture" && method === "DELETE") {
+              integrations.length = 0;
+              return {};
+            }
             if (path === "/api/mcp/servers/t3_fixture" && method === "GET")
               return { config: { endpoint: "https://mcp.example.test" } };
             if (path === "/api/mcp/servers/t3_fixture/auth" && method === "POST") return {};
@@ -265,6 +296,9 @@ function fixture() {
     toolkits,
     grants,
     secrets,
+    failNextCredentialWrite: () => {
+      credentialFailures++;
+    },
     failNextOAuth: () => {
       oauthFailures++;
     },
@@ -711,6 +745,106 @@ describe("McpConnections", () => {
         1,
       );
     });
+  });
+
+  it.effect(
+    "preserves selected-but-empty mode across service recreation without granting tools",
+    () => {
+      const f = fixture();
+      const input = {
+        projectIds: [firstProject],
+        connectionId: connection.address,
+        tools: { mode: "selected" as const, toolIds: [] },
+      };
+      return Effect.gen(function* () {
+        yield* Effect.gen(function* () {
+          const service = yield* McpConnections.McpConnections;
+          yield* assign(service);
+          yield* service.setAccess(input);
+        }).pipe(Effect.provide(f.layer));
+        yield* Effect.gen(function* () {
+          const service = yield* McpConnections.McpConnections;
+          expect((yield* service.list).access).toEqual([
+            { projectId: firstProject, connectionId: connection.address, tools: input.tools },
+          ]);
+          expect([...f.grants.values()].flat()).toEqual([]);
+          yield* service.setAccess({ ...input, tools: { mode: "all" } });
+          expect((yield* service.list).access[0]?.tools).toEqual({ mode: "all" });
+          yield* service.setAccess({ ...input, tools: null });
+          expect((yield* service.list).access).toEqual([]);
+        }).pipe(Effect.provide(f.layer));
+      });
+    },
+  );
+
+  it.effect.each(["retry", "disconnect"] as const)(
+    "recovers a failed credential replacement after restart via %s",
+    (recovery) => {
+      const f = fixture();
+      const input = {
+        connectionId: connection.address,
+        name: "Fixture",
+        url: "https://mcp.example.test",
+        auth: { type: "token" as const, token: "replacement" },
+      };
+      return Effect.gen(function* () {
+        yield* Effect.gen(function* () {
+          const service = yield* McpConnections.McpConnections;
+          yield* assign(service);
+          f.failNextCredentialWrite();
+          expect((yield* service.connect(input, managementSession).pipe(Effect.result))._tag).toBe(
+            "Failure",
+          );
+        }).pipe(Effect.provide(f.layer));
+        yield* Effect.gen(function* () {
+          const service = yield* McpConnections.McpConnections;
+          const state = yield* service.list;
+          expect(state.connections).toMatchObject([
+            { id: connection.address, needsReconnect: true },
+          ]);
+          expect(state.access).toHaveLength(1);
+          if (recovery === "retry") {
+            yield* service.connect(input, managementSession);
+            expect((yield* service.list).connections).toMatchObject([
+              { id: connection.address, needsReconnect: false },
+            ]);
+            expect((yield* service.list).access).toEqual(state.access);
+          } else {
+            yield* service.remove(connection.address);
+            expect((yield* service.list).connections).toEqual([]);
+            expect([...f.grants.values()].flat()).toEqual([]);
+          }
+        }).pipe(Effect.provide(f.layer));
+      });
+    },
+  );
+
+  it.effect("allows retry after resume preflight fails without dispatching twice", () => {
+    const f = fixture();
+    return Effect.gen(function* () {
+      const service = yield* McpConnections.McpConnections;
+      yield* assign(service);
+      f.responses.push({
+        structuredContent: { status: "waiting_for_interaction", executionId: "retry-pause" },
+      });
+      yield* invoke(service);
+      const thread = f.threads.get(root);
+      if (!thread) throw new Error("Missing fixture thread");
+      f.threads.delete(root);
+      const input = {
+        threadId: root,
+        sessionId: "provider-session",
+        executionId: "retry-pause",
+        action: "accept" as const,
+        content: "{}",
+      };
+      expect((yield* service.resume(input).pipe(Effect.result))._tag).toBe("Failure");
+      expect(f.calls.filter((call) => call.name === "resume")).toEqual([]);
+      f.threads.set(root, thread);
+      yield* service.resume(input);
+      expect(f.calls.filter((call) => call.name === "resume")).toHaveLength(1);
+      expect((yield* service.resume(input).pipe(Effect.result))._tag).toBe("Failure");
+    }).pipe(Effect.provide(f.layer));
   });
 
   it.effect("reconnects a saved connection without losing its project and tool grants", () => {

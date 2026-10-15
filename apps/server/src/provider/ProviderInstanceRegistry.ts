@@ -248,6 +248,7 @@ const buildEntry = <R>(input: {
         environment: entry.environment ?? [],
         enabled: resolveEntryEnabled(entry, typedConfig),
         config: typedConfig,
+        configInput: entry.config ?? {},
       })
       .pipe(Effect.provideService(Scope.Scope, childScope), Effect.result);
     if (createResult._tag === "Failure") {

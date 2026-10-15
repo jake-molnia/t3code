@@ -5,7 +5,6 @@ import {
   AuthSessionId,
   ForwardCompatibleArray,
   ClientSurface,
-  ClientWebDeployment,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 
@@ -255,7 +254,7 @@ export const ServerAuthDescriptor = Schema.Struct({
   bootstrapMethods: Schema.Array(ServerAuthBootstrapMethod),
   sessionMethods: Schema.Array(ServerAuthSessionMethod),
   sessionCookieName: TrimmedNonEmptyString,
-  /** Older servers omit this and authorize self-updates with orchestration:operate. */
+  /** Legacy marker for split authorization scopes; retained to interpret older sessions. */
   serverUpdateScope: Schema.optionalKey(Schema.Literal(AuthEnvironmentMaintainScope)),
 });
 export type ServerAuthDescriptor = typeof ServerAuthDescriptor.Type;
@@ -286,11 +285,7 @@ export const AuthClientPresentationMetadata = Schema.Struct({
   label: Schema.optionalKey(TrimmedNonEmptyString),
   deviceType: Schema.optionalKey(AuthClientMetadataDeviceType),
   os: Schema.optionalKey(TrimmedNonEmptyString),
-  osMajorVersion: Schema.optionalKey(Schema.Int),
-  deviceModel: Schema.optionalKey(TrimmedNonEmptyString),
   surface: Schema.optionalKey(ClientSurface),
-  webDeployment: Schema.optionalKey(ClientWebDeployment),
-  browser: Schema.optionalKey(TrimmedNonEmptyString),
   appVersion: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthClientPresentationMetadata = typeof AuthClientPresentationMetadata.Type;

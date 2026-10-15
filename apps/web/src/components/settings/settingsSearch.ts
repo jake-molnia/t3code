@@ -1,4 +1,4 @@
-import { HOSTED_APP_CHANNEL } from "~/branding";
+import { HOSTED_APP_CHANNEL } from "../../branding";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 import { STATIC_KEYBINDING_COMMANDS, type KeybindingCommand } from "@t3tools/contracts";
@@ -52,13 +52,12 @@ export interface SettingsSearchItem {
   // Its row only renders in the desktop app, so a browser result would land on
   // an anchor that isn't there.
   readonly desktopOnly?: boolean;
+  /** Only builds with an explicit hosted web channel render this row. */
+  readonly hostedChannelOnly?: boolean;
   readonly macOnly?: boolean;
   // Its row only renders on Windows desktop, so other desktop platforms must
   // not expose a result that points to a missing anchor.
   readonly windowsOnly?: boolean;
-  // Its row renders only where the release channel can change: the desktop
-  // app, or a hosted web build deployed with a channel.
-  readonly releaseChannelOnly?: boolean;
   readonly cloudOnly?: boolean;
   readonly environmentOnly?: boolean;
   readonly providerSettingsOnly?: boolean;
@@ -538,14 +537,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "app-version",
     title: "Version",
     to: "/settings/general",
-    searchTerms: ["about check for updates download install upgrade release"],
+    searchTerms: ["about server version fork revision upstream baseline image builds deployment"],
   },
   {
     id: "update-track",
-    title: "Update track",
+    title: "Web app channel",
     to: "/settings/general",
-    searchTerms: ["release channel stable latest nightly prerelease"],
-    releaseChannelOnly: true,
+    searchTerms: ["update track release channel latest nightly hosted browser"],
+    hostedChannelOnly: true,
   },
   {
     id: "cli-command",
@@ -558,7 +557,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "privacy-policy",
     title: "Privacy policy",
     to: "/settings/general",
-    searchTerms: ["telemetry analytics usage data tracking legal opt out"],
+    searchTerms: ["privacy legal policy"],
   },
   {
     id: "telemetry-export",
@@ -609,7 +608,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Providers",
     to: "/settings/providers",
     searchTerms: [
-      "agents cli codex claude cursor grok opencode sign in sign out instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
+      "agents cli codex claude cursor grok opencode antigravity google gemini sign in sign out instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
     ],
   },
   {
@@ -820,103 +819,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["commands scripts setup run dev server checkout worktree t3.json import"],
   },
   {
-    id: "environment-icon",
-    title: "Environment icon",
-    to: "/settings/connections",
-    targetId: "connections-environment",
-    searchTerms: ["machine glyph sidebar mac mini studio laptop desktop server cloud vm"],
-  },
-  {
-    id: "local-environment",
-    title: "Local environment",
-    to: "/settings/connections",
-    targetId: "connections-environment",
-    searchTerms: ["turn off on disable enable local server agents remote only restart"],
-    desktopOnly: true,
-  },
-  {
-    id: "network-access",
-    title: "Network access",
-    to: "/settings/connections",
-    targetId: "connections-environment",
-    searchTerms: ["expose backend remote pairing local machine interfaces host restart"],
-    localBackendManagementOnly: true,
-  },
-  {
-    id: "tailscale-https",
-    title: "Tailscale HTTPS",
-    to: "/settings/connections",
-    targetId: "connections-environment",
-    searchTerms: ["serve magicdns endpoint remote secure network"],
-    desktopOnly: true,
-    localBackendManagementOnly: true,
-  },
-  {
-    id: "wsl-backend",
-    title: "WSL backend",
-    to: "/settings/connections",
-    searchTerms: [
-      "windows subsystem linux distro second server projects stop windows backend restart",
-    ],
-    desktopOnly: true,
-    windowsOnly: true,
-    localBackendManagementOnly: true,
-    wslAvailableOnly: true,
-  },
-  {
-    id: "t3-connect",
-    localEnvironmentOnly: true,
-    title: "T3 Connect",
-    to: "/settings/connections",
-    targetId: "connections-environment",
-    searchTerms: ["managed tunnel cloud other devices remote"],
-    desktopOnly: true,
-    cloudOnly: true,
-  },
-  {
-    id: "hold-webhooks-while-offline",
-    localEnvironmentOnly: true,
-    title: "Hold webhooks while offline",
-    to: "/settings/connections",
-    targetId: "connections-environment",
-    searchTerms: ["webhook automations offline queue mailbox t3 connect"],
-    cloudOnly: true,
-    managedTunnelOnly: true,
-  },
-  {
-    id: "publish-agent-activity",
-    localEnvironmentOnly: true,
-    title: "Publish agent activity",
-    to: "/settings/connections",
-    targetId: "connections-environment",
-    searchTerms: ["mobile push notifications live activities cloud tunnel"],
-    cloudOnly: true,
-  },
-  {
     id: "connections-environment",
-    title: "This machine",
+    title: "Central service",
     to: "/settings/connections",
     searchTerms: [
       "connections server backend local remote access administrative permissions scope pairing links qr code authorized clients sessions revoke endpoint",
     ],
   },
   {
-    id: "remote-environments",
-    title: "Environments",
-    to: "/settings/connections",
-    searchTerms: ["add pair backend host code ssh config agent tunnel saved t3 connect"],
-  },
-  {
     id: "load-balancing",
     title: "Load balancing",
     to: "/settings/connections",
     searchTerms: ["automatic pool resources cpu memory capacity preference weight routing"],
-  },
-  {
-    id: "github-routing",
-    title: "GitHub sharing",
-    to: "/settings/connections",
-    searchTerms: ["pull request trusted environments shared credentials permissions read actions"],
   },
   {
     id: "mcp-connections",
@@ -1089,7 +1003,7 @@ export function searchSettings(
   return items
     .flatMap((item, index) => {
       if (!isElectron && item.desktopOnly === true) return [];
-      if (item.releaseChannelOnly && !isElectron && HOSTED_APP_CHANNEL === null) return [];
+      if (item.hostedChannelOnly && HOSTED_APP_CHANNEL === null) return [];
       if (item.macOnly && !isMacPlatform(platform)) return [];
       if (item.windowsOnly && !isWindowsPlatform(platform)) return [];
 

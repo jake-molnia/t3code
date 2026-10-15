@@ -59,13 +59,10 @@ const isSshConnectionProfile = Schema.is(SshConnectionProfile);
 
 function unsupportedState(
   entry: ConnectionCatalogEntry,
-): Pick<ConnectionCatalogEntry, "unsupportedReason" | "serverUpdateRequired"> {
-  return {
-    ...(entry.unsupportedReason === undefined
-      ? {}
-      : { unsupportedReason: entry.unsupportedReason }),
-    ...(entry.serverUpdateRequired === true ? { serverUpdateRequired: true } : {}),
-  };
+): Pick<ConnectionCatalogEntry, "unsupportedReason"> {
+  return entry.unsupportedReason === undefined
+    ? {}
+    : { unsupportedReason: entry.unsupportedReason };
 }
 
 export class EnvironmentNotRegisteredError extends Schema.TaggedError<EnvironmentNotRegisteredError>()(
@@ -548,7 +545,7 @@ export const make = Effect.gen(function* () {
     if (gitHubRoutingConnectionKey(previous) === gitHubRoutingConnectionKey(next)) {
       return { entry: next, addressesChanged: false };
     }
-    const { unsupportedReason: _reason, serverUpdateRequired: _update, ...rest } = next;
+    const { unsupportedReason: _reason, ...rest } = next;
     return { entry: rest, addressesChanged: true };
   };
 
@@ -1121,17 +1118,9 @@ export const make = Effect.gen(function* () {
       environmentId,
       Effect.gen(function* () {
         const entry = (yield* SubscriptionRef.get(entries)).get(environmentId);
-        if (
-          entry === undefined ||
-          (entry.unsupportedReason === (error?.message ?? undefined) &&
-            entry.serverUpdateRequired === (error?.serverUpdateRequired ?? undefined))
-        )
+        if (entry === undefined || entry.unsupportedReason === (error?.message ?? undefined))
           return;
-        const {
-          unsupportedReason: _previousReason,
-          serverUpdateRequired: _previousUpdateRequired,
-          ...rest
-        } = entry;
+        const { unsupportedReason: _previousReason, ...rest } = entry;
         const next: ConnectionCatalogEntry =
           error === null
             ? rest
@@ -1139,7 +1128,6 @@ export const make = Effect.gen(function* () {
                 ...rest,
                 enabled: false,
                 unsupportedReason: error.message,
-                ...(error.serverUpdateRequired === true ? { serverUpdateRequired: true } : {}),
               };
         if (
           error !== null &&

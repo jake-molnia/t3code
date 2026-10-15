@@ -13,7 +13,6 @@ import * as ModelManifest from "./ModelManifest.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
 import * as Schema from "effect/Schema";
 import {
@@ -313,10 +312,7 @@ it.effect("a remote policy refresh preserves a newer health result on the regist
         refresh: Ref.get(health),
         streamChanges: Stream.empty,
         applyUsageLimits: () => Effect.void,
-        resolveMaintenance: () =>
-          Effect.succeed(
-            makeManualOnlyProviderMaintenanceCapabilities({ provider: driver, packageName: null }),
-          ),
+        getVersionSource: () => Effect.succeed({ packageName: null }),
       },
       orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
       textGeneration: {} as ProviderInstance["textGeneration"],
@@ -383,8 +379,7 @@ it("recomputes latest-version compatibility without losing the underlying update
       status: "behind_latest",
       currentVersion: "2.0.0",
       latestVersion: "4.0.0",
-      canUpdate: true,
-      updateCommand: "npm install -g fixture@latest",
+
       checkedAt: provider.checkedAt,
       message: null,
     },

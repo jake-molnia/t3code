@@ -50,9 +50,6 @@
       // reports an entire component module when nothing imports it.
       "ignoreIssues": { "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"] },
     },
-    "infra/relay": {
-      "entry": ["alchemy.run.ts!", "src/persistence/schema.ts!"],
-    },
     "packages/*": {
       // These workspace packages are private to this monorepo.
       "includeEntryExports": true,

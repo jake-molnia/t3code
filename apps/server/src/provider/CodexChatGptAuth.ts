@@ -10,9 +10,6 @@ import {
 } from "@t3tools/contracts";
 import { codexCallbackUrl } from "@t3tools/shared/codexAuthHandoff";
 import * as Clock from "effect/Clock";
-import * as Cause from "effect/Cause";
-import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
-import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
 import { codexAuthCallbackPage, codexAuthReturnUrl } from "./CodexAuthCallbackPage.ts";
 import * as Effect from "effect/Effect";
@@ -25,10 +22,8 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
 import { withChatGptSessionLock } from "./CodexChatGptSessionLock.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 
-const isSetupError = Schema.is(ProviderSetupError);
 const RESOURCE = "https://api.openai.com/v1";
 const REQUIRED_SCOPE = "chatgpt.tokens.use.direct";
 const DISCOVERY = "https://auth.openai.com/.well-known/openid-configuration";
@@ -105,53 +100,7 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   readonly resource?: string;
   readonly defaultReturnUrl?: string;
   readonly reconnectProfile?: ChatGptReconnectProfile | null;
-  readonly telemetryFlow?: "direct" | "primary_handoff";
 }) {
-  const analytics = yield* Effect.serviceOption(AnalyticsService.AnalyticsService);
-  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-  const track = <A, E extends ProviderSetupError, R>(
-    event: "auth" | "transfer",
-    properties: Readonly<Record<string, string>>,
-    task: Effect.Effect<A, E, R>,
-    expiresAt?: number,
-  ) =>
-    Effect.gen(function* () {
-      if (Option.isNone(analytics)) return yield* task;
-      const record = (name: string, properties: Readonly<Record<string, unknown>>) =>
-        analytics.value.record(name, properties).pipe(Effect.ignoreCause);
-      const startedAt = yield* Clock.currentTimeMillis;
-      yield* record(`chatgpt.${event}.started`, properties);
-      return yield* task.pipe(
-        Effect.onExit((result) =>
-          Effect.gen(function* () {
-            const endedAt = yield* Clock.currentTimeMillis;
-            const error = Exit.isFailure(result)
-              ? Cause.findErrorOption(result.cause)
-              : Option.none();
-            const counts =
-              Exit.isSuccess(result) &&
-              (event === "transfer" || options.telemetryFlow !== "primary_handoff")
-                ? yield* accountCounts.pipe(Effect.catchCause(() => Effect.succeed({})))
-                : {};
-            yield* record(`chatgpt.${event}.completed`, {
-              ...counts,
-              ...properties,
-              outcome: Exit.isSuccess(result)
-                ? "succeeded"
-                : Cause.hasInterruptsOnly(result.cause)
-                  ? expiresAt !== undefined && endedAt >= expiresAt
-                    ? "expired"
-                    : "cancelled"
-                  : "failed",
-              durationMs: Math.max(0, endedAt - startedAt),
-              ...(Option.isSome(error) && isSetupError(error.value)
-                ? { failureStage: error.value.operation }
-                : {}),
-            });
-          }),
-        ),
-      );
-    });
   const http = yield* HttpClient.HttpClient;
   const store = yield* ProviderCredentialStore.make("codex-chatgpt", options.instanceId);
   const registrationStore = yield* ProviderCredentialStore.make(
@@ -159,7 +108,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
     options.instanceId,
   );
   const secrets = yield* ServerSecretStore.ServerSecretStore;
-  const crypto = yield* Crypto.Crypto;
   const environmentLocks = sessionLocks.get(secrets) ?? new Map<string, Semaphore.Semaphore>();
   sessionLocks.set(secrets, environmentLocks);
   const lock = environmentLocks.get(store.binding.key) ?? (yield* Semaphore.make(1));
@@ -263,54 +211,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
             ),
           ),
     ),
-  );
-  const accountCounts = Effect.gen(function* () {
-    const instanceIds = new Set<string>([options.instanceId]);
-    if (Option.isSome(settings)) {
-      const current = yield* settings.value.getSettings;
-      // Include the legacy default instance as well as explicitly configured ones.
-      instanceIds.add("codex");
-      for (const [id, instance] of Object.entries(current.providerInstances)) {
-        if (instance.driver === "codex") instanceIds.add(id);
-      }
-    }
-    const accounts = new Set<string>();
-    const connections = new Set<string>();
-    const savedConnections = new Set<string>();
-    let unidentifiedConnectedConnectionCount = 0;
-    for (const id of instanceIds) {
-      const registrations = yield* ProviderCredentialStore.make("codex-chatgpt-registration", id);
-      const registrationBytes = yield* registrations.get;
-      if (Option.isSome(registrationBytes)) {
-        const saved = yield* decodeRegistration(new TextDecoder().decode(registrationBytes.value));
-        for (const profile of "profiles" in saved ? saved.profiles : [saved]) {
-          savedConnections.add(profile.clientId);
-        }
-      }
-      const credentials = yield* ProviderCredentialStore.make("codex-chatgpt", id);
-      const credentialBytes = yield* credentials.get;
-      if (Option.isNone(credentialBytes)) continue;
-      const saved = yield* decodeSessions(new TextDecoder().decode(credentialBytes.value));
-      for (const session of "sessions" in saved ? saved.sessions : [saved]) {
-        if (!session.scopes.includes(REQUIRED_SCOPE) || connections.has(session.clientId)) continue;
-        connections.add(session.clientId);
-        // Subjects are client-scoped. Use verified email only for counting locally,
-        // never export it or merge the underlying profiles.
-        const email = session.email?.trim().toLowerCase();
-        if (email) accounts.add(email);
-        else unidentifiedConnectedConnectionCount++;
-      }
-    }
-    return {
-      accountCountScope: Option.isSome(settings) ? "environment" : "provider_instance",
-      connectedAccountCount: accounts.size,
-      connectedConnectionCount: connections.size,
-      savedConnectionCount: savedConnections.size,
-      unidentifiedConnectedConnectionCount,
-    };
-  }).pipe(
-    Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
-    Effect.provideService(Crypto.Crypto, crypto),
   );
   const saveRegistration = Effect.fnUntraced(function* (profile: typeof Registration.Type) {
     const saved = yield* readRegistrations;
@@ -861,28 +761,7 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
         })),
       ];
     }),
-    authenticate: (method, context) =>
-      lock.withPermit(
-        track(
-          "auth",
-          {
-            flow: options.telemetryFlow ?? "direct",
-            intent:
-              options.telemetryFlow === "primary_handoff"
-                ? options.reconnectProfile
-                  ? "saved_profile"
-                  : "different_account"
-                : method === "chatgpt-change-account"
-                  ? "different_account"
-                  : method.startsWith("chatgpt-profile:")
-                    ? "saved_profile"
-                    : "default",
-            callbackMode: context.callbackMode ?? "server",
-          },
-          authenticate(method, context),
-          context.expiresAt,
-        ),
-      ),
+    authenticate: (method, context) => lock.withPermit(authenticate(method, context)),
     logout: lock.withPermit(withSessionLock(logout)),
   });
   const reconnectProfile = Effect.fnUntraced(function* (methodId: string) {
@@ -971,12 +850,8 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       yield* save(profile.credentials, true);
     });
     return lock.withPermit(
-      track(
-        "transfer",
-        { flow: "primary_handoff" },
-        validate.pipe(
-          Effect.andThen(controller.adoptCredentials!(withSessionLock(saveImported), stopSessions)),
-        ),
+      validate.pipe(
+        Effect.andThen(controller.adoptCredentials!(withSessionLock(saveImported), stopSessions)),
       ),
     );
   };

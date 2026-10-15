@@ -1,6 +1,5 @@
 import * as Schema from "effect/Schema";
 
-import { SnapShotSource } from "./chatAttachment.ts";
 import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
@@ -11,7 +10,7 @@ import type {
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
+import { type ClientSettings, type QuitConfirmationMode } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
 
@@ -68,34 +67,12 @@ export const ContextMenuItemSchema: Schema.Codec<ContextMenuItemSchemaType> = Sc
   ),
 });
 
-export type DesktopUpdateStatus =
-  | "disabled"
-  | "idle"
-  | "checking"
-  | "up-to-date"
-  | "available"
-  | "downloading"
-  | "downloaded"
-  | "error";
-
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
-export type DesktopUpdateChannel = "latest" | "nightly";
 export type DesktopAppStageLabel = "Alpha" | "Dev" | "Nightly";
 
-export const DesktopUpdateStatusSchema = Schema.Literals([
-  "disabled",
-  "idle",
-  "checking",
-  "up-to-date",
-  "available",
-  "downloading",
-  "downloaded",
-  "error",
-]);
 export const DesktopRuntimeArchSchema = Schema.Literals(["arm64", "x64", "other"]);
 export const DesktopThemeSchema = Schema.Literals(["light", "dark", "system"]);
-export const DesktopUpdateChannelSchema = Schema.Literals(["latest", "nightly"]);
 export const DesktopAppStageLabelSchema = Schema.Literals(["Alpha", "Dev", "Nightly"]);
 
 export interface DesktopAppBranding {
@@ -110,212 +87,11 @@ export const DesktopAppBrandingSchema = Schema.Struct({
   displayName: Schema.String,
 });
 
-export const DesktopSnapShotMode = Schema.Literals(["direct", "portal", "unavailable"]);
-export type DesktopSnapShotMode = typeof DesktopSnapShotMode.Type;
-
-export const DesktopCaptureExtensionState = Schema.Struct({
-  status: Schema.Literals([
-    "not-installed",
-    "disabled",
-    "enabled",
-    "restart-required",
-    "update-required",
-    "extensions-disabled",
-    "unsupported",
-    "error",
-  ]),
-  message: Schema.String,
-});
-export type DesktopCaptureExtensionState = typeof DesktopCaptureExtensionState.Type;
-
-export const DesktopCaptureHelperState = Schema.Struct({
-  status: Schema.Literals(["not-installed", "update-required", "ready", "error"]),
-  message: Schema.String,
-  feedbackAvailable: Schema.optional(Schema.Boolean),
-});
-export type DesktopCaptureHelperState = typeof DesktopCaptureHelperState.Type;
-
-export const DesktopSnapShotSetupAction = Schema.Literals([
-  "install-extension",
-  "enable-extension",
-  "disable-extension",
-  "install-kde-helper",
-  "remove-kde-helper",
-  "install-hyprland-helper",
-  "remove-hyprland-helper",
-  "test-mac-capture",
-  "allow-screen-recording",
-  "allow-accessibility",
-  "retry-shortcut",
-]);
-export type DesktopSnapShotSetupAction = typeof DesktopSnapShotSetupAction.Type;
-
-export const DesktopCaptureConfigRequest = Schema.Struct({
-  operation: Schema.Literals(["install", "remove"]),
-  chooseFile: Schema.Boolean,
-  shortcut: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
-});
-export type DesktopCaptureConfigRequest = typeof DesktopCaptureConfigRequest.Type;
-
-export const DesktopCaptureConfigPreview = Schema.Struct({
-  id: Schema.String,
-  path: Schema.String,
-  resolvedPath: Schema.String,
-  before: Schema.String,
-  after: Schema.String,
-  shortcut: Schema.String,
-  operation: Schema.Literals(["install", "remove"]),
-});
-export type DesktopCaptureConfigPreview = typeof DesktopCaptureConfigPreview.Type;
-
-export const DesktopCaptureConfigApplied = Schema.Struct({
-  backupPath: Schema.NullOr(Schema.String),
-  warning: Schema.NullOr(Schema.String),
-});
-export type DesktopCaptureConfigApplied = typeof DesktopCaptureConfigApplied.Type;
-
-export const DesktopSnapShotState = Schema.Struct({
-  mode: DesktopSnapShotMode,
-  windows: Schema.optional(Schema.Boolean),
-  linuxDesktop: Schema.optional(Schema.Literals(["gnome", "kde", "niri", "hyprland"])),
-  linuxBackend: Schema.optional(
-    Schema.Literals(["screenshot-portal", "gnome-extension", "niri", "kde", "hyprland", "picker"]),
-  ),
-  linuxFeedbackAvailable: Schema.optional(Schema.Boolean),
-  shortcut: SnapShotShortcut,
-  shortcutRegistered: Schema.Boolean,
-  shortcutPending: Schema.optional(Schema.Boolean),
-  shortcutCanRetry: Schema.optional(Schema.Boolean),
-  shortcutLabel: Schema.optional(Schema.String),
-  shortcutMessage: Schema.NullOr(Schema.String),
-  shortcutBinding: Schema.optional(Schema.String),
-  shortcutConfigPath: Schema.optional(Schema.String),
-  shortcutActionRegistered: Schema.optional(Schema.Boolean),
-  gnomeExtension: Schema.optional(DesktopCaptureExtensionState),
-  kdeHelper: Schema.optional(DesktopCaptureHelperState),
-  hyprlandHelper: Schema.optional(DesktopCaptureHelperState),
-  macPermissions: Schema.optional(
-    Schema.Struct({ screenRecording: Schema.Boolean, accessibility: Schema.Boolean }),
-  ),
-  shortcutVerified: Schema.optional(Schema.Boolean),
-  message: Schema.NullOr(Schema.String),
-});
-export type DesktopSnapShotState = typeof DesktopSnapShotState.Type;
-
-export const DesktopSnapShotShortcutAvailability = Schema.Struct({
-  available: Schema.Boolean,
-  message: Schema.NullOr(Schema.String),
-});
-export type DesktopSnapShotShortcutAvailability = typeof DesktopSnapShotShortcutAvailability.Type;
-
-export const DesktopSnapShotId = TrimmedNonEmptyString.check(
-  Schema.isMaxLength(64),
-  Schema.isPattern(/^[a-f0-9-]+$/i),
-);
-export type DesktopSnapShotId = typeof DesktopSnapShotId.Type;
-
-/** Main-process capture lifecycle pushes. `id` is absent for failures before a capture exists. */
-export const DesktopSnapShotEvent = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("requested"), id: DesktopSnapShotId }),
-  Schema.Struct({ type: Schema.Literal("started"), id: DesktopSnapShotId }),
-  Schema.Struct({ type: Schema.Literal("ready"), id: DesktopSnapShotId }),
-  Schema.Struct({ type: Schema.Literal("failed"), id: Schema.optional(DesktopSnapShotId) }),
-  Schema.Struct({ type: Schema.Literal("shortcut-changed") }),
-]);
-export type DesktopSnapShotEvent = typeof DesktopSnapShotEvent.Type;
-
-export const DesktopPendingSnapShot = Schema.Struct({
-  id: DesktopSnapShotId,
-  name: Schema.String,
-  mimeType: Schema.Literal("image/png"),
-  sizeBytes: Schema.Int,
-  source: SnapShotSource,
-});
-export type DesktopPendingSnapShot = typeof DesktopPendingSnapShot.Type;
-
-export const DesktopSnapShot = Schema.Struct({
-  ...DesktopPendingSnapShot.fields,
-  dataUrl: Schema.String,
-});
-export type DesktopSnapShot = typeof DesktopSnapShot.Type;
-
-export const DesktopSnapShotAnimationDestination = Schema.Struct({
-  id: DesktopSnapShotId,
-  viewportFrame: Schema.Struct({
-    x: Schema.Number,
-    y: Schema.Number,
-    width: Schema.Number,
-    height: Schema.Number,
-  }),
-  backgroundColor: Schema.String,
-  borderColor: Schema.String,
-  borderWidth: Schema.Number,
-  cornerRadius: Schema.Number,
-  details: Schema.optional(
-    Schema.Struct({
-      appName: SnapShotSource.fields.appName,
-      windowTitle: SnapShotSource.fields.windowTitle,
-      appIconDataUrl: SnapShotSource.fields.appIconDataUrl,
-    }),
-  ),
-});
-export type DesktopSnapShotAnimationDestination = typeof DesktopSnapShotAnimationDestination.Type;
-
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
   appArch: DesktopRuntimeArch;
   runningUnderArm64Translation: boolean;
 }
-
-export interface DesktopUpdateState {
-  enabled: boolean;
-  status: DesktopUpdateStatus;
-  channel: DesktopUpdateChannel;
-  currentVersion: string;
-  hostArch: DesktopRuntimeArch;
-  appArch: DesktopRuntimeArch;
-  runningUnderArm64Translation: boolean;
-  availableVersion: string | null;
-  downloadedVersion: string | null;
-  releaseNotes: ReadonlyArray<DesktopUpdateReleaseNote>;
-  omittedReleaseCount: number;
-  downloadPercent: number | null;
-  checkedAt: string | null;
-  message: string | null;
-  errorContext: "check" | "download" | "install" | null;
-  canRetry: boolean;
-}
-
-export interface DesktopUpdateReleaseNote {
-  version: string;
-  items: ReadonlyArray<string>;
-  totalItems: number;
-}
-
-export const DesktopUpdateReleaseNoteSchema = Schema.Struct({
-  version: Schema.String,
-  items: Schema.Array(Schema.String),
-  totalItems: Schema.Number,
-});
-
-export const DesktopUpdateStateSchema = Schema.Struct({
-  enabled: Schema.Boolean,
-  status: DesktopUpdateStatusSchema,
-  channel: DesktopUpdateChannelSchema,
-  currentVersion: Schema.String,
-  hostArch: DesktopRuntimeArchSchema,
-  appArch: DesktopRuntimeArchSchema,
-  runningUnderArm64Translation: Schema.Boolean,
-  availableVersion: Schema.NullOr(Schema.String),
-  downloadedVersion: Schema.NullOr(Schema.String),
-  releaseNotes: Schema.Array(DesktopUpdateReleaseNoteSchema),
-  omittedReleaseCount: Schema.Number,
-  downloadPercent: Schema.NullOr(Schema.Number),
-  checkedAt: Schema.NullOr(Schema.String),
-  message: Schema.NullOr(Schema.String),
-  errorContext: Schema.NullOr(Schema.Literals(["check", "download", "install"])),
-  canRetry: Schema.Boolean,
-});
 
 /** The desktop app's `t3` command on PATH, managed from Settings. */
 export const DesktopCliCommandStateSchema = Schema.Struct({
@@ -332,28 +108,6 @@ export const DesktopCliCommandStateSchema = Schema.Struct({
   shadowedBy: Schema.optionalKey(Schema.String),
 });
 export type DesktopCliCommandState = typeof DesktopCliCommandStateSchema.Type;
-
-export interface DesktopUpdateActionResult {
-  accepted: boolean;
-  completed: boolean;
-  state: DesktopUpdateState;
-}
-
-export const DesktopUpdateActionResultSchema = Schema.Struct({
-  accepted: Schema.Boolean,
-  completed: Schema.Boolean,
-  state: DesktopUpdateStateSchema,
-});
-
-export interface DesktopUpdateCheckResult {
-  checked: boolean;
-  state: DesktopUpdateState;
-}
-
-export const DesktopUpdateCheckResultSchema = Schema.Struct({
-  checked: Schema.Boolean,
-  state: DesktopUpdateStateSchema,
-});
 
 // Stable id for the Windows-native primary backend. Desktop side wraps
 // this with a brand inside DesktopBackendManager; web side keeps it as
@@ -1146,24 +900,6 @@ export interface DesktopBridge {
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   /** Resolves a suggested SSH alias before populating the connection form. */
   resolveSshHost: (alias: string) => Promise<DesktopSshEnvironmentTarget>;
-  requestSnapShotPermissions?: (includeAccessibility: boolean) => Promise<void>;
-  getSnapShotState?: () => Promise<DesktopSnapShotState>;
-  setupSnapShot?: (action: DesktopSnapShotSetupAction) => Promise<void>;
-  previewSnapShotConfig?: (
-    request: DesktopCaptureConfigRequest,
-  ) => Promise<DesktopCaptureConfigPreview | null>;
-  applySnapShotConfig?: (previewId: string) => Promise<DesktopCaptureConfigApplied>;
-  checkSnapShotShortcut?: (
-    shortcut: SnapShotShortcut,
-  ) => Promise<DesktopSnapShotShortcutAvailability>;
-  setSnapShotShortcutSuppressed?: (suppressed: boolean) => Promise<void>;
-  listPendingSnapShots?: () => Promise<readonly DesktopPendingSnapShot[]>;
-  readSnapShot?: (id: string) => Promise<DesktopSnapShot>;
-  setSnapShotAnimationDestination?: (
-    destination: DesktopSnapShotAnimationDestination,
-  ) => Promise<void>;
-  dismissSnapShotAnimation?: (id: DesktopSnapShotId) => Promise<void>;
-  acknowledgeSnapShot?: (id: string) => Promise<void>;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: { issuePairingToken?: boolean },
@@ -1225,7 +961,6 @@ export interface DesktopBridge {
   /** Present when the desktop shell can perform an ordered plain-text paste. */
   pasteAsText?: () => Promise<void>;
   onMenuAction: (listener: (action: string) => void) => () => void;
-  onSnapShotEvent?: (listener: (event: DesktopSnapShotEvent) => void) => () => void;
   /**
    * Quit-confirmation hint pushes. Optional: older desktop builds never emit
    * them.
@@ -1233,12 +968,6 @@ export interface DesktopBridge {
   onQuitShortcut?: (listener: (event: QuitShortcutHintEvent) => void) => () => void;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
-  getUpdateState: () => Promise<DesktopUpdateState>;
-  setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;
-  checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
-  downloadUpdate: () => Promise<DesktopUpdateActionResult>;
-  installUpdate: () => Promise<DesktopUpdateActionResult>;
-  onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
   /** Settings → `t3` command. Optional: older desktop builds lack it. */
   cliCommand?: {
     getState: () => Promise<DesktopCliCommandState>;

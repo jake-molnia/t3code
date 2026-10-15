@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  browserClientOs,
-  browserDeviceType,
-  browserFamily,
-  clientPresentationMetadata,
-} from "./clientMetadata";
+import { browserClientOs, browserDeviceType, clientPresentationMetadata } from "./clientMetadata";
 
 const desktopChrome = {
   userAgent:
@@ -14,32 +9,28 @@ const desktopChrome = {
   maxTouchPoints: 0,
 };
 
-describe("client telemetry metadata", () => {
-  it("distinguishes hosted web from server-served web", () => {
+describe("client session display metadata", () => {
+  it("describes a browser session without analytics fingerprints", () => {
     expect(
       clientPresentationMetadata({
         appVersion: "1.2.3",
-        hosted: true,
         identity: desktopChrome,
         desktopBridge: undefined,
       }),
     ).toMatchObject({
       surface: "web",
-      webDeployment: "hosted",
       deviceType: "desktop",
       os: "Windows",
-      browser: "Chrome",
       appVersion: "1.2.3",
     });
 
     expect(
       clientPresentationMetadata({
         appVersion: "0.0.0",
-        hosted: false,
         identity: desktopChrome,
         desktopBridge: undefined,
       }),
-    ).toMatchObject({ surface: "web", webDeployment: "server" });
+    ).toMatchObject({ surface: "web" });
   });
 
   it("identifies phone and tablet browsers", () => {
@@ -64,7 +55,6 @@ describe("client telemetry metadata", () => {
 
     expect(browserDeviceType(iphone)).toBe("mobile");
     expect(browserClientOs(iphone)).toBe("iOS");
-    expect(browserFamily(iphone.userAgent)).toBe("Safari");
     expect(browserDeviceType(androidTablet)).toBe("tablet");
     expect(browserClientOs(androidTablet)).toBe("Android");
     expect(browserDeviceType(ipadosDesktopUa)).toBe("tablet");
@@ -75,7 +65,6 @@ describe("client telemetry metadata", () => {
     expect(
       clientPresentationMetadata({
         appVersion: "1.2.3",
-        hosted: false,
         identity: desktopChrome,
         desktopBridge: { getClientPlatform: () => "darwin" },
       }),

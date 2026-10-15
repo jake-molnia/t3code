@@ -48,6 +48,11 @@ const RemoteTool = Schema.Struct({
 const Toolkit = Schema.Struct({ id: Schema.String, slug: Schema.String, owner: Schema.String });
 const AccessRow = Schema.Struct({ id: Schema.String, pattern: Schema.String });
 const ToolkitList = Schema.Struct({ toolkits: Schema.Array(Toolkit) });
+const PolicyList = Schema.Struct({
+  policies: Schema.Array(
+    Schema.Struct({ id: Schema.String, pattern: Schema.String, action: Schema.String }),
+  ),
+});
 const AccessList = Schema.Struct({ connections: Schema.Array(AccessRow) });
 const PendingOAuth = Schema.fromJsonString(
   Schema.Struct({ sessionId: Schema.String, expiresAt: Schema.Number }),
@@ -141,7 +146,7 @@ const make = Effect.gen(function* () {
   const lock = yield* Semaphore.make(1);
   const pendingExecutions = new Map<
     string,
-    { readonly owner: string; readonly expiresAt: number }
+    { readonly owner: string; readonly expiresAt: number; inFlight: boolean }
   >();
   const request = <S extends Schema.Top & { readonly DecodingServices: never }>(
     schema: S,
@@ -158,11 +163,36 @@ const make = Effect.gen(function* () {
       Effect.asVoid,
       Effect.mapError(() => failure()),
     );
-  const connections = request(Schema.Array(Connection), "GET", "/api/connections?owner=org").pipe(
-    Effect.map((rows) =>
-      rows.filter((row) => row.owner === "org" && row.integration.startsWith("t3_")),
-    ),
-  );
+  const catalog = Effect.gen(function* () {
+    const saved = yield* request(Schema.Array(Connection), "GET", "/api/connections?owner=org");
+    const integrations = (yield* request(
+      Schema.Array(Integration),
+      "GET",
+      "/api/integrations",
+    )).filter((row) => row.kind === "mcp" && row.slug.startsWith("t3_"));
+    const rows = saved
+      .filter(
+        (row) =>
+          row.owner === "org" &&
+          integrations.some((integration) => integration.slug === row.integration),
+      )
+      .map((row) => ({ ...row, connected: true }));
+    // Integrations survive credential replacement. Keep their address and grants reachable
+    // if creating the replacement failed, including across a central restart.
+    for (const integration of integrations)
+      if (!rows.some((row) => row.integration === integration.slug)) {
+        rows.push({
+          address: `tools.${integration.slug}.org.main`,
+          owner: "org",
+          integration: integration.slug,
+          name: "main",
+          identityLabel: null,
+          connected: false,
+        });
+      }
+    return { rows, integrations };
+  });
+  const connections = catalog.pipe(Effect.map(({ rows }) => rows));
   const getConnection = Effect.fn("McpConnections.getConnection")(function* (id: string) {
     const found = (yield* connections).find((row) => row.address === id);
     if (!found) return yield* failure("not_found");
@@ -187,11 +217,12 @@ const make = Effect.gen(function* () {
   const toolkitList = request(ToolkitList, "GET", "/api/toolkits");
   const accessRows = (id: string) =>
     request(AccessList, "GET", `/api/toolkits/${encodeURIComponent(id)}/connections`);
+  const policyRows = (id: string) =>
+    request(PolicyList, "GET", `/api/toolkits/${encodeURIComponent(id)}/policies`);
   const list = Effect.gen(function* () {
     const status = yield* runtime.status;
     if (!status.available) return { available: false, connections: [], access: [] };
-    const rows = yield* connections;
-    const integrations = yield* request(Schema.Array(Integration), "GET", "/api/integrations");
+    const { rows, integrations } = yield* catalog;
     const { toolkits } = yield* toolkitList;
     const projectRows = yield* projects.list().pipe(Effect.mapError(() => failure()));
     const access: Array<(typeof McpConnectionsState.Type.access)[number]> = [];
@@ -201,9 +232,16 @@ const make = Effect.gen(function* () {
       );
       if (!toolkit) continue;
       const patterns = (yield* accessRows(toolkit.id)).connections.map((row) => row.pattern);
+      const policies = (yield* policyRows(toolkit.id)).policies;
       for (const connection of rows) {
         const prefix = connectionPrefix(connection);
-        if (patterns.includes(`${prefix}*`))
+        if (policies.some((row) => row.pattern === `${prefix}*` && row.action === "block")) {
+          access.push({
+            projectId: project.projectId,
+            connectionId: connection.address,
+            tools: { mode: "selected", toolIds: [] },
+          });
+        } else if (patterns.includes(`${prefix}*`))
           access.push({
             projectId: project.projectId,
             connectionId: connection.address,
@@ -229,6 +267,7 @@ const make = Effect.gen(function* () {
           name: integration?.name ?? row.integration,
           url: integration?.displayUrl ?? "",
           account: row.identityLabel,
+          needsReconnect: !row.connected,
         };
       }),
       access,
@@ -267,7 +306,7 @@ const make = Effect.gen(function* () {
     for (const project of selectedProjects) {
       const slug = projectToolkitSlug(project.projectId);
       let toolkit = toolkits.find((row) => row.slug === slug && row.owner === "org");
-      if (!toolkit && wanted.length === 0) continue;
+      if (!toolkit && input.tools === null) continue;
       toolkit ??= yield* request(Toolkit, "POST", "/api/toolkits", {
         owner: "org",
         name: project.title,
@@ -275,6 +314,14 @@ const make = Effect.gen(function* () {
       });
       const path = `/api/toolkits/${encodeURIComponent(toolkit.id)}/connections`;
       const existing = (yield* accessRows(toolkit.id)).connections;
+      const policyPath = `/api/toolkits/${encodeURIComponent(toolkit.id)}/policies`;
+      const blocks = (yield* policyRows(toolkit.id)).policies.filter(
+        (row) => row.pattern === `${prefix}*` && row.action === "block",
+      );
+      const emptySelection = input.tools?.mode === "selected" && wanted.length === 0;
+      // An explicit block preserves selected-but-empty mode without granting any tools.
+      if (emptySelection && blocks.length === 0)
+        yield* mutate("POST", policyPath, { pattern: `${prefix}*`, action: "block" });
       // Revoke first. A failed update can undergrant, but cannot retain removed access.
       for (const row of existing)
         if (row.pattern.startsWith(prefix) && !wanted.includes(row.pattern))
@@ -282,6 +329,9 @@ const make = Effect.gen(function* () {
       for (const pattern of wanted)
         if (!existing.some((row) => row.pattern === pattern))
           yield* mutate("POST", path, { pattern });
+      if (!emptySelection)
+        for (const row of blocks)
+          yield* mutate("DELETE", `${policyPath}/${encodeURIComponent(row.id)}`);
     }
   }, lock.withPermits(1));
   const oauthKey = (state: string) =>
@@ -382,7 +432,7 @@ const make = Effect.gen(function* () {
       });
     }
     if (input.auth.type !== "oauth") {
-      if (existing) yield* mutate("DELETE", connectionPath(existing));
+      if (existing?.connected) yield* mutate("DELETE", connectionPath(existing));
       yield* mutate("POST", "/api/connections", {
         owner: "org",
         name: connectionName,
@@ -444,7 +494,7 @@ const make = Effect.gen(function* () {
     return result.status === "connected"
       ? { status: "connected" as const }
       : { ...result, status: "authorize" as const };
-  });
+  }, lock.withPermits(1));
   const remove = Effect.fn("McpConnections.remove")(function* (id: string) {
     const connection = yield* getConnection(id);
     // Revoke all project grants before deleting a reusable credential address.
@@ -457,8 +507,14 @@ const make = Effect.gen(function* () {
             "DELETE",
             `/api/toolkits/${encodeURIComponent(toolkit.id)}/connections/${encodeURIComponent(row.id)}`,
           );
+      for (const row of (yield* policyRows(toolkit.id)).policies)
+        if (row.pattern === `${connectionPrefix(connection)}*` && row.action === "block")
+          yield* mutate(
+            "DELETE",
+            `/api/toolkits/${encodeURIComponent(toolkit.id)}/policies/${encodeURIComponent(row.id)}`,
+          );
     }
-    yield* mutate("DELETE", connectionPath(connection));
+    if (connection.connected) yield* mutate("DELETE", connectionPath(connection));
     yield* mutate("DELETE", `/api/mcp/servers/${encodeURIComponent(connection.integration)}`);
   }, lock.withPermits(1));
   const refresh = Effect.fn("McpConnections.refresh")(function* (id: string) {
@@ -488,6 +544,7 @@ const make = Effect.gen(function* () {
       pendingExecutions.set(paused.value.structuredContent.executionId, {
         owner,
         expiresAt: now + 30 * 60_000,
+        inFlight: false,
       });
     return result;
   });
@@ -512,18 +569,29 @@ const make = Effect.gen(function* () {
       const owner = `${input.threadId}:${input.sessionId}`;
       const now = yield* Clock.currentTimeMillis;
       const pending = pendingExecutions.get(input.executionId);
-      if (!pending || pending.owner !== owner || pending.expiresAt < now)
+      if (!pending || pending.owner !== owner || pending.expiresAt < now || pending.inFlight)
         return yield* failure("not_found");
-      pendingExecutions.delete(input.executionId);
-      const slug = yield* scopedToolkit(input.threadId);
-      const result = yield* runtime
-        .callTool(slug, owner, "resume", {
-          executionId: input.executionId,
-          action: input.action,
-          content: input.content,
-        })
-        .pipe(Effect.mapError(() => failure()));
-      return yield* rememberPause(result, owner);
+      pending.inFlight = true;
+      return yield* Effect.gen(function* () {
+        const slug = yield* scopedToolkit(input.threadId);
+        // Consume only when dispatching: a preflight failure is retryable; an ambiguous
+        // upstream failure must not replay an approval or external side effect.
+        pendingExecutions.delete(input.executionId);
+        const result = yield* runtime
+          .callTool(slug, owner, "resume", {
+            executionId: input.executionId,
+            action: input.action,
+            content: input.content,
+          })
+          .pipe(Effect.mapError(() => failure()));
+        return yield* rememberPause(result, owner);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            pending.inFlight = false;
+          }),
+        ),
+      );
     },
   );
   return McpConnections.of({

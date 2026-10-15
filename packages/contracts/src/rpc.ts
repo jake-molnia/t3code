@@ -8,6 +8,7 @@ import {
   McpSetAccessInput,
   McpCompleteAuthInput,
 } from "./mcpConnections.ts";
+import { ServerReleaseNotice } from "./serverVersion.ts";
 import { ExecutionPoolsSnapshot } from "./executionPools.ts";
 import { SandboxIdeOpenInput, SandboxIdeOpenResult, SandboxIdeError } from "./sandboxIde.ts";
 import {
@@ -208,11 +209,6 @@ import {
   PullRequestUpdateInput,
 } from "./pullRequest.ts";
 import {
-  RelayClientInstallFailedError,
-  RelayClientInstallProgressEventSchema,
-  RelayClientStatusSchema,
-} from "./relayClient.ts";
-import {
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationGetWorkflowScriptError,
   OrchestrationV2StopWorkflowError,
@@ -291,7 +287,6 @@ import {
   DeviceSession,
   DeviceShutdownInput,
 } from "./device.ts";
-import {} from "./previewAutomation.ts";
 import {
   ServerConfigStreamEvent,
   OtlpEndpointCheckInput,
@@ -301,10 +296,6 @@ import {
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
   ServerProviderUpdatedPayload,
-  ServerSelfUpdateError,
-  ServerSelfUpdateInput,
-  ServerSelfUpdateProgressEvent,
-  ServerSelfUpdateResult,
   ServerTraceDiagnosticsResult,
   ServerProcessDiagnosticsResult,
   ServerProcessResourceHistoryInput,
@@ -474,10 +465,9 @@ export const WS_METHODS = {
   // Server meta
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
+  serverGetReleaseNotice: "server.getReleaseNotice",
   serverExecutionPools: "server.executionPools",
   serverRefreshProviders: "server.refreshProviders",
-  serverUpdateServer: "server.updateServer",
-  serverUpdateServerWithProgress: "server.updateServerWithProgress",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
@@ -530,8 +520,6 @@ export const WS_METHODS = {
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
   // Cloud environment methods
-  cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
-  cloudInstallRelayClient: "cloud.installRelayClient",
 
   // Pull request methods
   pullRequestsList: "pullRequests.list",
@@ -613,6 +601,12 @@ const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
 const WsServerExecutionPoolsRpc = Rpc.make(WS_METHODS.serverExecutionPools, {
   payload: Schema.Struct({}),
   success: ExecutionPoolsSnapshot,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerGetReleaseNoticeRpc = Rpc.make(WS_METHODS.serverGetReleaseNotice, {
+  payload: Schema.Struct({}),
+  success: ServerReleaseNotice,
   error: EnvironmentAuthorizationError,
 });
 
@@ -708,19 +702,6 @@ const WsProviderAuthSubscribeRpc = Rpc.make(WS_METHODS.providerAuthSubscribe, {
   payload: ProviderSetupInput,
   success: ProviderAuthState,
   error: ProviderSetupRpcError,
-  stream: true,
-});
-
-const WsServerUpdateServerRpc = Rpc.make(WS_METHODS.serverUpdateServer, {
-  payload: ServerSelfUpdateInput,
-  success: ServerSelfUpdateResult,
-  error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
-});
-
-const WsServerUpdateServerWithProgressRpc = Rpc.make(WS_METHODS.serverUpdateServerWithProgress, {
-  payload: ServerSelfUpdateInput,
-  success: ServerSelfUpdateProgressEvent,
-  error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
   stream: true,
 });
 
@@ -879,19 +860,6 @@ const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
   error: EnvironmentAuthorizationError,
-});
-
-const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
-  payload: Schema.Struct({}),
-  success: RelayClientStatusSchema,
-  error: EnvironmentAuthorizationError,
-});
-
-const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient, {
-  payload: Schema.Struct({}),
-  success: RelayClientInstallProgressEventSchema,
-  error: Schema.Union([RelayClientInstallFailedError, EnvironmentAuthorizationError]),
-  stream: true,
 });
 
 const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientActivity, {
@@ -1889,6 +1857,7 @@ export const WsRpcGroup = RpcGroup.make(
 
   WsServerProbeRpc,
   WsServerGetConfigRpc,
+  WsServerGetReleaseNoticeRpc,
   WsServerExecutionPoolsRpc,
   WsServerRefreshProvidersRpc,
   WsProviderConsumeResetCreditRpc,
@@ -1902,8 +1871,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderAuthCancelRpc,
   WsProviderAuthLogoutRpc,
   WsProviderAuthSubscribeRpc,
-  WsServerUpdateServerRpc,
-  WsServerUpdateServerWithProgressRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,
@@ -1943,8 +1910,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
-  WsCloudGetRelayClientStatusRpc,
-  WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,
   WsPullRequestsListStatsRpc,
   WsPullRequestsSummaryRpc,

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId } from "@t3tools/contracts";
+import { ChatImageAttachment, EnvironmentId } from "@t3tools/contracts";
+
+import * as Schema from "effect/Schema";
 
 import type { ComposerFileAttachment } from "../../composerDraftStore";
 import {
@@ -45,6 +47,26 @@ describe("resolveMarkdownMediaPreview", () => {
 });
 
 describe("buildExpandedImagePreview", () => {
+  it("opens ordinary and historical images together and skips unresolved previews", () => {
+    const base = { type: "image", name: "screenshot.png", mimeType: "image/png", sizeBytes: 3 };
+    const images = [
+      { ...base, id: "ordinary" },
+      { ...base, id: "historical", source: { kind: "snap-shot", accessibleText: "old metadata" } },
+    ].map((raw) => ({
+      ...Schema.decodeUnknownSync(ChatImageAttachment)(raw),
+      previewUrl: `https://environment.test/assets/${raw.id}.png`,
+    }));
+    const unresolved = Schema.decodeUnknownSync(ChatImageAttachment)({ ...base, id: "loading" });
+    expect(buildExpandedImagePreview([unresolved, ...images], "historical")).toEqual({
+      images: [
+        { src: "https://environment.test/assets/ordinary.png", name: "screenshot.png" },
+        { src: "https://environment.test/assets/historical.png", name: "screenshot.png" },
+      ],
+      index: 1,
+    });
+    expect(buildExpandedImagePreview([unresolved, ...images], "loading")).toBeNull();
+  });
+
   it("builds a signed-asset preview for a persisted video attachment", () => {
     const preview = buildAttachmentVideoPreview(EnvironmentId.make("environment-1"), {
       type: "file",

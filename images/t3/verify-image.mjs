@@ -1,11 +1,11 @@
-import fs from "node:fs";
-import path from "node:path";
-import { spawnSync } from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
 
-const manifest = JSON.parse(fs.readFileSync("/opt/t3/providers.lock.json", "utf8"));
+const manifest = JSON.parse(NodeFS.readFileSync("/opt/t3/providers.lock.json", "utf8"));
 const results = [];
 function probe(name, binary, args, expected) {
-  const result = spawnSync(binary, args, {
+  const result = NodeChildProcess.spawnSync(binary, args, {
     timeout: 60_000,
     encoding: "utf8",
     env: { ...process.env, CI: "1" },
@@ -13,21 +13,84 @@ function probe(name, binary, args, expected) {
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
   if (result.error || result.status !== 0)
     throw new Error(`${name} probe failed: ${result.error?.message ?? output}`);
-  if (expected && !output.includes(expected) && !output.includes(expected.split("-")[0]))
+  if (expected && !output.includes(expected))
     throw new Error(`${name} version differs from manifest: ${output}`);
   return output;
 }
-for (const [driver, spec] of Object.entries(manifest.harnesses)) {
-  if (spec.kind === "sdk") {
+function verifyExecutablePath(driver, spec) {
+  const expectedPath =
+    spec.kind === "npm"
+      ? NodePath.join("/opt/harnesses/node_modules/.bin", spec.binary)
+      : spec.kind === "runtime"
+        ? NodePath.join("/usr/local/bin", spec.binary)
+        : NodePath.join("/opt/native/bin", spec.binary);
+  const realPath = NodeFS.realpathSync(expectedPath);
+  const matches = (process.env.PATH ?? "")
+    .split(NodePath.delimiter)
+    .map((directory) => NodePath.join(directory, spec.binary))
+    .filter((candidate) => {
+      try {
+        NodeFS.accessSync(candidate, NodeFS.constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  if (
+    matches.length === 0 ||
+    matches.some((candidate) => NodeFS.realpathSync(candidate) !== realPath)
+  )
+    throw new Error(`${driver} has a missing or competing executable on PATH`);
+  if (spec.kind === "npm") {
+    const packageRoot = NodeFS.realpathSync(
+      NodePath.join("/opt/harnesses/node_modules", spec.package),
+    );
+    if (!realPath.startsWith(`${packageRoot}/`))
+      throw new Error(`${driver} executable is outside its locked package`);
     const installed = JSON.parse(
-      fs.readFileSync(path.join("/opt/t3/node_modules", spec.package, "package.json"), "utf8"),
+      NodeFS.readFileSync(NodePath.join(packageRoot, "package.json"), "utf8"),
+    );
+    if (installed.version !== spec.version)
+      throw new Error(`${driver} package differs from manifest`);
+  }
+  return { expectedPath, realPath };
+}
+for (const [driver, spec] of Object.entries(manifest.harnesses)) {
+  const executable = spec.kind === "sdk" ? null : verifyExecutablePath(driver, spec);
+  if (driver === "antigravity") {
+    const result = NodeChildProcess.spawnSync(
+      "python3",
+      ["/opt/t3/probe-antigravity.py", executable.expectedPath, spec.version],
+      { timeout: 100_000, encoding: "utf8" },
+    );
+    if (result.status !== 0)
+      throw new Error(`Antigravity native protocol probe failed: ${result.stderr}`);
+    results.push({
+      driver,
+      version: spec.version,
+      verified: "native-protocol",
+      ...JSON.parse(result.stdout),
+    });
+  } else if (spec.kind === "sdk") {
+    const installed = JSON.parse(
+      NodeFS.readFileSync(
+        NodePath.join("/opt/t3/node_modules", spec.package, "package.json"),
+        "utf8",
+      ),
     );
     if (installed.version !== spec.version)
       throw new Error(`${driver} SDK version differs from manifest`);
     results.push({ driver, version: installed.version, verified: "package" });
   } else {
-    probe(driver, spec.binary, ["--version"], spec.version);
-    results.push({ driver, version: spec.version, verified: "executable" });
+    const { expectedPath, realPath } = executable;
+    probe(driver, expectedPath, ["--version"], spec.version);
+    results.push({
+      driver,
+      version: spec.version,
+      path: expectedPath,
+      realPath,
+      verified: "executable",
+    });
   }
 }
 for (const [name, spec] of Object.entries(manifest.sourceControl)) {

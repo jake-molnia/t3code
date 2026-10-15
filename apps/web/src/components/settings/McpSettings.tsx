@@ -421,10 +421,7 @@ function McpConnectionCard({
   onChanged: () => void;
   refreshing: boolean;
 }) {
-  const savedSelection = commonMcpSelection(projectIds, access, connection.id);
-  const [choosingTools, setChoosingTools] = useState(false);
-  const selection: McpToolSelection | null | "mixed" =
-    choosingTools && savedSelection === null ? { mode: "selected", toolIds: [] } : savedSelection;
+  const selection = commonMcpSelection(projectIds, access, connection.id);
   const setAccess = useAtomCommand(mcpConnections.setAccess);
   const remove = useAtomCommand(mcpConnections.remove);
   const refresh = useAtomCommand(mcpConnections.refresh);
@@ -470,6 +467,11 @@ function McpConnectionCard({
             <p className="text-xs text-muted-foreground">
               Available to {assignedProjects} {assignedProjects === 1 ? "project" : "projects"}.
             </p>
+            {connection.needsReconnect ? (
+              <p role="status" className="text-xs text-warning">
+                Reconnect required. Project access is preserved.
+              </p>
+            ) : null}
             {connection.account ? (
               <p className="text-xs text-muted-foreground">{connection.account}</p>
             ) : null}
@@ -562,7 +564,6 @@ function McpConnectionCard({
                 value={mode}
                 disabled={busy || refreshing || !canSetAccess}
                 onValueChange={(value) => {
-                  setChoosingTools(value === "selected");
                   if (value === "off") void save(null);
                   if (value === "all") void save({ mode: "all" });
                   if (value === "selected") void save({ mode: "selected", toolIds: [] });

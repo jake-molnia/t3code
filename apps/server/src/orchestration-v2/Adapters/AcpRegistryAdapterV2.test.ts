@@ -343,12 +343,12 @@ describe("AcpRegistryAdapterV2", () => {
       );
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir: host.paths.providerStatusCacheDir,
-        toolsDir: host.paths.baseDir + "/tools",
         registryUrl,
       });
       const settings = yield* decodeAcpRegistryAdapterSettings({
         agentId: "fixture-agent",
         commandPath: process.execPath,
+        commandArgs: [mockAgentPath],
         authMethodId: "test",
       });
       let startupActive = false;

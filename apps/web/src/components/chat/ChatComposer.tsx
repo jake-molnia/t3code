@@ -294,11 +294,6 @@ import {
   buildExpandedImagePreview,
   type ExpandedImagePreview,
 } from "./ExpandedImagePreview";
-import {
-  SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
-  SnapShotAttachmentDetails,
-} from "./SnapShotAttachmentDetails";
-import { resizeSnapShotSource } from "../../lib/snapShotSource";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import {
@@ -3487,7 +3482,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 mimeType: image.mimeType,
                 sizeBytes: image.sizeBytes,
                 dataUrl,
-                ...(image.source ? { source: image.source } : {}),
               });
             } catch {
               const existingPersisted = existingPersistedById.get(image.id);
@@ -4949,9 +4943,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           mimeType: result.image.mimeType,
           sizeBytes: result.image.sizeBytes,
           dataUrl: result.image.dataUrl,
-          ...(image.source
-            ? { source: resizeSnapShotSource(image.source, result.image.imageSize) }
-            : {}),
         });
       }
       const { kept, droppedNames } = partitionStashAttachments(candidateAttachments);
@@ -6988,14 +6979,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               {!isComposerCollapsedMobile &&
                 !isComposerApprovalState &&
                 (composerVideos.length > 0 || expandedComposerImages.length > 0) && (
-                  <div
-                    className={cn(
-                      "mb-3 flex max-w-full gap-2",
-                      expandedComposerImages.some((image) => image.source?.kind === "snap-shot")
-                        ? "snap-x snap-proximity overflow-x-auto overscroll-x-contain pb-1 scrollbar-thumb-foreground/18 scrollbar-track-transparent [scrollbar-width:thin] [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:border-3 [&::-webkit-scrollbar-thumb]:border-transparent [&::-webkit-scrollbar-thumb]:bg-foreground/18 [&::-webkit-scrollbar-thumb]:bg-clip-content [&::-webkit-scrollbar-thumb:hover]:bg-foreground/28 [&::-webkit-scrollbar-track]:mx-1 [&::-webkit-scrollbar-track]:bg-transparent"
-                        : "flex-wrap",
-                    )}
-                  >
+                  <div className="mb-3 flex max-w-full flex-wrap gap-2">
                     {expandedComposerImages.map((image) => {
                       const upload = supportsAttachmentUploads
                         ? uploadsByImageId[image.id]
@@ -7004,12 +6988,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         <div
                           key={image.id}
                           data-chat-composer-expanded-image="true"
-                          className={cn(
-                            "group/attachment shrink-0 snap-start bg-background",
-                            image.source?.kind === "snap-shot"
-                              ? SNAP_SHOT_ATTACHMENT_FRAME_CLASS
-                              : "relative h-16 w-16 overflow-hidden rounded-lg border border-border/80",
-                          )}
+                          className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-border/80 bg-background"
                         >
                           {image.previewUrl ? (
                             <button
@@ -7038,15 +7017,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               {image.name}
                             </div>
                           )}
-                          {image.source?.kind === "snap-shot" ? (
-                            <SnapShotAttachmentDetails
-                              source={image.source}
-                              className={cn(
-                                upload?.status === "uploading" && "bottom-4",
-                                upload?.status === "failed" && "bottom-8",
-                              )}
-                            />
-                          ) : null}
                           {nonPersistedComposerImageIdSet.has(image.id) && (
                             <Tooltip>
                               <TooltipTrigger
@@ -7096,14 +7066,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               <TooltipPopup side="top">{upload.reason}</TooltipPopup>
                             </Tooltip>
                           )}
-                          {/* Snap-shot frames reveal their remove button on hover or focus. */}
-                          <span
-                            className={cn(
-                              "absolute right-1 top-1 flex",
-                              image.source?.kind === "snap-shot" &&
-                                "opacity-0 transition-opacity pointer-coarse:opacity-100 group-hover/attachment:opacity-100 group-focus-within/attachment:opacity-100",
-                            )}
-                          >
+                          <span className="absolute right-1 top-1 flex">
                             <Button
                               variant="media-close"
                               size="icon-xs"

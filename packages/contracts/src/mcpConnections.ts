@@ -28,6 +28,7 @@ export const McpConnection = Schema.Struct({
   name: Schema.String,
   url: Schema.String,
   account: Schema.NullOr(Schema.String),
+  needsReconnect: Schema.Boolean,
 });
 export type McpConnection = typeof McpConnection.Type;
 export const McpConnectionTool = Schema.Struct({

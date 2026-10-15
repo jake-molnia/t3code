@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as NodeHttp from "node:http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -183,6 +184,19 @@ if (installedRuntime) {
     () =>
       Effect.gen(function* () {
         const fixture = yield* remoteMcp;
+        let failReplacement = false;
+        const fetch: typeof globalThis.fetch = (input, init) => {
+          const request = new Request(input, init);
+          if (
+            failReplacement &&
+            request.method === "POST" &&
+            new URL(request.url).pathname === "/api/connections"
+          ) {
+            failReplacement = false;
+            return Promise.resolve(new Response(null, { status: 503 }));
+          }
+          return globalThis.fetch(input, init);
+        };
         yield* Effect.gen(function* () {
           const service = yield* McpConnections.McpConnections;
           expect(
@@ -200,6 +214,29 @@ if (installedRuntime) {
           const read = tools.find((tool) => tool.name === "read");
           const write = tools.find((tool) => tool.name === "write");
           if (!read || !write) throw new Error("Remote tool catalog incomplete");
+          yield* service.setAccess({
+            projectIds: [firstProject],
+            connectionId: connection.id,
+            tools: { mode: "selected", toolIds: [] },
+          });
+          expect((yield* service.list).access).toEqual([
+            {
+              projectId: firstProject,
+              connectionId: connection.id,
+              tools: { mode: "selected", toolIds: [] },
+            },
+          ]);
+          expect(
+            JSON.stringify(
+              yield* service.call({
+                threadId: firstThread,
+                sessionId: "provider-session",
+                operation: "execute",
+                value: `return await tools.${read.id.replace(/^tools\./, "")}({});`,
+              }),
+            ),
+          ).toContain("tool_blocked");
+          expect(fixture.calls).toEqual([]);
           yield* service.setAccess({
             projectIds: [firstProject, secondProject],
             connectionId: connection.id,
@@ -251,6 +288,24 @@ if (installedRuntime) {
           const beforeReconnect = (yield* service.list).access;
           for (const token of ["first-token", "replacement-token"]) {
             fixture.setToken(token);
+            failReplacement = true;
+            expect(
+              (yield* service
+                .connect(
+                  {
+                    connectionId: connection.id,
+                    name: "Fixture",
+                    url: fixture.url,
+                    auth: { type: "token", token },
+                  },
+                  "browser-session",
+                )
+                .pipe(Effect.result))._tag,
+            ).toBe("Failure");
+            expect((yield* service.list).connections).toMatchObject([
+              { id: connection.id, needsReconnect: true },
+            ]);
+            expect((yield* service.list).access).toEqual(beforeReconnect);
             yield* service.connect(
               {
                 connectionId: connection.id,
@@ -293,7 +348,7 @@ if (installedRuntime) {
             structuredContent: { status: "completed" },
           });
           expect(fixture.calls.at(-1)).toBe("approve");
-        }).pipe(Effect.provide(domain));
+        }).pipe(Effect.provide(domain), Effect.provideService(FetchHttpClient.Fetch, fetch));
       }).pipe(
         Effect.scoped,
         Effect.provideService(HostProcess.Environment, {

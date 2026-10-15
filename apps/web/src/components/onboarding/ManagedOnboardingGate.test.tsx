@@ -45,17 +45,13 @@ it("skips obsolete setup and finishes once only after onboarding persistence suc
     }),
   );
   const onDone = vi.fn();
-  const Legacy = vi.fn(() => <div>Connect your computers</div>);
   await act(async () =>
     root.render(
       <StrictMode>
-        <ManagedOnboardingGate environmentId={environmentId} onDone={onDone}>
-          <Legacy />
-        </ManagedOnboardingGate>
+        <ManagedOnboardingGate environmentId={environmentId} onDone={onDone} />
       </StrictMode>,
     ),
   );
-  expect(Legacy).not.toHaveBeenCalled();
   expect(complete).toHaveBeenCalledOnce();
   expect(onDone).not.toHaveBeenCalled();
   await act(async () => resolve());
@@ -64,33 +60,22 @@ it("skips obsolete setup and finishes once only after onboarding persistence suc
 
 it("waits for pool discovery without flashing legacy setup", async () => {
   const onDone = vi.fn();
-  const Legacy = vi.fn(() => <div>Install agents</div>);
   const render = () =>
-    root.render(
-      <ManagedOnboardingGate environmentId={environmentId} onDone={onDone}>
-        <Legacy />
-      </ManagedOnboardingGate>,
-    );
+    root.render(<ManagedOnboardingGate environmentId={environmentId} onDone={onDone} />);
   await act(async () => render());
-  expect(Legacy).not.toHaveBeenCalled();
   expect(complete).not.toHaveBeenCalled();
   snapshot = configured;
   await act(async () => render());
   expect(onDone).toHaveBeenCalledOnce();
-  expect(Legacy).not.toHaveBeenCalled();
 });
 
-it("preserves existing setup for a server without configured execution pools", async () => {
+it("finishes onboarding even when no execution pool is configured", async () => {
   snapshot = { defaultPoolId: poolId, pools: [] };
   await act(async () =>
-    root.render(
-      <ManagedOnboardingGate environmentId={environmentId} onDone={vi.fn()}>
-        <div>Existing setup</div>
-      </ManagedOnboardingGate>,
-    ),
+    root.render(<ManagedOnboardingGate environmentId={environmentId} onDone={vi.fn()} />),
   );
-  expect(container.textContent).toContain("Existing setup");
-  expect(complete).not.toHaveBeenCalled();
+  expect(container.textContent).toBe("");
+  expect(complete).toHaveBeenCalledOnce();
 });
 
 it("allows retry when onboarding state could not be saved", async () => {
@@ -98,11 +83,7 @@ it("allows retry when onboarding state could not be saved", async () => {
   complete.mockRejectedValueOnce(new Error("storage unavailable"));
   const onDone = vi.fn();
   await act(async () =>
-    root.render(
-      <ManagedOnboardingGate environmentId={environmentId} onDone={onDone}>
-        <div>Old setup</div>
-      </ManagedOnboardingGate>,
-    ),
+    root.render(<ManagedOnboardingGate environmentId={environmentId} onDone={onDone} />),
   );
   expect(container.querySelector('[role="alert"]')).not.toBeNull();
   expect(onDone).not.toHaveBeenCalled();

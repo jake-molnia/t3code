@@ -25,6 +25,11 @@ it.each([
   async ({ prefix, secure }) => {
     const seen: string[] = [];
     const server = NodeHttp.createServer((request, response) => {
+      if (request.url === "/healthz") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ status: "alive" }));
+        return;
+      }
       seen.push(request.url ?? "");
       if (request.url === "/redirect") {
         response.writeHead(302, { location: "/static/main.js" }).end();
@@ -146,7 +151,11 @@ effectIt.effect(
     Effect.gen(function* () {
       const { worker, identity, token, seen } = yield* Effect.acquireRelease(
         Effect.tryPromise(async () => {
-          const server = NodeHttp.createServer();
+          const server = NodeHttp.createServer((request, response) => {
+            if (request.url !== "/healthz") return response.writeHead(404).end();
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify({ status: "alive" }));
+          });
           const sockets = new NodeSocket.NodeWS.WebSocketServer({ server });
           const seen: NodeHttp.IncomingHttpHeaders[] = [];
           sockets.on("connection", (socket, request) => {

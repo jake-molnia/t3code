@@ -1,3 +1,4 @@
+import * as AntigravityInstallation from "../provider/AntigravityInstallation.ts";
 /**
  * Runs OpenCode 2 through the whole orchestrator with the real driver: the
  * driver probes the binary, spawns `opencode serve`, and routes to the 2.x
@@ -195,6 +196,7 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
       ),
       // These provider tests never launch Codex.
       Layer.mock(CodexInstallation.CodexInstallation)({}),
+      Layer.mock(AntigravityInstallation.AntigravityInstallation)({}),
       Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
         getEnvironmentId: Effect.succeed(
           EnvironmentId.make("00000000-0000-4000-8000-000000000001"),

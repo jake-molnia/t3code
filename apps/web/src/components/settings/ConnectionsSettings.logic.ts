@@ -3,8 +3,6 @@ import {
   type AuthGrantScope,
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
-  type DesktopBridge,
-  type DesktopWslState,
 } from "@t3tools/contracts";
 
 /**
@@ -37,8 +35,6 @@ export function canRevokeOtherClients(
   return clientSessions === null || clientSessions.some((session) => !session.current);
 }
 
-type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;
-
 /**
  * A QR code encoding a loopback URL makes the scanning device dial itself, so
  * loopback endpoints stay copyable from the endpoint menu but are never
@@ -46,14 +42,6 @@ type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistr
  */
 export function isQrShareableEndpoint(endpoint: AdvertisedEndpoint): boolean {
   return endpoint.status !== "unavailable" && endpoint.reachability !== "loopback";
-}
-
-export function isWslSettingsRowVisible(input: {
-  readonly state: DesktopWslState | null;
-  readonly error: string | null;
-}): boolean {
-  const { state, error } = input;
-  return state ? state.available || state.enabled || state.wslOnly : error !== null;
 }
 
 export type QrEndpointOption = {
@@ -88,22 +76,4 @@ export function selectQrEndpointOption<T extends QrEndpointOption>(
     options[0] ??
     null
   );
-}
-
-export async function applyWslEnableSelection(input: {
-  readonly bridge: WslEnableBridge;
-  readonly mode: "both" | "wsl-only";
-  readonly nextDistro: string | null;
-  readonly persistedDistro: string | null;
-}): Promise<DesktopWslState> {
-  const { bridge, mode, nextDistro, persistedDistro } = input;
-
-  // Stage every preference before enabling. The desktop only relaunches for
-  // mode/distro changes while WSL is active, so the final enable observes the
-  // complete selection and is the only call that may relaunch.
-  await bridge.setWslOnly(mode === "wsl-only");
-  if (persistedDistro !== nextDistro) {
-    await bridge.setWslDistro(nextDistro);
-  }
-  return await bridge.setWslBackendEnabled(true);
 }

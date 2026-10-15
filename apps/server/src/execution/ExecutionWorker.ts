@@ -62,6 +62,7 @@ const READ_ONLY_EXECUTION_METHODS = new Set([
   "provider.snapshot",
   "provider.snapshotForCwd",
   "provider.refresh",
+  "provider.refreshModels",
   "auth.state",
   "files.read",
   "files.metadata",

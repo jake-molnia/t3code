@@ -5,7 +5,6 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION_TEXT,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
-import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import { FetchHttpClient, type HttpMethod } from "effect/http";
 
 import type { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
@@ -116,7 +115,6 @@ export const executeAuthenticatedEnvironmentHttpRequest = <
   input.prepared.httpAuthorization?._tag === "Dpop"
     ? executeEnvironmentRequest(input).pipe(
         Effect.withSpan(ENVIRONMENT_REQUEST_SPAN, { root: true }),
-        withRelayClientTracing,
       )
     : executeEnvironmentRequest(input).pipe(Effect.withSpan(ENVIRONMENT_REQUEST_SPAN));
 

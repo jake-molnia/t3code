@@ -54,7 +54,7 @@ vi.mock("../ui/toast", () => ({ toastManager: { add: actions.toast } }));
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 
 const remoteEnvironmentId = EnvironmentId.make("remote-device");
-const preparedAgent: AcpRegistrySearchAgent = {
+const selectedAgent: AcpRegistrySearchAgent = {
   id: "kilo",
   name: "Kilo Code",
   version: "4.2.0",
@@ -84,7 +84,7 @@ function findByChildren(tree: ReturnType<typeof render>, children: string) {
   return result!;
 }
 
-async function selectPreparedAcp() {
+async function selectRegistryAcp() {
   const searchStep = render();
   const search = visitElements(
     searchStep,
@@ -92,9 +92,19 @@ async function selectPreparedAcp() {
       typeof element.type === "function" && element.type.name === "AcpRegistrySearchStep",
   );
   expect(search).not.toBeNull();
-  (search?.props.onPrepared as ((agent: AcpRegistrySearchAgent) => void) | undefined)?.(
-    preparedAgent,
+  (search?.props.onSelected as ((agent: AcpRegistrySearchAgent) => void) | undefined)?.(
+    selectedAgent,
   );
+}
+
+function setRegistryExecutable(tree: ReturnType<typeof render>, value: string) {
+  const input = visitElements(
+    tree,
+    (element) => element.props.id === "add-provider-acp-executable",
+  );
+  const change = input?.props.onChange;
+  if (typeof change !== "function") throw new Error("Registry executable editor is missing");
+  change({ target: { value } });
 }
 
 function renderDialog() {
@@ -195,7 +205,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     expect(settingsHooks.useMutation).toHaveBeenCalledWith(remoteEnvironmentId);
   });
 
-  it("awaits an atomic create before closing and retains prepared ACP metadata", async () => {
+  it("awaits an atomic create before closing and retains selected ACP metadata", async () => {
     const onOpenChange = vi.fn();
     let resolveMutation!: (value: { readonly _tag: "Success"; readonly value: unknown }) => void;
     settingsHooks.mutate.mockReturnValueOnce(
@@ -203,9 +213,9 @@ describe("AddProviderInstanceDialog environment routing", () => {
         resolveMutation = resolve;
       }),
     );
-    await selectPreparedAcp();
+    await selectRegistryAcp();
 
-    const identityStep = render(onOpenChange);
+    let identityStep = render(onOpenChange);
     expect(
       visitElements(identityStep, (element) => {
         const content = JSON.stringify(element.props.children);
@@ -215,6 +225,14 @@ describe("AddProviderInstanceDialog environment routing", () => {
     (
       findByChildren(identityStep, "Continue to sign-in").props.onClick as (() => void) | undefined
     )?.();
+    expect(settingsHooks.mutate).not.toHaveBeenCalled();
+    identityStep = render(onOpenChange);
+    expect(
+      findByChildren(identityStep, "An executable supplied by the sandbox image is required."),
+    ).not.toBeNull();
+    setRegistryExecutable(identityStep, "/opt/agents/bin/kilo");
+    identityStep = render(onOpenChange);
+    (findByChildren(identityStep, "Continue to sign-in").props.onClick as () => void)();
     expect(settingsHooks.mutate).toHaveBeenCalledWith({
       operation: "create",
       instanceId: "acpRegistry_kilo_code",
@@ -224,6 +242,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
         displayName: "Kilo Code",
         config: {
           agentId: "kilo",
+          commandPath: "/opt/agents/bin/kilo",
           distribution: "auto",
           registryIconUrl: "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg",
         },
@@ -264,6 +283,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     );
     (configuration!.props.onChange as (value: Record<string, unknown>) => void)({
       agentId: "devin",
+      commandPath: "/opt/agents/bin/devin",
     });
     tree = render();
     (findByChildren(tree, "Next").props.onClick as () => void)();
@@ -277,7 +297,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
       instance: {
         driver: "acpRegistry",
         enabled: true,
-        config: { agentId: "devin" },
+        config: { agentId: "devin", commandPath: "/opt/agents/bin/devin" },
       },
     });
     tree = render();
@@ -362,8 +382,8 @@ describe("AddProviderInstanceDialog environment routing", () => {
   it("keeps the dialog open when the atomic upsert fails", async () => {
     settingsHooks.mutate.mockResolvedValueOnce({ _tag: "Failure", cause: new Error("Conflict") });
     const onOpenChange = vi.fn();
-    await selectPreparedAcp();
-
+    await selectRegistryAcp();
+    setRegistryExecutable(render(onOpenChange), "/opt/agents/bin/kilo");
     const identityStep = render(onOpenChange);
     (
       findByChildren(identityStep, "Continue to sign-in").props.onClick as (() => void) | undefined

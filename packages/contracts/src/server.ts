@@ -1,11 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AcpRegistryUrlAuthAction } from "./acpRegistry.ts";
-import {
-  type EnvironmentMachineKind,
-  ExecutionEnvironmentDescriptor,
-  ServerSelfUpdateMethod,
-} from "./environment.ts";
+import { type EnvironmentMachineKind, ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
   ForwardCompatibleArray,
@@ -216,32 +212,10 @@ export const ServerProviderVersionAdvisory = Schema.Struct({
   status: ServerProviderVersionAdvisoryStatus,
   currentVersion: Schema.NullOr(TrimmedNonEmptyString),
   latestVersion: Schema.NullOr(TrimmedNonEmptyString),
-  updateCommand: Schema.NullOr(TrimmedNonEmptyString),
-  canUpdate: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  canInstallVersion: Schema.optionalKey(Schema.Boolean),
   checkedAt: Schema.NullOr(IsoDateTime),
   message: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type ServerProviderVersionAdvisory = typeof ServerProviderVersionAdvisory.Type;
-
-export const ServerProviderUpdateStatus = Schema.Literals([
-  "idle",
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "unchanged",
-]);
-export type ServerProviderUpdateStatus = typeof ServerProviderUpdateStatus.Type;
-
-export const ServerProviderUpdateState = Schema.Struct({
-  status: ServerProviderUpdateStatus,
-  startedAt: Schema.NullOr(IsoDateTime),
-  finishedAt: Schema.NullOr(IsoDateTime),
-  message: Schema.NullOr(TrimmedNonEmptyString),
-  output: Schema.NullOr(Schema.String.check(Schema.isMaxLength(10_000))),
-});
-export type ServerProviderUpdateState = typeof ServerProviderUpdateState.Type;
 
 export const ServerProvider = Schema.Struct({
   // Routing key for the configured instance this snapshot represents. This
@@ -268,7 +242,6 @@ export const ServerProvider = Schema.Struct({
   setup: Schema.optional(
     Schema.Struct({
       canAuthenticate: Schema.Boolean,
-      canInstall: Schema.Boolean,
       documentationUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
     }),
   ),
@@ -315,13 +288,11 @@ export const ServerProvider = Schema.Struct({
   usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   compatibilityAdvisory: Schema.optionalKey(ServerProviderCompatibilityAdvisory),
-  updateState: Schema.optionalKey(ServerProviderUpdateState),
 });
 export type ServerProvider = typeof ServerProvider.Type;
 
 // Provider status kinds grow over time (ServerProviderState,
-// ServerProviderAuthStatus, ServerProviderVersionAdvisoryStatus,
-// ServerProviderUpdateStatus); an older client must not fail the whole config
+// ServerProviderAuthStatus, ServerProviderVersionAdvisoryStatus); an older client must not fail the whole config
 // decode over one provider it cannot render.
 export const ServerProviders = ForwardCompatibleArray(ServerProvider);
 export type ServerProviders = typeof ServerProviders.Type;
@@ -883,21 +854,9 @@ export const ServerConfigStreamEvent = Schema.Union([
 ]);
 export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
 
-/** Terminal selection recorded by the service launcher for one update. */
-export const ServerSelfUpdateOutcome = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  fromVersion: TrimmedNonEmptyString,
-  targetVersion: TrimmedNonEmptyString,
-  status: Schema.Literals(["committed", "rolled-back", "failed"]),
-  reason: Schema.optionalKey(TrimmedNonEmptyString),
-});
-export type ServerSelfUpdateOutcome = typeof ServerSelfUpdateOutcome.Type;
-
 export const ServerLifecycleReadyPayload = Schema.Struct({
   at: IsoDateTime,
   environment: ExecutionEnvironmentDescriptor,
-  /** Present when this process resumed a launcher-managed update. */
-  updateOutcome: Schema.optionalKey(ServerSelfUpdateOutcome),
 });
 export type ServerLifecycleReadyPayload = typeof ServerLifecycleReadyPayload.Type;
 
@@ -956,78 +915,3 @@ export const ServerProviderUpdatedPayload = Schema.Struct({
   providers: ServerProviders,
 });
 export type ServerProviderUpdatedPayload = typeof ServerProviderUpdatedPayload.Type;
-
-export const ServerProviderUpdateInput = Schema.Struct({
-  provider: ProviderDriverKind,
-  targetVersion: Schema.optionalKey(TrimmedNonEmptyString),
-  instanceId: Schema.optionalKey(ProviderInstanceId),
-});
-export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
-
-export class ServerProviderUpdateError extends Schema.TaggedError<ServerProviderUpdateError>()(
-  "ServerProviderUpdateError",
-  {
-    provider: ProviderDriverKind,
-    reason: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Provider update failed for ${this.provider}: ${this.reason}`;
-  }
-}
-
-export const ServerSelfUpdateInput = Schema.Struct({
-  /** Exact npm version of the `t3` package to install (never a dist-tag, so
-      the server and the acknowledging client agree on what was requested). */
-  targetVersion: TrimmedNonEmptyString,
-  /** Opt-in recovery for provider turns that are running when the server
-      hands off to its replacement. Missing and false keep restart behavior
-      conservative under version skew. */
-  continueRunningThreads: Schema.optionalKey(Schema.Boolean),
-});
-export type ServerSelfUpdateInput = typeof ServerSelfUpdateInput.Type;
-
-/** Acknowledgement that the update artifact is installed and the server is
-    about to restart into it — the connection will drop moments later. */
-export const ServerSelfUpdateResult = Schema.Struct({
-  targetVersion: TrimmedNonEmptyString,
-  method: ServerSelfUpdateMethod,
-  /** Launcher-generated correlation ID. Absent when talking to older servers. */
-  updateId: Schema.optionalKey(TrimmedNonEmptyString),
-  /** Desktop preparation token. Present only for the desktop-app method. */
-  desktopUpdateToken: Schema.optionalKey(TrimmedNonEmptyString),
-});
-export type ServerSelfUpdateResult = typeof ServerSelfUpdateResult.Type;
-
-export const DesktopUpdateCommitInput = Schema.Struct({
-  requestId: TrimmedNonEmptyString,
-});
-export type DesktopUpdateCommitInput = typeof DesktopUpdateCommitInput.Type;
-
-export const ServerSelfUpdateProgressStage = Schema.Literals(["downloading", "installing"]);
-export type ServerSelfUpdateProgressStage = typeof ServerSelfUpdateProgressStage.Type;
-
-export const ServerSelfUpdateProgressEvent = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("progress"),
-    stage: ServerSelfUpdateProgressStage,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("complete"),
-    result: ServerSelfUpdateResult,
-  }),
-]);
-export type ServerSelfUpdateProgressEvent = typeof ServerSelfUpdateProgressEvent.Type;
-
-export class ServerSelfUpdateError extends Schema.TaggedError<ServerSelfUpdateError>()(
-  "ServerSelfUpdateError",
-  {
-    reason: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Server update failed: ${this.reason}`;
-  }
-}

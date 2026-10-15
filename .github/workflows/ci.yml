@@ -247,15 +247,9 @@ jobs:
         with:
           components: rustfmt
       - name: Check Rust formatting
-        run: |
-          for crate in resource-monitor kde-snap-shot hyprland-snap-shot; do
-            cargo fmt --manifest-path "native/$crate/Cargo.toml" -- --check
-          done
+        run: cargo fmt --manifest-path native/resource-monitor/Cargo.toml -- --check
       - name: Test Rust crates
-        run: |
-          for crate in resource-monitor kde-snap-shot hyprland-snap-shot; do
-            cargo test --locked --manifest-path "native/$crate/Cargo.toml"
-          done
+        run: cargo test --locked --manifest-path native/resource-monitor/Cargo.toml
 
   # Branch protection requires this job by its name, `Check`. It fails when any
   # other job fails, is cancelled, or is skipped without a reason, so splitting
