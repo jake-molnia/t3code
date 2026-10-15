@@ -4,6 +4,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as C from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import { ConfigureProvider } from "./WorkerProviders.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { HttpRouter, HttpServer } from "effect/http";
@@ -19,6 +21,8 @@ import { createExecutionClient, type ExecutionClient } from "./ExecutionClient.t
 import { createExecutionWorker } from "./ExecutionWorker.ts";
 import { openWorkerJournal } from "./WorkerJournal.ts";
 import { listenWorker } from "./WorkerHttpServer.ts";
+
+const decodeConfiguration = Schema.decodeUnknownSync(Schema.toCodecJson(ConfigureProvider));
 
 it.live(
   "broker wakes the current credential owner, follows replacement, and rejects revoked or mismatched scopes",
@@ -51,8 +55,10 @@ it.live(
           identity,
           token,
           journal,
-          execute: async (method) => {
+          execute: async (method, input) => {
             if (method === "configureProvider") {
+              const configuration = decodeConfiguration(input);
+              expect(configuration.settings.sourceControlHosts).toEqual({});
               configured.push(generation);
               return null;
             }
@@ -130,7 +136,13 @@ it.live(
                 }),
               ),
               Layer.provide(runtime),
-              Layer.provide(Settings.layerTest()),
+              Layer.provide(
+                Settings.layerTest({
+                  sourceControlHosts: {
+                    github: { tokens: { "github.com": "fixture-github-token" } },
+                  },
+                }),
+              ),
             ),
             { disableLogger: true },
           ),

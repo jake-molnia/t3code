@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService, applyProviderInstanceMutation } from "../serverSettings.ts";
+import { settingsForProviderExecution } from "./credentialPolicy.ts";
 
 /** Provider configuration on retained storage; no conversation or orchestration database. */
 export const layer = Layer.effect(
@@ -33,7 +34,7 @@ export const layer = Layer.effect(
     const update = (change: (current: ServerSettings) => ServerSettings) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
-          const next = change(yield* SubscriptionRef.get(state));
+          const next = settingsForProviderExecution(change(yield* SubscriptionRef.get(state)));
           const encoded = yield* Schema.encodeEffect(schema)(next);
           yield* fs.writeFileString(`${config.settingsPath}.tmp`, encoded, { mode: 0o600 });
           yield* fs.rename(`${config.settingsPath}.tmp`, config.settingsPath);
@@ -41,6 +42,9 @@ export const layer = Layer.effect(
           return next;
         }).pipe(Effect.mapError(wrap)),
       );
+    if (Object.keys(initial.sourceControlHosts).length > 0) {
+      yield* update((current) => current);
+    }
     return ServerSettingsService.of({
       start: Effect.void,
       ready: Effect.void,

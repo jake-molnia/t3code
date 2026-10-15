@@ -4,7 +4,6 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
   ActivityIcon,
   AlertTriangleIcon,
-  BatteryIcon,
   CpuIcon,
   DatabaseIcon,
   GaugeIcon,
@@ -13,7 +12,6 @@ import {
 } from "lucide-react";
 import { ChevronDown, ChevronRight } from "lucide";
 import type {
-  BackgroundBooleanState,
   EnvironmentId,
   ResourceAttributionEntry,
   ResourceTelemetryAggregate,
@@ -117,14 +115,6 @@ function categoryLabel(category: ResourceTelemetryProcessCategory): string {
       return "Provider";
     case "terminal-root":
       return "Terminal";
-    case "electron-main":
-      return "Electron main";
-    case "electron-renderer":
-      return "Renderer";
-    case "electron-gpu":
-      return "GPU";
-    case "electron-utility":
-      return "Electron utility";
     case "resource-monitor":
       return "Monitor";
     case "unknown-t3":
@@ -134,7 +124,6 @@ function categoryLabel(category: ResourceTelemetryProcessCategory): string {
 
 function categoryDotClass(category: ResourceTelemetryProcessCategory): string {
   if (category === "resource-monitor") return "bg-warning";
-  if (category.startsWith("electron-")) return "bg-info";
   if (category === "server") return "bg-violet-500";
   return "bg-success";
 }
@@ -152,15 +141,6 @@ function ioSemanticsLabel(semantics: ResourceTelemetryIoSemantics): string {
   }
 }
 
-function booleanStateLabel(
-  value: BackgroundBooleanState,
-  labels: { readonly true: string; readonly false: string },
-): string {
-  if (value === "true") return labels.true;
-  if (value === "false") return labels.false;
-  return "Unknown";
-}
-
 function sourceStatusTone(status: ResourceTelemetrySourceStatus): "default" | "warning" | "danger" {
   if (status === "healthy") return "default";
   if (status === "starting" || status === "degraded") return "warning";
@@ -170,23 +150,15 @@ function sourceStatusTone(status: ResourceTelemetrySourceStatus): "default" | "w
 function SourceStatusBadge({
   label,
   status,
-  presentation,
 }: {
   label: string;
   status: ResourceTelemetrySourceStatus;
-  presentation?:
-    | {
-        readonly label: string;
-        readonly tone: "neutral";
-      }
-    | undefined;
 }) {
-  const tone = presentation?.tone ?? sourceStatusTone(status);
+  const tone = sourceStatusTone(status);
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-3xs font-semibold uppercase tracking-widest",
-        tone === "neutral" && "border-border/70 bg-muted/45 text-muted-foreground",
         tone === "default" && "border-success/25 bg-success/10 text-success-foreground",
         tone === "warning" && "border-warning/30 bg-warning/10 text-warning-foreground",
         tone === "danger" && "border-destructive/30 bg-destructive/10 text-destructive",
@@ -195,13 +167,12 @@ function SourceStatusBadge({
       <span
         className={cn(
           "size-1.5 rounded-full",
-          tone === "neutral" && "bg-muted-foreground/55",
           tone === "default" && "bg-success",
           tone === "warning" && "bg-warning",
           tone === "danger" && "bg-destructive",
         )}
       />
-      {label} {presentation?.label ?? status}
+      {label} {status}
     </span>
   );
 }
@@ -304,34 +275,18 @@ function MetricPair({ label, value }: { label: string; value: string }) {
 }
 
 function HealthSource({ label, health }: { label: string; health: ResourceTelemetrySourceHealth }) {
-  const expectedInBrowser =
-    health.status === "unavailable" &&
-    Option.exists(health.lastError, (error) => error.includes("'web' mode"));
   return (
     <div className="flex items-start justify-between gap-4 border-t border-border/50 py-3 first:border-t-0">
       <div className="min-w-0">
         <div className="text-sm font-medium text-foreground">{label}</div>
         <div className="mt-1 text-2xs leading-relaxed text-muted-foreground/65">
-          {expectedInBrowser
-            ? "Available when this page runs inside the desktop app."
-            : Option.match(health.lastError, {
-                onNone: () => "No reported errors",
-                onSome: (error) => error,
-              })}
+          {Option.match(health.lastError, {
+            onNone: () => "No reported errors",
+            onSome: (error) => error,
+          })}
         </div>
       </div>
-      <SourceStatusBadge
-        label=""
-        status={health.status}
-        presentation={
-          expectedInBrowser
-            ? {
-                label: "Desktop only",
-                tone: "neutral",
-              }
-            : undefined
-        }
-      />
+      <SourceStatusBadge label="" status={health.status} />
     </div>
   );
 }
@@ -952,18 +907,10 @@ export function ResourceTelemetryDiagnostics({
       });
   }, [retryTelemetry]);
 
-  const speedLimit = snapshot ? Option.getOrNull(snapshot.speedLimitPercent) : null;
   const collectorNeedsRetry = shouldShowResourceMonitorRetry({
     nativeStatus: snapshot?.health.native.status ?? null,
     error: telemetry.error,
   });
-  const hasHostPowerSignal =
-    snapshot !== null &&
-    (snapshot.power.onBattery !== "unknown" ||
-      snapshot.power.lowPowerMode !== "unknown" ||
-      snapshot.power.idle !== "unknown" ||
-      snapshot.power.locked !== "unknown" ||
-      snapshot.power.thermalState !== "unknown");
 
   return (
     <>
@@ -1002,8 +949,7 @@ export function ResourceTelemetryDiagnostics({
                 T3 system footprint
               </div>
               <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
-                Live native counters for the server, providers, terminals, desktop processes, and
-                the monitor itself.
+                Live native counters for the server, providers, terminals, and the monitor itself.
               </p>
             </div>
             <div className="flex items-center gap-2 text-3xs text-muted-foreground/65">
@@ -1011,7 +957,7 @@ export function ResourceTelemetryDiagnostics({
               Sampling every {snapshot ? formatSampleInterval(snapshot.sampleIntervalMs) : "..."}
             </div>
           </div>
-          <div className="grid grid-cols-2 divide-x divide-y divide-border/55 md:grid-cols-3">
+          <div className="grid grid-cols-2 divide-x divide-y divide-border/55">
             <IconStat
               icon={<CpuIcon className="size-3.5" />}
               label="Current CPU"
@@ -1053,15 +999,6 @@ export function ResourceTelemetryDiagnostics({
                     : "default"
               }
             />
-            <IconStat
-              icon={<GaugeIcon className="size-3.5" />}
-              label="CPU speed limit"
-              value={
-                snapshot ? (speedLimit === null ? "Unknown" : `${speedLimit.toFixed(0)}%`) : "..."
-              }
-              detail={snapshot ? `${snapshot.power.thermalState} thermal state` : undefined}
-              tone={speedLimit !== null && speedLimit < 80 ? "warning" : "default"}
-            />
           </div>
           {telemetry.error ? (
             <div className="flex items-start gap-2 border-t border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive sm:px-5">
@@ -1070,16 +1007,11 @@ export function ResourceTelemetryDiagnostics({
             </div>
           ) : null}
           {snapshot ? (
-            <div className="grid border-t border-border/60 bg-muted/10 md:grid-cols-3">
+            <div className="grid border-t border-border/60 bg-muted/10 md:grid-cols-2">
               <AggregateCard
                 label="Backend + agents"
                 accentClass="bg-success/80"
                 aggregate={snapshot.groups.backend}
-              />
-              <AggregateCard
-                label="Desktop"
-                accentClass="bg-info/80"
-                aggregate={snapshot.groups.electron}
               />
               <AggregateCard
                 label="Monitor overhead"
@@ -1092,7 +1024,7 @@ export function ResourceTelemetryDiagnostics({
       </SettingsSection>
 
       <SettingsSection
-        title="Host & collection"
+        title="Collection health"
         icon={<GaugeIcon className="size-4 text-muted-foreground" />}
         headerAction={
           collectorNeedsRetry ? (
@@ -1103,76 +1035,8 @@ export function ResourceTelemetryDiagnostics({
           ) : null
         }
       >
-        <div className="grid overflow-hidden rounded-2xl border border-border/70 bg-card shadow-xs/5 md:grid-cols-2 md:divide-x md:divide-border/60">
+        <div className="grid overflow-hidden rounded-2xl border border-border/70 bg-card shadow-xs/5">
           <div className="px-4 py-4 sm:px-5">
-            <div className="mb-3 flex items-center gap-2 text-3xs font-semibold uppercase tracking-widest text-muted-foreground/70">
-              <span className="flex size-6 items-center justify-center rounded-md bg-muted/60">
-                <BatteryIcon className="size-3.5" />
-              </span>
-              Host state
-            </div>
-            {hasHostPowerSignal && snapshot ? (
-              <>
-                <DetailRow
-                  label="Power source"
-                  value={booleanStateLabel(snapshot.power.onBattery, {
-                    true: "Battery",
-                    false: "External power",
-                  })}
-                />
-                <DetailRow
-                  label="Low power mode"
-                  value={booleanStateLabel(snapshot.power.lowPowerMode, {
-                    true: "Enabled",
-                    false: "Disabled",
-                  })}
-                />
-                <DetailRow
-                  label="Idle"
-                  value={`${booleanStateLabel(snapshot.power.idle, {
-                    true: "Idle",
-                    false: "Active",
-                  })}${
-                    snapshot.power.idleSeconds === null
-                      ? ""
-                      : ` · ${Math.round(snapshot.power.idleSeconds)}s`
-                  }`}
-                />
-                <DetailRow
-                  label="Session"
-                  value={
-                    snapshot.power.suspended
-                      ? "Suspended"
-                      : booleanStateLabel(snapshot.power.locked, {
-                          true: "Locked",
-                          false: "Unlocked",
-                        })
-                  }
-                />
-                <DetailRow
-                  label="Thermal"
-                  value={snapshot.power.thermalState}
-                  valueClassName={
-                    snapshot.power.thermalState === "serious" ||
-                    snapshot.power.thermalState === "critical"
-                      ? "text-destructive"
-                      : undefined
-                  }
-                />
-              </>
-            ) : (
-              <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-4 py-5">
-                <div className="text-sm font-medium text-foreground">
-                  Desktop host signals not connected
-                </div>
-                <p className="mt-1.5 max-w-sm text-2xs leading-relaxed text-muted-foreground/70">
-                  Power, idle, lock, and thermal state are supplied by the desktop host. Process
-                  telemetry remains fully active in this browser session.
-                </p>
-              </div>
-            )}
-          </div>
-          <div className="border-t border-border/60 px-4 py-4 md:border-t-0 sm:px-5">
             <div className="mb-3 flex items-center gap-2 text-3xs font-semibold uppercase tracking-widest text-muted-foreground/70">
               <span className="flex size-6 items-center justify-center rounded-md bg-muted/60">
                 <GaugeIcon className="size-3.5" />
@@ -1182,7 +1046,6 @@ export function ResourceTelemetryDiagnostics({
             {snapshot ? (
               <>
                 <HealthSource label="Native process monitor" health={snapshot.health.native} />
-                <HealthSource label="Electron main process" health={snapshot.health.desktop} />
                 <DetailRow
                   label="Collection time"
                   value={formatDurationMicros(snapshot.health.collectionDurationMicros)}

@@ -1,5 +1,4 @@
 import type {
-  DesktopHostTelemetrySnapshot,
   ResourceMonitorSnapshotEvent,
   ResourceTelemetryHealth,
   ResourceTelemetryHistory,
@@ -55,7 +54,6 @@ export interface BuildResourceTelemetryHistoryInput {
   readonly sampleIntervalMs: number;
   readonly serverPid: number;
   readonly sidecarPid: Option.Option<number>;
-  readonly desktopSnapshot: Option.Option<DesktopHostTelemetrySnapshot>;
   readonly snapshots: ReadonlyArray<ResourceMonitorSnapshotEvent>;
   readonly health: ResourceTelemetryHealth;
 }
@@ -186,33 +184,11 @@ export function buildResourceTelemetryHistory(
           )
         : 1;
     previousSnapshotAtMs = snapshot.sampledAtUnixMs;
-    const recordedExternalProcesses =
-      snapshot.externalProcesses ??
-      Option.match(input.desktopSnapshot, {
-        onNone: () => [],
-        onSome: (desktopSnapshot) => [
-          {
-            pid: desktopSnapshot.electronPid,
-            startTimeMs: desktopSnapshot.electronProcesses.find(
-              (metric) => metric.pid === desktopSnapshot.electronPid,
-            )?.creationTimeMs,
-          },
-        ],
-      });
-    const electronRootPids = new Set(recordedExternalProcesses.map((process) => process.pid));
-    const electronRootStartTimes = new Map(
-      recordedExternalProcesses.flatMap((process) =>
-        process.startTimeMs === undefined ? [] : [[process.pid, process.startTimeMs] as const],
-      ),
-    );
     const merged = mergeProcesses({
       serverPid: input.serverPid,
       sidecarPid: input.sidecarPid,
       fallbackSampledAtMs: snapshot.sampledAtUnixMs,
       nativeSnapshot: Option.some(snapshot),
-      desktopSnapshot: Option.none(),
-      electronRootPids,
-      electronRootStartTimes,
       previous,
       counters,
       updatePrevious: true,

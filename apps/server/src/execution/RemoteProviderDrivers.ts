@@ -1,6 +1,10 @@
 import { isAntigravityLogoutPrompt } from "../provider/AntigravityAuth.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import { credentialPolicy, applyCredentialPolicy } from "./credentialPolicy.ts";
+import {
+  credentialPolicy,
+  applyCredentialPolicy,
+  settingsForProviderExecution,
+} from "./credentialPolicy.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import { trackRemoteSessionSetup } from "./RemoteSessionSetup.ts";
 import * as AttachmentStaging from "../agentRuntime/AttachmentStaging.ts";
@@ -107,7 +111,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
             const encoded = yield* encodeRpcValue({
               instanceId,
               config,
-              settings: current,
+              settings: settingsForProviderExecution(current),
             });
             yield* Effect.tryPromise(() => client.transient("configureProvider", encoded));
             if (

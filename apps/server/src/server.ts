@@ -40,7 +40,6 @@ import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
-import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerConfig from "./config.ts";
 import { withUntracedRequests } from "./http.ts";
 import * as ServerHttp from "./http.ts";
@@ -122,7 +121,6 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
-import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
@@ -200,25 +198,11 @@ const layerServerSettings = ServerSettings.layer.pipe(
 const layerNativeTelemetry = NativeTelemetryClient.layer.pipe(
   Layer.provide(ResourceMonitorBinary.layer),
 );
-const layerDesktopTelemetryReceiver = DesktopTelemetryReceiver.layer.pipe(
-  Layer.provideMerge(layerServerSettings),
-);
-
 const layerResourceTelemetry = ResourceTelemetry.layer.pipe(
   Layer.provideMerge(layerNativeTelemetry),
-  Layer.provideMerge(layerDesktopTelemetryReceiver),
 );
 
-const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
-  Layer.provide(layerDesktopTelemetryReceiver),
-);
-
-// Reuses DesktopTelemetryReceiverLayerLive: a fresh receiver layer here
-// would open a second reader on the desktop telemetry fd.
-const layerBackground = BackgroundPolicy.layer.pipe(
-  Layer.provide(layerHostPowerMonitor),
-  Layer.provideMerge(layerServerSettings),
-);
+const layerBackground = BackgroundPolicy.layer.pipe(Layer.provideMerge(layerServerSettings));
 
 const layerResourceDiagnostics = Layer.mergeAll(
   HostResources.layer,

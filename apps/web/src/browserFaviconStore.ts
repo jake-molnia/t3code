@@ -198,7 +198,7 @@ export function registerFaviconProjectForThread(
   });
 }
 
-export function useFaviconProjectRefForThread(threadRef: ScopedThreadRef): ScopedProjectRef | null {
+function useFaviconProjectRefForThread(threadRef: ScopedThreadRef): ScopedProjectRef | null {
   const shell = useThreadShell(threadRef);
   const shellProjectId = shell?.projectId ?? null;
   const shellProjectRef = useMemo(
