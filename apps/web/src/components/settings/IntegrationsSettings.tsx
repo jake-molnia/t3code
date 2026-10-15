@@ -115,6 +115,7 @@ type BrowserProfileDataBridge = Pick<
 export interface ServerProfileData {
   readonly environmentIds: ReadonlyArray<EnvironmentId>;
   readonly clear: (environmentId: EnvironmentId, profileId: string) => Promise<void>;
+  readonly defaultProfileClear?: boolean;
 }
 
 export async function clearBrowserProfileData(
@@ -123,6 +124,11 @@ export async function clearBrowserProfileData(
   profileId: string,
   server?: ServerProfileData,
 ): Promise<void> {
+  if (profileId === DEFAULT_BROWSER_PROFILE_ID && server?.defaultProfileClear === false) {
+    throw new Error(
+      "The default browser profile is managed by the sandbox and cannot be cleared here.",
+    );
+  }
   const desktopEnvironmentIds = bridge === null ? [] : environmentIds;
   const serverEnvironmentIds = server?.environmentIds ?? [];
   if (desktopEnvironmentIds.length === 0 && serverEnvironmentIds.length === 0) {
@@ -675,6 +681,11 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
     reportFailure: false,
   });
   const serverProfileData: ServerProfileData = {
+    defaultProfileClear: !environments.some(
+      ({ environmentId }) =>
+        serverConfigs.get(environmentId)?.environment.capabilities
+          .serverBrowserDefaultProfileClear === false,
+    ),
     environmentIds: environments
       .map((environment) => environment.environmentId)
       .filter(
@@ -1017,6 +1028,9 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
         {listedProfiles.map((profile, index) => {
           const builtIn = isBuiltInBrowserProfileId(profile.id);
           const isDefault = profile.id === resolvedDefaultId;
+          const runtimeManaged =
+            profile.id === DEFAULT_BROWSER_PROFILE_ID &&
+            serverProfileData.defaultProfileClear === false;
           return (
             <div
               key={profile.id}
@@ -1083,7 +1097,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                     Set as default
                   </MenuItem>
                   <MenuItem
-                    disabled={!settingsHydrated || !removalAvailable}
+                    disabled={!settingsHydrated || !removalAvailable || runtimeManaged}
                     onClick={() => {
                       // Clearing a server copy closes its open tabs, so it asks first.
                       if (serverProfileData.environmentIds.length > 0) {
@@ -1093,6 +1107,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                   >
                     Clear cookies and cache
                   </MenuItem>
+                  {runtimeManaged ? <MenuItem disabled>Managed by the sandbox</MenuItem> : null}
                   {builtIn ? null : (
                     <MenuItem
                       variant="destructive"

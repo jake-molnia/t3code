@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -77,6 +78,35 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
 });
 
 it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
+  it.effect.each([true, false])(
+    "reports default profile clearing for execution pools: %s",
+    (remote) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped();
+        const config = yield* makeServerConfig(baseDir);
+        yield* fs.makeDirectory(config.stateDir, { recursive: true });
+        const descriptor = yield* Effect.gen(function* () {
+          const environment = yield* ServerEnvironment.ServerEnvironment;
+          return yield* environment.getDescriptor;
+        }).pipe(
+          Effect.provide(
+            ServerEnvironment.layer.pipe(
+              Layer.provide(layerEmptySecretStore),
+              Layer.provide(ServerConfig.layer(config)),
+            ),
+          ),
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromUnknown(
+              remote ? { T3_EXECUTION_POOLS_FILE: "/config/pools.json" } : {},
+            ),
+          ),
+        );
+        expect(descriptor.capabilities.serverBrowserDefaultProfileClear).toBe(!remote);
+      }),
+  );
+
   it.effect.each([
     { revision: undefined, expected: null },
     { revision: "not-a-commit", expected: null },

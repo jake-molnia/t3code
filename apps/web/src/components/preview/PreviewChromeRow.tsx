@@ -95,6 +95,14 @@ export function PreviewChromeRow({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [draft, setDraft] = useState(url);
   const [inputFocused, setInputFocused] = useState(false);
+  const [submittedNavigation, setSubmittedNavigation] = useState<{
+    url: string;
+    previousUrl: string;
+  } | null>(null);
+  if (submittedNavigation && submittedNavigation.previousUrl !== url) {
+    setSubmittedNavigation(null);
+  }
+  const displayedUrl = submittedNavigation?.url ?? url;
 
   useEffect(() => {
     if (focusUrlNonce == null) return;
@@ -107,6 +115,7 @@ export function PreviewChromeRow({
     event?.preventDefault();
     const next = draft.trim();
     if (next.length === 0) return;
+    setSubmittedNavigation({ url: next, previousUrl: url });
     onSubmit(next);
     inputRef.current?.blur();
   };
@@ -180,10 +189,10 @@ export function PreviewChromeRow({
               render={
                 <InputGroupInput
                   ref={inputRef}
-                  value={inputFocused ? draft : url}
+                  value={inputFocused ? draft : displayedUrl}
                   onChange={(event) => setDraft(event.target.value)}
                   onFocus={() => {
-                    setDraft(url);
+                    setDraft(displayedUrl);
                     setInputFocused(true);
                     queueMicrotask(() => inputRef.current?.select());
                   }}
@@ -195,6 +204,7 @@ export function PreviewChromeRow({
                     if (event.key === "Escape") {
                       event.preventDefault();
                       setDraft(url);
+                      setSubmittedNavigation(null);
                       inputRef.current?.blur();
                     }
                   }}

@@ -391,8 +391,17 @@ const layerCore = Layer.effect(
           );
           return Option.some({ path: destination, fileName: result.fileName });
         }).pipe(Effect.orDie),
-      clearProfile: (profileId) =>
-        Effect.gen(function* () {
+      clearProfile: (profileId) => {
+        if (profileId === C.DEFAULT_BROWSER_PROFILE_ID) {
+          return Effect.fail(
+            new C.PreviewClearProfileError({
+              profileId,
+              cause: new Error("The sandbox runtime owns the desktop browser profile."),
+            }),
+          );
+        }
+        if (profileId === C.INCOGNITO_BROWSER_PROFILE_ID) return Effect.void;
+        return Effect.gen(function* () {
           const rows = yield* sql<{
             workspace_id: string;
           }>`SELECT workspace_id FROM agent_runtime_workspaces`;
@@ -400,7 +409,8 @@ const layerCore = Layer.effect(
             const client = yield* runtime.forWorkspace(row.workspace_id);
             yield* Effect.tryPromise(() => client.call("preview.clearProfile", { profileId }));
           }
-        }).pipe(Effect.mapError((cause) => new C.PreviewClearProfileError({ profileId, cause }))),
+        }).pipe(Effect.mapError((cause) => new C.PreviewClearProfileError({ profileId, cause })));
+      },
     });
     const bridges = new Map<
       string,

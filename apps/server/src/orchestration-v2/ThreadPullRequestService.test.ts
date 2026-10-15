@@ -21,6 +21,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as GitManager from "../git/GitManager.ts";
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
@@ -257,6 +258,136 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         }).pipe(Effect.provide(layerDependencies));
       }),
     ),
+  );
+
+  it.effect.each([null, "/workspace/thread/repo"])(
+    "startup and periodic PR discovery leave stopped workspaces asleep (%s)",
+    (worktreePath) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reference = {
+            projectId: ProjectId.make("project-1"),
+            repository: "example/repo",
+            number: 42,
+            url: "https://github.com/example/repo/pull/42",
+          };
+          const thread = {
+            ...threadShell("stopped-workspace"),
+            worktreePath,
+            branch: "feature/existing",
+            branchPullRequest: reference,
+          };
+          const project: OrchestrationProjectShell = {
+            id: thread.projectId,
+            title: "Project",
+            workspaceRoot: "/workspace/project/repo",
+            defaultModelSelection: null,
+            scripts: [],
+            repositoryIdentity: null,
+            createdAt: "2026-08-01T00:00:00.000Z",
+            updatedAt: "2026-08-01T00:00:00.000Z",
+          };
+          const reads = yield* Queue.unbounded<void>();
+          const activation = yield* Deferred.make<void>();
+          let stopped = true;
+          let gitReads = 0;
+          let updates = 0;
+          const observations: string[] = [];
+          const dependencies = Layer.mergeAll(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              streamDomainEvents: Stream.never,
+              getShellSnapshot: () =>
+                Queue.offer(reads, undefined).pipe(
+                  Effect.as({
+                    schemaVersion: 2,
+                    snapshotSequence: 1,
+                    threads: [thread],
+                    archivedThreads: [],
+                  }),
+                ),
+              dispatch: () =>
+                Effect.sync(() => {
+                  updates++;
+                }).pipe(Effect.andThen(Effect.die("Existing PR must be preserved"))),
+            }),
+            Layer.mock(ProjectStore.ProjectStoreV2)({
+              listShells: () => Effect.succeed([project]),
+            }),
+            Layer.mock(GitManager.GitManager)({
+              branchPullRequest: () =>
+                Effect.sync(() => {
+                  gitReads++;
+                  return {
+                    number: reference.number,
+                    title: "Existing PR",
+                    url: reference.url,
+                    baseRef: "main",
+                    headRef: thread.branch,
+                    state: "open" as const,
+                    repositoryKey: "github.com/example/repo",
+                    updatedAt: null,
+                  };
+                }),
+            }),
+            Layer.mock(PullRequestService.PullRequestService)({
+              summary: () => Effect.die("Stopped workspace must retain its existing PR"),
+            }),
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+              resolve: () =>
+                Effect.succeed({
+                  canonicalKey: "github.com/example/repo",
+                  locator: {
+                    source: "git-remote",
+                    remoteName: "origin",
+                    remoteUrl: "https://github.com/example/repo.git",
+                  },
+                  provider: "github",
+                  displayName: "example/repo",
+                  owner: "example",
+                  name: "repo",
+                }),
+            }),
+            Layer.mock(WorkspaceRouting.WorkspaceRouting)({
+              enabled: true,
+              observe: (cwd, effect) =>
+                Effect.gen(function* () {
+                  observations.push(cwd);
+                  return stopped ? null : yield* effect;
+                }),
+            }),
+            Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
+            Layer.succeed(
+              Crypto.Crypto,
+              Crypto.make({
+                randomBytes: (size) => new Uint8Array(size).fill(1),
+                digest: (_algorithm, data) => Effect.succeed(data),
+              }),
+            ),
+            FileSystem.layerNoop({}),
+          );
+          yield* Effect.gen(function* () {
+            const service = yield* ThreadPullRequestService.make;
+            yield* service.start();
+            yield* Deferred.succeed(activation, undefined);
+            yield* Queue.take(reads);
+            yield* service.drain;
+            expect(gitReads).toBe(0);
+            expect(updates).toBe(0);
+            expect(observations).toEqual([worktreePath ?? project.workspaceRoot]);
+            yield* TestClock.adjust("1 minute");
+            yield* Queue.take(reads);
+            yield* service.drain;
+            expect(gitReads).toBe(0);
+            expect(updates).toBe(0);
+            stopped = false;
+            yield* TestClock.adjust("1 minute");
+            yield* Queue.take(reads);
+            yield* service.drain;
+            expect(gitReads).toBe(1);
+            expect(updates).toBe(0);
+          }).pipe(Effect.provide(dependencies));
+        }),
+      ),
   );
 
   it.effect("periodic sweeps read only unsettled threads once backfill is done", () =>

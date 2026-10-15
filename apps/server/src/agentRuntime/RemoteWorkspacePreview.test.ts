@@ -16,6 +16,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as Scope from "effect/Scope";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as P from "./worker/PreviewProtocol.ts";
@@ -626,5 +627,30 @@ it.effect("reconnects automation after a timed-out request without replaying its
     });
     yield* Deferred.succeed(release, undefined);
     expect(operations).toEqual(["click", "status", "snapshot", "open"]);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("rejects clearing the runtime desktop profile before starting any workspace", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE agent_runtime_workspaces (workspace_id TEXT PRIMARY KEY)`;
+    yield* sql`INSERT INTO agent_runtime_workspaces VALUES ('settled-thread')`;
+    const starts: string[] = [];
+    const context = yield* Layer.build(RemotePreview.browserLayer).pipe(
+      Effect.provide(
+        Layer.mock(RuntimeClient.RuntimeClient)({
+          enabled: true,
+          forWorkspace: (workspaceId) => {
+            starts.push(workspaceId);
+            return Effect.die("A profile clear must not start a settled workspace");
+          },
+        }),
+      ),
+    );
+    const browser = Context.get(context, ServerBrowser.ServerBrowser);
+    const result = yield* browser.clearProfile(C.DEFAULT_BROWSER_PROFILE_ID).pipe(Effect.exit);
+    expect(starts).toEqual([]);
+    expect(Exit.isFailure(result)).toBe(true);
+    expect(String(result)).toContain("runtime owns");
   }).pipe(Effect.provide(layer)),
 );
