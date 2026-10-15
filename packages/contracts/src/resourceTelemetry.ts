@@ -1,7 +1,6 @@
 import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { HostPowerSnapshot } from "./background.ts";
 
 export const RESOURCE_MONITOR_PROTOCOL_VERSION = 3 as const;
 
@@ -28,10 +27,6 @@ export const ResourceTelemetryProcessCategory = Schema.Literals([
   "server-child",
   "provider-root",
   "terminal-root",
-  "electron-main",
-  "electron-renderer",
-  "electron-gpu",
-  "electron-utility",
   "resource-monitor",
   "unknown-t3",
 ]);
@@ -227,85 +222,6 @@ export const ResourceMonitorEvent = Schema.Union([
 ]);
 export type ResourceMonitorEvent = typeof ResourceMonitorEvent.Type;
 
-export const DesktopElectronProcessType = Schema.Literals([
-  "Browser",
-  "Tab",
-  "Utility",
-  "Zygote",
-  "Sandbox helper",
-  "GPU",
-  "Pepper Plugin",
-  "Pepper Plugin Broker",
-  "Unknown",
-]);
-export type DesktopElectronProcessType = typeof DesktopElectronProcessType.Type;
-
-export const DesktopElectronProcessMetric = Schema.Struct({
-  pid: PositiveInt,
-  creationTimeMs: NonNegativeInt,
-  type: DesktopElectronProcessType,
-  name: Schema.optionalKey(Schema.String),
-  serviceName: Schema.optionalKey(Schema.String),
-  cpuPercent: Schema.Number,
-  cumulativeCpuSeconds: Schema.optionalKey(Schema.Number),
-  idleWakeupsPerSecond: Schema.Number,
-  workingSetBytes: NonNegativeInt,
-  peakWorkingSetBytes: NonNegativeInt,
-});
-export type DesktopElectronProcessMetric = typeof DesktopElectronProcessMetric.Type;
-
-const DesktopHostPowerSnapshot = Schema.Struct({
-  ...HostPowerSnapshot.fields,
-  updatedAt: Schema.DateTimeUtcFromString,
-});
-
-export const DesktopHostTelemetrySnapshot = Schema.Struct({
-  version: Schema.Literal(1),
-  type: Schema.Literal("desktopTelemetry"),
-  sequence: NonNegativeInt,
-  sampledAtUnixMs: NonNegativeInt,
-  electronPid: PositiveInt,
-  power: DesktopHostPowerSnapshot,
-  speedLimitPercent: Schema.OptionFromNullOr(Schema.Number),
-  electronProcesses: Schema.Array(DesktopElectronProcessMetric),
-});
-export type DesktopHostTelemetrySnapshot = typeof DesktopHostTelemetrySnapshot.Type;
-
-export const DesktopHostTelemetryHello = Schema.Struct({
-  version: Schema.Literal(1),
-  type: Schema.Literal("desktopTelemetryHello"),
-  electronPid: PositiveInt,
-});
-export type DesktopHostTelemetryHello = typeof DesktopHostTelemetryHello.Type;
-
-export const DesktopHostTelemetryMessage = Schema.Union([
-  DesktopHostTelemetryHello,
-  DesktopHostTelemetrySnapshot,
-]);
-export type DesktopHostTelemetryMessage = typeof DesktopHostTelemetryMessage.Type;
-
-export const DesktopTelemetrySetDiagnosticsDemand = Schema.Struct({
-  version: Schema.Literal(1),
-  type: Schema.Literal("setDiagnosticsDemand"),
-  enabled: Schema.Boolean,
-});
-export type DesktopTelemetrySetDiagnosticsDemand = typeof DesktopTelemetrySetDiagnosticsDemand.Type;
-
-export const DesktopTelemetrySetHostPowerIntervals = Schema.Struct({
-  version: Schema.Literal(1),
-  type: Schema.Literal("setHostPowerIntervals"),
-  activeIntervalMs: PositiveInt,
-  idleIntervalMs: PositiveInt,
-});
-export type DesktopTelemetrySetHostPowerIntervals =
-  typeof DesktopTelemetrySetHostPowerIntervals.Type;
-
-export const DesktopTelemetryControlMessage = Schema.Union([
-  DesktopTelemetrySetDiagnosticsDemand,
-  DesktopTelemetrySetHostPowerIntervals,
-]);
-export type DesktopTelemetryControlMessage = typeof DesktopTelemetryControlMessage.Type;
-
 export const ResourceTelemetryProcess = Schema.Struct({
   identity: ResourceTelemetryProcessIdentity,
   ppid: NonNegativeInt,
@@ -315,8 +231,6 @@ export const ResourceTelemetryProcess = Schema.Struct({
   command: Schema.String,
   status: Schema.String,
   category: ResourceTelemetryProcessCategory,
-  electronType: Schema.optionalKey(DesktopElectronProcessType),
-  electronServiceName: Schema.optionalKey(Schema.String),
   cpuPercent: Schema.Number,
   cpuTimeMs: NonNegativeInt,
   residentBytes: NonNegativeInt,
@@ -351,7 +265,6 @@ export type ResourceTelemetryAggregate = typeof ResourceTelemetryAggregate.Type;
 
 export const ResourceTelemetryGroups = Schema.Struct({
   backend: ResourceTelemetryAggregate,
-  electron: ResourceTelemetryAggregate,
   monitor: ResourceTelemetryAggregate,
   allT3: ResourceTelemetryAggregate,
 });
@@ -366,7 +279,6 @@ export type ResourceTelemetrySourceHealth = typeof ResourceTelemetrySourceHealth
 
 export const ResourceTelemetryHealth = Schema.Struct({
   native: ResourceTelemetrySourceHealth,
-  desktop: ResourceTelemetrySourceHealth,
   sidecarVersion: Schema.Option(TrimmedNonEmptyString),
   sidecarPid: Schema.Option(PositiveInt),
   restartCount: NonNegativeInt,
@@ -398,8 +310,6 @@ export const ResourceTelemetrySnapshot = Schema.Struct({
   sampleIntervalMs: NonNegativeInt,
   processes: Schema.Array(ResourceTelemetryProcess),
   groups: ResourceTelemetryGroups,
-  power: HostPowerSnapshot,
-  speedLimitPercent: Schema.Option(Schema.Number),
   attribution: ResourceAttributionSnapshot,
   health: ResourceTelemetryHealth,
 });

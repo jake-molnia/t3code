@@ -8,6 +8,7 @@ import * as Sessions from "../mcp/McpSessionRegistry.ts";
 import * as Registry from "../provider/ProviderInstanceRegistry.ts";
 import * as Settings from "../serverSettings.ts";
 import { CodexAccess } from "./credentialSources.ts";
+import { settingsForProviderExecution } from "./credentialPolicy.ts";
 
 export const PATH = "/internal/execution/provider-access";
 const Input = Schema.Struct({ threadId: C.ThreadId, instanceId: C.ProviderInstanceId });
@@ -50,7 +51,7 @@ const access = Effect.fn("CredentialBroker.access")(function* (
     const encoded = yield* encodeConfiguration({
       instanceId: input.instanceId,
       config,
-      settings: current,
+      settings: settingsForProviderExecution(current),
     });
     const owner = yield* runtime.forUtility(input.instanceId);
     yield* Effect.tryPromise(() => owner.transient("configureProvider", encoded));

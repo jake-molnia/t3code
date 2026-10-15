@@ -1,6 +1,4 @@
-import type { HostPowerSnapshot } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
-import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -16,46 +14,11 @@ import {
   synchronizeCollectionControlOnStart,
 } from "./NativeTelemetryClient.ts";
 
-const basePower: HostPowerSnapshot = {
-  source: "electron-main",
-  idle: "false",
-  idleSeconds: 0,
-  locked: "false",
-  suspended: false,
-  onBattery: "false",
-  lowPowerMode: "false",
-  thermalState: "nominal",
-  stale: false,
-  updatedAt: DateTime.makeUnsafe("2026-06-17T12:00:00.000Z"),
-};
-
 describe("resolveNativeSampleIntervalMs", () => {
-  it("keeps a recovery cadence while suspended and backs off under host constraints", () => {
-    expect(resolveNativeSampleIntervalMs({ ...basePower, suspended: true }, 1)).toBe(15_000);
-    expect(resolveNativeSampleIntervalMs({ ...basePower, locked: "true" }, 1)).toBe(15_000);
-    expect(resolveNativeSampleIntervalMs({ ...basePower, lowPowerMode: "true" }, 1)).toBe(15_000);
-    expect(resolveNativeSampleIntervalMs({ ...basePower, thermalState: "critical" }, 1)).toBe(
-      15_000,
-    );
-    expect(resolveNativeSampleIntervalMs({ ...basePower, onBattery: "true" }, 1)).toBe(5_000);
-  });
-
-  it("slows background telemetry and serves live diagnostics at 1Hz", () => {
-    const unknown: HostPowerSnapshot = {
-      ...basePower,
-      source: "unknown",
-      stale: true,
-    };
-    expect(resolveNativeSampleIntervalMs(unknown, 0)).toBe(5_000);
-    expect(resolveNativeSampleIntervalMs(unknown, 1)).toBe(1_000);
-    expect(
-      resolveNativeSampleIntervalMs(
-        { ...basePower, stale: true, locked: "true", suspended: true },
-        0,
-      ),
-    ).toBe(5_000);
-    expect(resolveNativeSampleIntervalMs(basePower, 0)).toBe(5_000);
-    expect(resolveNativeSampleIntervalMs(basePower, 1)).toBe(1_000);
+  it("slows background telemetry and serves live diagnostics at 1Hz without host signals", () => {
+    expect(resolveNativeSampleIntervalMs(0)).toBe(5_000);
+    expect(resolveNativeSampleIntervalMs(1)).toBe(1_000);
+    expect(resolveNativeSampleIntervalMs(2)).toBe(1_000);
   });
 });
 
@@ -89,7 +52,6 @@ describe("commitCollectionControlUpdate", () => {
   it.effect("retains desired demand and retries unapplied sidecar state", () =>
     Effect.gen(function* () {
       const initial = {
-        hostPower: basePower,
         liveSubscriberCount: 0,
         sampleIntervalMs: 5_000,
       };
@@ -140,7 +102,6 @@ describe("commitCollectionControlUpdate", () => {
   it.effect("serializes startup synchronization with runtime control updates", () =>
     Effect.gen(function* () {
       const initial = {
-        hostPower: basePower,
         liveSubscriberCount: 0,
         sampleIntervalMs: 5_000,
       };

@@ -794,11 +794,7 @@ export type BackgroundActivityProfileSelection = typeof BackgroundActivityProfil
 export const BackgroundActivityOverrides = Schema.Struct({
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   providerHealthRefreshInterval: Schema.optionalKey(Schema.DurationFromMillis),
-  hostPowerMonitorActiveInterval: Schema.optionalKey(Schema.DurationFromMillis),
-  hostPowerMonitorIdleInterval: Schema.optionalKey(Schema.DurationFromMillis),
   idleClientTtl: Schema.optionalKey(Schema.DurationFromMillis),
-  pauseWhenHostLocked: Schema.optionalKey(Schema.Boolean),
-  pauseWhenHostLowPower: Schema.optionalKey(Schema.Boolean),
   pauseWhenClientLowPower: Schema.optionalKey(Schema.Boolean),
   pauseWhenOnBattery: Schema.optionalKey(Schema.Boolean),
 });

@@ -124,20 +124,7 @@ function layerBackgroundPolicy(shouldRunScopeWork: (scope: BackgroundScope) => b
   return Layer.mock(BackgroundPolicy.BackgroundPolicy)({
     reportClientActivity: () => Effect.void,
     removeRpcClient: () => Effect.void,
-    reportHostPowerState: () => Effect.void,
     snapshot: Effect.succeed({
-      hostPower: {
-        source: "unknown",
-        idle: "unknown",
-        idleSeconds: null,
-        locked: "unknown",
-        suspended: false,
-        onBattery: "unknown",
-        lowPowerMode: "unknown",
-        thermalState: "unknown",
-        stale: true,
-        updatedAt: TEST_EPOCH,
-      },
       leases: [],
       activeForegroundLeaseCount: 0,
       activeScopeKeys: [],

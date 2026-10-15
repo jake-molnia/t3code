@@ -1,15 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
-import type {
-  DesktopHostTelemetrySnapshot,
-  ResourceMonitorSnapshotEvent,
-} from "@t3tools/contracts";
+import type { ResourceMonitorSnapshotEvent } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
-import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
 import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
 import * as ResourceTelemetry from "../resourceTelemetry/ResourceTelemetry.ts";
@@ -31,10 +27,7 @@ function makeNativeSnapshot(
   };
 }
 
-function layerTelemetryFor(
-  snapshot: ResourceMonitorSnapshotEvent,
-  desktopSnapshot?: DesktopHostTelemetrySnapshot,
-) {
+function layerTelemetryFor(snapshot: ResourceMonitorSnapshotEvent) {
   const layerNative = NativeTelemetryClient.layerTest({
     sampleNow: Effect.succeed({ generation: 0, snapshot }),
     health: Effect.succeed({
@@ -46,18 +39,8 @@ function layerTelemetryFor(
       sampleIntervalMs: 1_000,
     }),
   });
-  const layerDesktop = desktopSnapshot
-    ? DesktopTelemetryReceiver.layerTest({
-        latest: Effect.succeedSome(desktopSnapshot),
-        health: Effect.succeed({
-          status: "healthy",
-          lastSampleAt: Option.some(DateTime.makeUnsafe(desktopSnapshot.sampledAtUnixMs)),
-          lastError: Option.none(),
-        }),
-      })
-    : DesktopTelemetryReceiver.layerTest();
   return ResourceTelemetry.layer.pipe(
-    Layer.provide(Layer.mergeAll(layerNative, layerDesktop, ResourceAttribution.layer)),
+    Layer.provide(Layer.mergeAll(layerNative, ResourceAttribution.layer)),
   );
 }
 
@@ -201,93 +184,6 @@ describe("ProcessDiagnostics", () => {
           "Could not refresh process 4242; refusing to signal a stale identity.",
         ),
       });
-    }),
-  );
-
-  it.effect("rejects Electron processes as signal targets", () =>
-    Effect.gen(function* () {
-      const sampledAtUnixMs = DateTime.toEpochMillis(
-        DateTime.makeUnsafe("2026-05-05T10:00:00.000Z"),
-      );
-      const snapshot = makeNativeSnapshot([
-        {
-          pid: 4_242,
-          ppid: 1,
-          startTimeMs: 2_000,
-          runTimeMs: 4_000,
-          name: "electron",
-          command: "electron",
-          status: "Running",
-          cpuPercent: 1.5,
-          cpuTimeMs: 60,
-          residentBytes: 2_048,
-          virtualBytes: 4_096,
-          ioReadBytes: 300,
-          ioWriteBytes: 400,
-          ioSemantics: "storage",
-        },
-      ]);
-      const sampledAt = DateTime.makeUnsafe(sampledAtUnixMs);
-      const layerTelemetry = layerTelemetryFor(snapshot, {
-        version: 1,
-        type: "desktopTelemetry",
-        sequence: 1,
-        sampledAtUnixMs,
-        electronPid: 4_242,
-        power: {
-          source: "electron-main",
-          idle: "false",
-          idleSeconds: 0,
-          locked: "false",
-          suspended: false,
-          onBattery: "false",
-          lowPowerMode: "unknown",
-          thermalState: "nominal",
-          stale: false,
-          updatedAt: sampledAt,
-        },
-        speedLimitPercent: Option.none(),
-        electronProcesses: [
-          {
-            pid: 4_242,
-            creationTimeMs: 2_000,
-            type: "Browser",
-            name: "electron",
-            cpuPercent: 1.5,
-            idleWakeupsPerSecond: 0,
-            workingSetBytes: 2_048,
-            peakWorkingSetBytes: 2_048,
-          },
-        ],
-      });
-      const layer = ProcessDiagnostics.layer.pipe(Layer.provide(layerTelemetry));
-
-      const result = yield* Effect.service(ProcessDiagnostics.ProcessDiagnostics).pipe(
-        Effect.flatMap((processDiagnostics) =>
-          processDiagnostics.signal({
-            pid: 4_242,
-            startTimeMs: 2_000,
-            signal: "SIGKILL",
-          }),
-        ),
-        Effect.provide(layer),
-      );
-
-      expect(result).toEqual({
-        pid: 4_242,
-        signal: "SIGKILL",
-        signaled: false,
-        message: Option.some("Process 4242 is not a signalable T3 backend descendant."),
-      });
-
-      const diagnostics = yield* Effect.service(ProcessDiagnostics.ProcessDiagnostics).pipe(
-        Effect.flatMap((processDiagnostics) => processDiagnostics.read),
-        Effect.provide(layer),
-      );
-      expect(diagnostics.processes).toEqual([]);
-      expect(diagnostics.processCount).toBe(0);
-      expect(diagnostics.totalCpuPercent).toBe(0);
-      expect(diagnostics.totalRssBytes).toBe(0);
     }),
   );
 });

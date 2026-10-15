@@ -287,12 +287,10 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
           ),
         );
 
-      const withFd = yield* describeWith({ mode: "desktop", desktopTelemetryControlFd: 5 });
+      const desktop = yield* describeWith({ mode: "desktop" });
 
-      const withoutFd = yield* describeWith({ mode: "desktop" });
-
-      const web = yield* describeWith({ mode: "web", desktopTelemetryControlFd: 5 });
-      for (const descriptor of [withFd, withoutFd, web]) {
+      const web = yield* describeWith({ mode: "web" });
+      for (const descriptor of [desktop, web]) {
         expect(descriptor.capabilities).not.toHaveProperty("serverSelfUpdate");
         expect(descriptor.capabilities).not.toHaveProperty("desktopAppUpdate");
       }
