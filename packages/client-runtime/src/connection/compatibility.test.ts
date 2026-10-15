@@ -53,26 +53,12 @@ describe("orchestration protocol compatibility", () => {
     expect(error).not.toHaveProperty("serverUpdateRequired");
   });
 
-  it("offers a remote update only for an older host that can update itself", () => {
-    const older = descriptor(ORCHESTRATION_PROTOCOL_VERSION - 1);
-    const withCapabilities = (capabilities: ExecutionEnvironmentDescriptor["capabilities"]) =>
-      orchestrationProtocolCompatibilityError({ ...older, capabilities });
-
-    expect(
-      withCapabilities({ repositoryIdentity: true, serverSelfUpdate: "boot-service" }),
-    ).toMatchObject({ serverUpdateRequired: true });
-    expect(withCapabilities({ repositoryIdentity: true })).not.toHaveProperty(
-      "serverUpdateRequired",
+  it("keeps older protocols blocked with deployment guidance", () => {
+    const error = orchestrationProtocolCompatibilityError(
+      descriptor(ORCHESTRATION_PROTOCOL_VERSION - 1),
     );
-    expect(
-      withCapabilities({ repositoryIdentity: true, serverSelfUpdate: "desktop-managed" }),
-    ).not.toHaveProperty("serverUpdateRequired");
-    expect(
-      withCapabilities({
-        repositoryIdentity: true,
-        serverSelfUpdate: "desktop-managed",
-        desktopAppUpdate: true,
-      }),
-    ).toMatchObject({ serverUpdateRequired: true });
+    expect(error).toMatchObject({ reason: "unsupported" });
+    expect(error?.message).toContain("deployment administrator");
+    expect(error).not.toHaveProperty("serverUpdateRequired");
   });
 });

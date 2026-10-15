@@ -8,7 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git python3 mak
 WORKDIR /src/t3
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm exec tsc --noEmit -p apps/server/tsconfig.json && pnpm --filter t3 build:bundle
+ARG T3_SOURCE_REVISION
+RUN pnpm exec tsc --noEmit -p apps/server/tsconfig.json \
+    && T3_BUILD_SOURCE_REVISION="$T3_SOURCE_REVISION" pnpm --filter t3 build:bundle
 FROM worker-build AS worker-package
 # Deploy changes pnpm workspace state; keep it separate from the web build.
 # pnpm preserves the locked, patched native dependency closure in a portable package.
@@ -18,6 +20,9 @@ COPY LICENSE /out/worker/LICENSE
 FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bdcd73c103b096988922d7 AS harnesses
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
+COPY images/t3/providers.lock.json images/t3/verify-provider-pins.mjs /tmp/provider-pins/
+COPY images/t3/harnesses/package*.json /tmp/provider-pins/harnesses/
+RUN node /tmp/provider-pins/verify-provider-pins.mjs
 COPY images/t3/harnesses/package*.json /opt/harnesses/
 RUN npm ci --prefix /opt/harnesses --omit=dev --no-audit --no-fund
 COPY images/t3/providers.lock.json /opt/providers.lock.json
@@ -47,11 +52,13 @@ COPY --from=harnesses /opt/native/az/opt/az /opt/az
 COPY --from=harnesses /opt/native/az/usr/bin/az /usr/bin/az
 COPY --from=harnesses /opt/native/extensions /opt/azure/extensions
 COPY --from=harnesses /opt/providers.lock.json /opt/t3/providers.lock.json
-RUN ln -sfn /usr/local/bin/opencode /usr/local/bin/opencode2 \
+RUN mv /usr/local/bin/opencode /usr/local/bin/opencode2 \
     && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
     && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs
+ARG T3_SOURCE_REVISION
 ENV PATH=/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_modules/.bin:/opt/native/bin:$PATH \
+    T3_SOURCE_REVISION=${T3_SOURCE_REVISION} \
     AZURE_EXTENSION_DIR=/opt/azure/extensions AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no AZURE_CORE_COLLECT_TELEMETRY=no \
     T3_WORKSPACE_ROOT=/workspace T3_WORKER_STATE_DIR=/workspace/.t3-worker \
     T3_WORKER_PORT=8083 T3_BROWSER_EXECUTABLE=/usr/bin/chromium \
@@ -63,7 +70,7 @@ COPY --chmod=755 images/t3/entrypoint.sh /usr/local/bin/t3-worker-entrypoint
 COPY --chmod=755 images/t3/git-credential.py /usr/local/bin/t3-git-credential
 COPY --chmod=755 images/t3/gh-wrapper.py /opt/t3/bin/gh
 COPY --chmod=755 images/t3/configure-git.sh /usr/local/bin/t3-configure-git
-COPY images/t3/verify-image.mjs images/t3/smoke-worker.py images/t3/smoke-session.py images/t3/test_git_credential.py images/t3/git-credential.py images/t3/configure-git.sh images/t3/gh-wrapper.py images/t3/test_gh_wrapper.py /opt/t3/
+COPY images/t3/probe-antigravity.py images/t3/verify-image.mjs images/t3/smoke-worker.py images/t3/smoke-session.py images/t3/test_git_credential.py images/t3/git-credential.py images/t3/configure-git.sh images/t3/gh-wrapper.py images/t3/test_gh_wrapper.py /opt/t3/
 USER 0:0
 WORKDIR /workspace
 RUN mkdir -p "$HOME" "$CODEX_HOME" "$T3_WORKER_STATE_DIR" \
@@ -85,7 +92,8 @@ COPY --from=web-build /src/t3/apps/web/dist /opt/t3/dist/client
 COPY images/t3/smoke-web.py images/t3/migrate-execution-profiles.py images/t3/test_migrate_execution_profiles.py /opt/t3/
 RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_migrate_execution_profiles.py \
     && rm /opt/t3/test_migrate_execution_profiles.py
-ENV HOME=/data T3CODE_HOME=/data/t3
+ARG T3_SOURCE_REVISION
+ENV HOME=/data T3CODE_HOME=/data/t3 T3_SOURCE_REVISION=${T3_SOURCE_REVISION}
 USER 1000:1000
 WORKDIR /data
 RUN python3 /opt/t3/smoke-web.py /opt/t3

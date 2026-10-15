@@ -1,10 +1,13 @@
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import { resolveModelPreferences } from "@t3tools/shared/serverSettings";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
 import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CredentialSources from "./credentialSources.ts";
+import * as AntigravityCredentials from "../provider/AntigravityCredentials.ts";
 import * as CursorCredentialStore from "@t3tools/provider-cursor/server/credentialStore";
 import * as C from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -83,6 +86,9 @@ export const ReviewGuideInput = Schema.Struct({
 });
 export const ReviewGuideResult = Schema.Struct({ stops: C.PullRequestReviewGuide.fields.stops });
 const decodeReviewGuideInput = Schema.decodeUnknownEffect(Schema.toCodecJson(ReviewGuideInput));
+const decodeAntigravityCredentials = Schema.decodeUnknownEffect(
+  AntigravityCredentials.ExecutionCredentials,
+);
 const decodeRpcValue = Schema.decodeUnknownEffect(Schema.toCodecJson(ConfigureProvider));
 const decodeOwnerSessionIdInput = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -113,11 +119,16 @@ export class WorkerProviderError extends Schema.TaggedError<WorkerProviderError>
 export const make = Effect.gen(function* () {
   const providerHost = yield* ProviderHost.ProviderHost;
   const credentialContext = yield* Effect.context<
-    Crypto.Crypto | FileSystem.FileSystem | ServerSecretStore.ServerSecretStore
+    | Crypto.Crypto
+    | FileSystem.FileSystem
+    | ServerSecretStore.ServerSecretStore
+    | ProviderHost.ProviderHost
+    | Path.Path
   >();
   const sources = yield* CredentialSources.CredentialSources;
   const authOwners = new Map<C.ProviderInstanceId, Set<string>>();
   const registry = yield* Registry.ProviderInstanceRegistry;
+  const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
   const mutator = yield* Mutator.ProviderInstanceRegistryMutator;
   const settings = yield* Settings.ServerSettingsService;
   const normalizeHarness = yield* ProviderConfigurationOverrides;
@@ -153,6 +164,15 @@ export const make = Effect.gen(function* () {
           command.instanceId,
           yield* Schema.decodeUnknownEffect(CredentialSources.CredentialSource)(command.input),
         );
+        return null;
+      }
+      if (
+        instance.driverKind === "antigravity" &&
+        (method === "auth.executionCredentials" || method === "auth.importExecutionCredentials")
+      ) {
+        const credentials = yield* AntigravityCredentials.make(command.instanceId);
+        if (method === "auth.executionCredentials") return yield* credentials.load;
+        yield* credentials.save(yield* decodeAntigravityCredentials(command.input));
         return null;
       }
       if (method === "auth.executionCredentials") {
@@ -243,8 +263,18 @@ export const make = Effect.gen(function* () {
         }
         case "provider.snapshot":
           return yield* encodeServerProvider(yield* instance.snapshot.getSnapshot);
-        case "provider.refresh":
+        case "provider.refreshModels":
+          if (!instance.refreshModels)
+            return yield* new WorkerProviderError({ operation: "models_unavailable" });
+          yield* instance.refreshModels();
+          return null;
+        case "provider.refresh": {
+          yield* instance.invalidateCaches ?? Effect.void;
+          const versionSource = yield* instance.snapshot.getVersionSource({ fresh: true });
+          if (versionSource.packageName)
+            yield* latestVersions.invalidate(versionSource.packageName);
           return yield* encodeServerProvider(yield* instance.snapshot.refresh);
+        }
         case "provider.snapshotForCwd": {
           const cwd = yield* decodeRpcValue2(command.input);
           const snapshot = instance.snapshotForCwd

@@ -28,6 +28,8 @@ import * as ResetCreditCoordinator from "../provider/resetCreditCoordinator.ts";
 import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
 import * as CodexInstallation from "../provider/CodexInstallation.ts";
+import * as AntigravityInstallation from "../provider/AntigravityInstallation.ts";
+import * as AntigravityUsage from "../provider/Drivers/AntigravityUsage.ts";
 import * as WorkerSettings from "./WorkerSettings.ts";
 
 export function workerLayers(options: { cwd: string; stateDir: string; port: number }) {
@@ -79,6 +81,7 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
   );
   return Layer.mergeAll(
     UsageService.layer.pipe(
+      Layer.provide(AntigravityUsage.layer),
       Layer.provide(
         CursorUsageAccounts.layer.pipe(
           Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
@@ -92,6 +95,7 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
       Layer.provide(OpenCodeServerLedger.layer({ stateDir: options.stateDir })),
     ),
     CodexInstallation.CodexInstallation.layer,
+    AntigravityInstallation.layer,
   ).pipe(
     Layer.provideMerge(ProviderHostLive.layerWorker),
     Layer.provideMerge(T3ProjectFileLoader.layer),

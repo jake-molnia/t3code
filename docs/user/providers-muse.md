@@ -1,12 +1,12 @@
 # Muse Code
 
-Muse Code is a beta integration and is disabled by default. Install
-[Muse Code](https://dev.meta.ai/docs/muse-code) on the machine hosting your
-environment, then run `muse login` as the account that runs T3 Code.
+Muse Code is a beta integration and is disabled by default. Your sandbox image must supply
+[Muse Code](https://dev.meta.ai/docs/muse-code). Contact your deployment administrator to add
+or upgrade it, then run `muse login` in the sandbox.
 
 Open **Settings → Providers** in the web or desktop app, select the environment,
 and enable **Muse Code**. Set **Binary path** if Muse is not on the host's `PATH`.
-Refresh provider status after installation or login, then select Muse in a
+Refresh provider status after an image upgrade or login, then select Muse in a
 thread's model picker.
 
 Provider status does not check your login. If you are signed out, messages
