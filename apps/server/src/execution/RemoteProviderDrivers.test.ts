@@ -95,6 +95,7 @@ it.live.each([
             const payload = Schema.decodeUnknownSync(Schema.toCodecJson(ConfigureProvider))(
               request.input,
             );
+            expect(payload.settings.sourceControlHosts).toEqual({});
             received.push(payload.config);
             configured.push(apply(payload.config));
             return Response.json({ ok: true, value: null });
@@ -132,7 +133,14 @@ it.live.each([
         Effect.provide(
           Layer.mergeAll(
             McpProviderSessions.layer,
-            Settings.layerTest(),
+            Settings.layerTest({
+              sourceControlHosts: {
+                github: {
+                  tokens: { "github.com": "fixture-github-token" },
+                  hosts: { "github.com": { account: "alice" } },
+                },
+              },
+            }),
             Layer.mock(Runtime.RuntimeClient)({
               enabled: true,
               forUtility: () => Effect.succeed(client),

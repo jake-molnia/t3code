@@ -1,6 +1,11 @@
 import * as C from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
+/** Source-control API credentials stay central; worker CLIs use the execution profile. */
+export function settingsForProviderExecution(settings: C.ServerSettings): C.ServerSettings {
+  return { ...settings, sourceControlHosts: {} };
+}
+
 export function credentialPolicy(
   driver: C.ProviderDriverKind,
   config: unknown,
