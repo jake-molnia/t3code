@@ -25,7 +25,7 @@ type EditorDefinition = {
   readonly jetbrainsProductCode?: string;
 };
 
-export const EDITORS = [
+const EDITORS = [
   {
     id: "cursor",
     label: "Cursor",
