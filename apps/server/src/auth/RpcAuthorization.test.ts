@@ -31,6 +31,21 @@ describe("RPC authorization scopes", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });
 
+  it("protects gateway account details and every account operation with provider management", () => {
+    for (const method of [
+      WS_METHODS.modelGatewaySnapshot,
+      WS_METHODS.modelGatewayAddEndpoint,
+      WS_METHODS.modelGatewayStart,
+      WS_METHODS.modelGatewayStatus,
+      WS_METHODS.modelGatewayComplete,
+      WS_METHODS.modelGatewayCancel,
+      WS_METHODS.modelGatewaySetEnabled,
+      WS_METHODS.modelGatewayRemove,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthProvidersManageScope);
+    }
+  });
+
   it("requires operate access to stop a workflow", () => {
     expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.stopWorkflow)).toBe(
       AuthOrchestrationOperateScope,

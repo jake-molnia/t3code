@@ -1,3 +1,5 @@
+import * as InferenceProxy from "./modelGateway/InferenceProxy.ts";
+import * as ModelGateway from "./modelGateway/ModelGateway.ts";
 import * as McpConnections from "./mcp/McpConnections.ts";
 import * as ExecutorRuntime from "./mcp/ExecutorRuntime.ts";
 import * as ServerVersion from "./environment/ServerVersion.ts";
@@ -554,6 +556,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
+    InferenceProxy.layer,
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
@@ -666,6 +669,7 @@ const layerMakeServer = Layer.unwrap(
     );
 
     return layerServerApplication.pipe(
+      Layer.provide(ModelGateway.layer),
       Layer.provideMerge(layerRuntimeServices),
       Layer.provideMerge(layerWorkspaceRouting),
       Layer.provideMerge(layerAgentRuntime),

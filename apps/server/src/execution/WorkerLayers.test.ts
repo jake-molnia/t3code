@@ -25,7 +25,8 @@ it.effect(
   "boots the worker host with scoped credentials, settings snapshots and provider services",
   () =>
     Effect.gen(function* () {
-      vi.stubEnv("APERTURE_UPSTREAM", "");
+      vi.stubEnv("T3_GATEWAY_URL", "");
+      vi.stubEnv("T3_HARNESS_STATE_DIR", "");
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-worker-layers-" });
       const services = yield* Layer.build(workerLayers({ cwd: stateDir, stateDir, port: 3774 }));
@@ -77,7 +78,7 @@ it.effect(
         "T3_HARNESS_DEFAULTS_FILE",
         "T3_TEST_NATIVE_CONFIG_DIR",
         "T3_TEST_OPERATOR_SECRET",
-        "APERTURE_UPSTREAM",
+        "T3_GATEWAY_URL",
       ] as const;
       yield* Effect.acquireRelease(
         Effect.sync(() => {
@@ -85,7 +86,7 @@ it.effect(
           process.env.T3_HARNESS_DEFAULTS_FILE = defaults;
           process.env.T3_TEST_NATIVE_CONFIG_DIR = `${root}/native-config`;
           process.env.T3_TEST_OPERATOR_SECRET = "expanded-operator-secret";
-          delete process.env.APERTURE_UPSTREAM;
+          delete process.env.T3_GATEWAY_URL;
           return saved;
         }),
         (saved) =>

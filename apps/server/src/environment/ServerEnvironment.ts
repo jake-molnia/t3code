@@ -210,6 +210,11 @@ export const make = Effect.gen(function* () {
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,
+      modelGateway: Boolean(
+        process.env.T3_GATEWAY_MANAGEMENT_URL &&
+        process.env.T3_GATEWAY_MANAGEMENT_KEY &&
+        process.env.T3_GATEWAY_API_KEY,
+      ),
       attachmentUploads: true,
       questionAttachments: true,
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },

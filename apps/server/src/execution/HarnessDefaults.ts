@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import type { ProviderInstanceConfig } from "@t3tools/contracts";
 import type { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as Schema from "effect/Schema";
+import { resolveCodexLaunchArgs } from "../provider/codexLaunchArgs.ts";
 
 const Defaults = Schema.Record(
   Schema.String,
@@ -51,18 +52,19 @@ export function harnessDefaults(
       if (!variables.has(entry.name))
         variables.set(entry.name, { ...entry, value: expand(entry.value) });
     const config = decodeConfig(instance.config ?? {});
+    const configured =
+      override.config === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(override.config)
+              .filter(([key]) => !(key in config))
+              .map(([key, value]) => [key, expandConfig(value)]),
+          );
     return {
       ...instance,
-      ...(override.config
+      ...(configured
         ? {
-            config: {
-              ...Object.fromEntries(
-                Object.entries(override.config)
-                  .filter(([key]) => !(key in config))
-                  .map(([key, value]) => [key, expandConfig(value)]),
-              ),
-              ...config,
-            },
+            config: { ...configured, ...config },
           }
         : {}),
       environment: [...variables.values()],
@@ -70,7 +72,87 @@ export function harnessDefaults(
   };
 }
 
+/** Launch eligibility is separate from configuration: disabled providers can retain history. */
+export function validateHarnessLaunch(
+  instance: ProviderInstanceConfig,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  if (
+    instance.enabled !== false &&
+    environment.T3_GATEWAY_URL &&
+    ["cursor", "muse", "antigravity"].includes(instance.driver)
+  ) {
+    throw new Error(
+      `${instance.driver} requires native provider authentication and cannot use model gateway credentials`,
+    );
+  }
+}
+
+/** Model access belongs to the gateway; execution fields remain owned by the harness. */
+export function gatewayRouting(text: string, environment: NodeJS.ProcessEnv = process.env) {
+  const resolve = harnessDefaults(text, environment);
+  return (instance: ProviderInstanceConfig): ProviderInstanceConfig => {
+    if (instance.enabled === false) return instance;
+    const route = resolve({ driver: instance.driver });
+    const execution = decodeConfig(instance.config ?? {});
+    const routing = decodeConfig(route.config ?? {});
+    const variables = new Map((instance.environment ?? []).map((entry) => [entry.name, entry]));
+    const configuredArgs =
+      typeof execution.launchArgs === "string" ? execution.launchArgs : undefined;
+    const executionArgs =
+      instance.driver === "codex"
+        ? resolveCodexLaunchArgs(configuredArgs, {
+            ...environment,
+            ...Object.fromEntries(
+              (instance.environment ?? []).map((entry) => [entry.name, entry.value]),
+            ),
+          })
+        : configuredArgs;
+    const launchArgs =
+      typeof routing.launchArgs === "string"
+        ? [executionArgs, routing.launchArgs].filter(Boolean).join(" ")
+        : executionArgs;
+    if (instance.driver === "codex")
+      variables.set("T3CODE_CODEX_LAUNCH_ARGS", {
+        name: "T3CODE_CODEX_LAUNCH_ARGS",
+        value: "",
+        sensitive: false,
+      });
+    if (instance.driver === "claudeAgent") {
+      // Empty credentials override an inherited token in the process environment too.
+      for (const name of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"])
+        variables.set(name, { name, value: "", sensitive: true });
+      for (const name of [
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+      ])
+        variables.set(name, { name, value: "0", sensitive: false });
+    }
+    for (const entry of route.environment ?? []) {
+      // Native configuration locations belong to the instance. The catalog adds routing in place.
+      if (entry.name === "PI_CODING_AGENT_DIR" || entry.name === "OPENCODE_CONFIG") continue;
+      variables.set(entry.name, entry);
+    }
+    return {
+      ...instance,
+      config: { ...execution, ...routing, ...(launchArgs !== undefined ? { launchArgs } : {}) },
+      environment: [...variables.values()],
+    };
+  };
+}
+
 export function deploymentHarnessDefaults() {
+  const gatewayPath = process.env.T3_GATEWAY_HARNESS_CONFIG_FILE;
+  // The shipped worker always has this manifest. A missing address is a setup error,
+  // not an instruction to switch account ownership back to a native provider.
+  if (gatewayPath || process.env.T3_GATEWAY_URL) {
+    if (!gatewayPath || !process.env.T3_GATEWAY_URL || !process.env.T3_GATEWAY_API_KEY?.trim())
+      throw new Error(
+        "Model access requires T3_GATEWAY_HARNESS_CONFIG_FILE, T3_GATEWAY_URL, and T3_GATEWAY_API_KEY",
+      );
+    return gatewayRouting(NodeFS.readFileSync(gatewayPath, "utf8"));
+  }
   const path = process.env.T3_HARNESS_DEFAULTS_FILE;
   return harnessDefaults(path ? NodeFS.readFileSync(path, "utf8") : undefined);
 }
@@ -87,4 +169,9 @@ export function sandboxInput<T extends { readonly runtimePolicy?: ProviderAdapte
   return input.runtimePolicy
     ? { ...input, runtimePolicy: sandboxPolicy(input.runtimePolicy) }
     : input;
+}
+
+/** Native configuration lives in the retained worker home, separate from conversations. */
+export function prepareHarnessState(stateDir: string) {
+  process.env.T3_HARNESS_STATE_DIR = `${stateDir}/harnesses`;
 }

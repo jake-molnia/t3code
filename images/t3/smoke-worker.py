@@ -24,6 +24,9 @@ with tempfile.TemporaryDirectory(prefix='t3-worker-smoke-') as temporary:
         'T3_WORKSPACE_ID': 'package-test', 'T3_ALLOCATION_ID': '1',
         'T3_ALLOCATION_GENERATION': '1', 'T3_POD_UID': 'test-pod',
         'T3_WORKER_TOKEN': token, 'T3_WORKER_PORT': str(port),
+        'T3_GATEWAY_HARNESS_CONFIG_FILE': str(args.package.resolve() / 'gateway-harnesses.json'),
+        'T3_GATEWAY_URL': 'http://127.0.0.1:9',
+        'T3_GATEWAY_API_KEY': secrets.token_urlsafe(32),
         'T3_WORKSPACE_ROOT': temporary, 'T3_WORKER_STATE_DIR': temporary + '/.worker',
     }
     with tempfile.TemporaryFile(mode='w+') as log:

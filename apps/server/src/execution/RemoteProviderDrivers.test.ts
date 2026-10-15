@@ -1,4 +1,5 @@
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as Schema from "effect/Schema";
@@ -636,4 +637,32 @@ it.live.each([
       ),
     );
   }),
+);
+
+it.live("gateway deployment does not expose or copy native managed account controllers", () =>
+  Effect.gen(function* () {
+    const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
+    for (const kind of ["codex", "cursor", "antigravity"]) {
+      const driver = drivers.find((driver) => driver.driverKind === kind);
+      if (!driver) throw new Error("Missing provider");
+      const instance = yield* driver.create({
+        instanceId: ProviderInstanceId.make(kind),
+        displayName: undefined,
+        environment: [],
+        enabled: true,
+        config: driver.defaultConfig(),
+      });
+      expect(instance.auth).toBeUndefined();
+      expect((yield* instance.snapshot.getSnapshot).setup?.canAuthenticate).toBe(false);
+    }
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(
+        unavailableRuntime,
+        Settings.layerTest(),
+        ConfigProvider.layer(ConfigProvider.fromUnknown({ T3_GATEWAY_API_KEY: "inference-key" })),
+      ),
+    ),
+  ),
 );

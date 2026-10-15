@@ -16,6 +16,9 @@ const encodeProviderCapabilities = Schema.encodeEffect(
   Schema.toCodecJson(C.OrchestrationV2ProviderCapabilities),
 );
 const decodeSelection = Schema.decodeUnknownEffect(Schema.toCodecJson(P.Selection));
+const decodeInferenceSelection = Schema.decodeUnknownEffect(
+  Schema.Struct({ modelSelection: Schema.optional(C.ModelSelection) }),
+);
 const decodeOpenSession = Schema.decodeUnknownEffect(Schema.toCodecJson(P.OpenSession));
 const encodeSessionDescription = Schema.encodeEffect(Schema.toCodecJson(P.SessionDescription));
 const encodeProviderEvent = Schema.encodeEffect(Schema.toCodecJson(A.ProviderAdapterV2Event));
@@ -57,13 +60,29 @@ export const makeProviderExecutor = (options: {
   configureMcp?: (config: McpProviderSessionConfig) => void;
   closeMcp?: (threadId: C.ThreadId, instanceId: C.ProviderInstanceId) => void;
   adapters: ReadonlyMap<C.ProviderInstanceId, A.ProviderAdapterV2["Service"]>;
+  prepareInference?: (
+    driver: string,
+    model?: string,
+    instanceId?: C.ProviderInstanceId,
+  ) => Promise<void>;
+  normalizeSelection?: (driver: string, selection: C.ModelSelection) => C.ModelSelection;
   publish: (sessionId: string, event: unknown) => Promise<void>;
 }) =>
   Effect.gen(function* () {
     const workerScope = yield* Effect.scope;
+    const prepareInference = options.prepareInference;
+    const normalizeSelection = (driver: string, selection: C.ModelSelection) =>
+      options.normalizeSelection?.(driver, selection) ?? selection;
+    const normalizeInput = <T extends { readonly modelSelection?: C.ModelSelection }>(
+      driver: string,
+      input: T,
+    ): T =>
+      input.modelSelection
+        ? { ...input, modelSelection: normalizeSelection(driver, input.modelSelection) }
+        : input;
     const sessions = new Map<
       C.ProviderSessionId,
-      { runtime: A.ProviderAdapterV2SessionRuntime; scope: Scope.Closeable }
+      { runtime: A.ProviderAdapterV2SessionRuntime; scope: Scope.Closeable; modelAtOpen: string }
     >();
     const openingSessions = new Set<C.ProviderSessionId>();
     const openingScopes = new Map<C.ProviderSessionId, Scope.Closeable>();
@@ -137,9 +156,27 @@ export const makeProviderExecutor = (options: {
             return yield* Effect.fail(new ProviderExecutionError({ code: "instance_unavailable" }));
           if (method === "getCapabilities")
             return yield* encodeProviderCapabilities(yield* adapter.getCapabilities());
-          if (method === "planSelectionTransition")
-            return yield* adapter.planSelectionTransition(yield* decodeSelection(command.input));
-          const input = sandboxInput(yield* decodeOpenSession(command.input));
+          if (method === "planSelectionTransition") {
+            const selection = yield* decodeSelection(command.input);
+            return yield* adapter.planSelectionTransition({
+              ...selection,
+              current: normalizeSelection(adapter.driver, selection.current),
+              target: normalizeSelection(adapter.driver, selection.target),
+            });
+          }
+          const decoded = sandboxInput(yield* decodeOpenSession(command.input));
+          const existing = sessions.get(decoded.providerSessionId);
+          if (existing && existing.runtime.instanceId !== command.instanceId)
+            return yield* new ProviderExecutionError({ code: "session_instance_conflict" });
+          const requestedModel =
+            adapter.driver === "pi" && decoded.modelSelection.model === "default" && existing
+              ? existing.modelAtOpen
+              : decoded.modelSelection.model;
+          if (prepareInference)
+            yield* Effect.tryPromise(() =>
+              prepareInference(adapter.driver, requestedModel, adapter.instanceId),
+            );
+          const input = normalizeInput(adapter.driver, decoded);
           if (retiredSessions.has(input.providerSessionId))
             return yield* new ProviderExecutionError({ code: "session_retired" });
           const live = sessions.get(input.providerSessionId);
@@ -169,7 +206,11 @@ export const makeProviderExecutor = (options: {
               }),
             ),
           );
-          sessions.set(input.providerSessionId, { runtime, scope });
+          sessions.set(input.providerSessionId, {
+            runtime,
+            scope,
+            modelAtOpen: input.modelSelection.model,
+          });
           yield* runtime.events.pipe(
             Stream.runForEach((event) =>
               Effect.gen(function* () {
@@ -221,14 +262,42 @@ export const makeProviderExecutor = (options: {
         if (!session)
           return yield* Effect.fail(new ProviderExecutionError({ code: "session_not_live" }));
         const runtime = session.runtime;
+        // A live Pi process has a fixed model registry. Resolve the default once per session.
+        const liveSelection = (selection: C.ModelSelection) =>
+          runtime.driver === "pi" && selection.model === "default"
+            ? { ...selection, model: session.modelAtOpen }
+            : normalizeSelection(runtime.driver, selection);
+        const liveInput = <T extends { readonly modelSelection?: C.ModelSelection }>(
+          input: T,
+        ): T =>
+          input.modelSelection
+            ? { ...input, modelSelection: liveSelection(input.modelSelection) }
+            : input;
+        if (
+          prepareInference &&
+          ["ensureThread", "resumeThread", "startTurn", "compactThread"].includes(method)
+        ) {
+          const input = yield* decodeInferenceSelection(command.input);
+          const model =
+            runtime.driver === "pi" &&
+            (!input.modelSelection || input.modelSelection.model === "default")
+              ? session.modelAtOpen
+              : input.modelSelection?.model;
+          yield* Effect.tryPromise(() =>
+            prepareInference(runtime.driver, model, runtime.instanceId),
+          );
+        }
         switch (method) {
           case "modelContext": {
-            const input = yield* decodeModelContext(command.input);
+            const input = liveInput(yield* decodeModelContext(command.input));
             return {
               contextWindow:
                 runtime.getModelContextWindow?.(input.modelSelection, input.cwd) ?? null,
               reusable: input.previous
-                ? (runtime.canReuseContextUsage?.(input.previous, input.modelSelection) ?? false)
+                ? (runtime.canReuseContextUsage?.(
+                    liveSelection(input.previous),
+                    input.modelSelection,
+                  ) ?? false)
                 : false,
             };
           }
@@ -245,14 +314,18 @@ export const makeProviderExecutor = (options: {
             return null;
           case "ensureThread":
             return yield* encodeProviderThread(
-              yield* runtime.ensureThread(sandboxInput(yield* decodeEnsureThread(command.input))),
+              yield* runtime.ensureThread(
+                liveInput(sandboxInput(yield* decodeEnsureThread(command.input))),
+              ),
             );
           case "resumeThread":
             return yield* encodeProviderThread(
-              yield* runtime.resumeThread(sandboxInput(yield* decodeResumeThread(command.input))),
+              yield* runtime.resumeThread(
+                liveInput(sandboxInput(yield* decodeResumeThread(command.input))),
+              ),
             );
           case "startTurn": {
-            const input = sandboxInput(yield* decodeTurn(command.input));
+            const input = liveInput(sandboxInput(yield* decodeTurn(command.input)));
             const key = `${input.providerThread.id}:${input.runOrdinal}`;
             activeTurns.set(key, command.sessionId);
             yield* runtime.startTurn(input).pipe(
@@ -295,7 +368,7 @@ export const makeProviderExecutor = (options: {
             );
           case "forkThread":
             return yield* encodeProviderThread(
-              yield* runtime.forkThread(sandboxInput(yield* decodeFork(command.input))),
+              yield* runtime.forkThread(liveInput(sandboxInput(yield* decodeFork(command.input)))),
             );
           case "hasPendingBackgroundWork":
             return runtime.hasPendingBackgroundWork
@@ -313,7 +386,7 @@ export const makeProviderExecutor = (options: {
             break;
           case "compactThread":
             if (runtime.compactThread) {
-              const input = sandboxInput(yield* decodeTurn(command.input));
+              const input = liveInput(sandboxInput(yield* decodeTurn(command.input)));
               const key = `${input.providerThread.id}:${input.runOrdinal}`;
               activeTurns.set(key, command.sessionId);
               yield* runtime.compactThread(input).pipe(

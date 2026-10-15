@@ -36,6 +36,12 @@ export function getProviderSummary(provider: ServerProvider | undefined) {
       detail: "Waiting for the server to report installation and authentication details.",
     };
   }
+  if (provider.enabled && provider.availability === "unavailable") {
+    return {
+      headline: "Unavailable",
+      detail: provider.unavailableReason ?? provider.message ?? null,
+    };
+  }
   if (!provider.enabled || provider.status === "disabled") {
     return {
       headline: "Disabled",

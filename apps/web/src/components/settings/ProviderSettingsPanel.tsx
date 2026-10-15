@@ -1,3 +1,4 @@
+import { GatewayAccountsSection } from "./GatewayAccountsSection";
 import { SettingsGroup } from "./SettingsGroup";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { AuthSettingsWriteScope, AuthOrchestrationReadScope } from "@t3tools/contracts";
@@ -552,6 +553,8 @@ export function EnvironmentProviderSettings({
   readonly readOnly?: boolean;
 }) {
   const settings = useEnvironmentSettings(environmentId);
+  const gatewayManaged =
+    useServerConfigs().get(environmentId)?.environment.capabilities.modelGateway === true;
   const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const canRefreshProviders = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
@@ -854,7 +857,9 @@ export function EnvironmentProviderSettings({
         selected={mode === "list" && selectedRow?.instanceId === row.instanceId}
         onSelect={mode === "list" ? () => setSelectedInstanceId(row.instanceId) : undefined}
         readOnly={readOnly}
+        gatewayManaged={gatewayManaged}
         runtime={
+          !gatewayManaged &&
           mode === "editor" &&
           row.driver === "codex" &&
           readCodexSetupMode(row.instance.config) === "managed" ? (
@@ -867,9 +872,9 @@ export function EnvironmentProviderSettings({
         }
         canWriteSettings={canWriteSettings}
         setup={
-          mode === "editor" &&
-          row.driver === "codex" &&
-          readCodexSetupMode(row.instance.config) === "managed" ? (
+          gatewayManaged ? null : mode === "editor" &&
+            row.driver === "codex" &&
+            readCodexSetupMode(row.instance.config) === "managed" ? (
             <CodexSetupSection
               environmentId={environmentId}
               instanceId={row.instanceId}
@@ -933,10 +938,12 @@ export function EnvironmentProviderSettings({
           );
         }}
         onDelete={
-          mode === "editor" && !row.isDefault ? () => deleteProviderInstance(row) : undefined
+          !gatewayManaged && mode === "editor" && !row.isDefault
+            ? () => deleteProviderInstance(row)
+            : undefined
         }
         headerAction={
-          mode === "editor" && row.isDefault && row.isDirty ? (
+          !gatewayManaged && mode === "editor" && row.isDefault && row.isDirty ? (
             <SettingResetButton
               label={`${resetLabel} provider settings`}
               onClick={() => resetDefaultInstance(row.driver)}
@@ -980,11 +987,15 @@ export function EnvironmentProviderSettings({
 
   return (
     <>
+      {gatewayManaged ? (
+        <GatewayAccountsSection key={environmentId} environmentId={environmentId} />
+      ) : null}
       <SettingsSection
         {...searchableSetting("providers")}
+        title={gatewayManaged ? "Harnesses" : searchableSetting("providers").title}
         variant="plain"
         titleAction={
-          !readOnly ? (
+          !readOnly && !gatewayManaged ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1061,7 +1072,7 @@ export function EnvironmentProviderSettings({
             >
               <div className="divide-y divide-border/50">
                 {rows.map((row) => renderProviderInstance(row, "list"))}
-                {!readOnly ? (
+                {!readOnly && !gatewayManaged ? (
                   <button
                     type="button"
                     className="flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-muted/25 hover:text-foreground focus-visible:bg-muted/25 focus-visible:text-foreground sm:px-4"
@@ -1091,14 +1102,16 @@ export function EnvironmentProviderSettings({
         </SettingsGroup>
       </SettingsSection>
 
-      <UsageProviderSettings
-        key={environmentId}
-        environmentId={environmentId}
-        environmentLabel={environmentLabel}
-        sources={settings.usageLimitSources}
-        cursorKeychainUsageEnabled={settings.cursorKeychainUsageEnabled}
-        readOnly={readOnly}
-      />
+      {!gatewayManaged ? (
+        <UsageProviderSettings
+          key={environmentId}
+          environmentId={environmentId}
+          environmentLabel={environmentLabel}
+          sources={settings.usageLimitSources}
+          cursorKeychainUsageEnabled={settings.cursorKeychainUsageEnabled}
+          readOnly={readOnly}
+        />
+      ) : null}
 
       <SettingsSection title="Advanced">
         <SettingsRow

@@ -1,0 +1,941 @@
+diff --git a/internal/api/handlers/management/auth_files.go b/internal/api/handlers/management/auth_files.go
+index 86878e9..a372963 100644
+--- a/internal/api/handlers/management/auth_files.go
++++ b/internal/api/handlers/management/auth_files.go
+@@ -676,6 +676,7 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quota authFileQu
+ 		"source":         "memory",
+ 		"size":           int64(0),
+ 	}
++	entry["authentication_failed"] = isPersistentAuthFailure(auth, time.Now().UTC()) || coreauth.HasDisabledInvalidGrantFailure(auth)
+ 	entry["success"] = auth.Success
+ 	entry["failed"] = auth.Failed
+ 	entry["recent_requests"] = auth.RecentRequestsSnapshot(time.Now())
+diff --git a/internal/api/handlers/management/auth_files_codex_device.go b/internal/api/handlers/management/auth_files_codex_device.go
+new file mode 100644
+index 0000000..c1babbf
+--- /dev/null
++++ b/internal/api/handlers/management/auth_files_codex_device.go
+@@ -0,0 +1,70 @@
++package management
++
++import (
++	"context"
++	"net/http"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
++	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
++)
++
++// RequestCodexDeviceToken exposes the SDK device flow without a local browser or callback listener.
++func (h *Handler) RequestCodexDeviceToken(c *gin.Context) {
++	state, err := misc.GenerateRandomState()
++	if err != nil {
++		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create device session"})
++		return
++	}
++	ctx, cancel := context.WithTimeout(PopulateAuthContext(context.Background(), c), 15*time.Minute)
++	RegisterOAuthSession(state, "codex")
++	oauthSessions.attachCancel(state, cancel)
++	ready := make(chan sdkAuth.DeviceAuthorization, 1)
++	done := make(chan error, 1)
++	go func() {
++		defer cancel()
++		record, err := sdkAuth.NewCodexAuthenticator().Login(ctx, h.cfg, &sdkAuth.LoginOptions{
++			NoBrowser: true,
++			Metadata:  map[string]string{"codex_login_mode": "device"},
++			DeviceAuthorization: func(code sdkAuth.DeviceAuthorization) error {
++				select {
++				case ready <- code:
++					return nil
++				case <-ctx.Done():
++					return ctx.Err()
++				}
++			},
++		})
++		if err == nil {
++			_, err = h.saveOAuthTokenRecord(ctx, state, record)
++		}
++		if err != nil {
++			SetOAuthSessionError(state, "Device authentication failed")
++		}
++		done <- err
++	}()
++	timer := time.NewTimer(12 * time.Second)
++	defer timer.Stop()
++	respond := func(code sdkAuth.DeviceAuthorization) {
++		c.JSON(http.StatusOK, gin.H{"status": "ok", "flow": "device", "state": state, "url": code.URL, "user_code": code.UserCode, "expires_in": code.ExpiresIn})
++	}
++	select {
++	case code := <-ready:
++		respond(code)
++	case <-done:
++		select {
++		case code := <-ready:
++			respond(code)
++			return
++		default:
++		}
++		CancelOAuthSession(state)
++		c.JSON(http.StatusBadGateway, gin.H{"error": "device authorization unavailable"})
++	case <-timer.C:
++		CancelOAuthSession(state)
++		c.JSON(http.StatusGatewayTimeout, gin.H{"error": "device authorization timed out"})
++	case <-c.Request.Context().Done():
++		CancelOAuthSession(state)
++	}
++}
+diff --git a/internal/api/handlers/management/auth_files_codex_device_test.go b/internal/api/handlers/management/auth_files_codex_device_test.go
+new file mode 100644
+index 0000000..0310eda
+--- /dev/null
++++ b/internal/api/handlers/management/auth_files_codex_device_test.go
+@@ -0,0 +1,152 @@
++package management
++
++import (
++	"context"
++	"encoding/base64"
++	"encoding/json"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
++	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
++)
++
++type deviceTransport func(*http.Request) (*http.Response, error)
++
++func (f deviceTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
++
++func TestCodexDeviceManagementCancellation(t *testing.T) {
++	old := http.DefaultTransport
++	defer func() { http.DefaultTransport = old }()
++	polling := make(chan struct{})
++	cancelled := make(chan struct{})
++	http.DefaultTransport = deviceTransport(func(r *http.Request) (*http.Response, error) {
++		if strings.HasSuffix(r.URL.Path, "/usercode") {
++			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"device_auth_id":"secret-device-id","user_code":"ABCD-EFGH","interval":1}`)), Header: make(http.Header)}, nil
++		}
++		close(polling)
++		<-r.Context().Done()
++		close(cancelled)
++		return nil, r.Context().Err()
++	})
++	handler := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, nil)
++	router := gin.New()
++	router.GET("/auth", handler.StartOAuthV8)
++	response := httptest.NewRecorder()
++	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/auth?provider=codex&flow=device", nil))
++	if response.Code != 200 {
++		t.Fatalf("status %d: %s", response.Code, response.Body.String())
++	}
++	var result struct {
++		State, Flow, URL string
++		UserCode         string `json:"user_code"`
++		ExpiresIn        int    `json:"expires_in"`
++	}
++	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
++		t.Fatal(err)
++	}
++	if result.Flow != "device" || result.UserCode != "ABCD-EFGH" || result.ExpiresIn != 900 || result.URL != "https://auth.openai.com/codex/device" {
++		t.Fatalf("unexpected response: %+v", result)
++	}
++	if strings.Contains(response.Body.String(), "secret-device-id") {
++		t.Fatal("leaked device secret")
++	}
++	<-polling
++	if !CancelOAuthSession(result.State) {
++		t.Fatal("session not cancelled")
++	}
++	select {
++	case <-cancelled:
++	case <-time.After(time.Second):
++		t.Fatal("device polling was not stopped")
++	}
++}
++
++func TestDeviceCompletionAndCancellationAreExclusive(t *testing.T) {
++	store := newOAuthSessionStore(time.Minute)
++	store.Register("cancelled", "codex")
++	ctx, cancel := context.WithCancel(context.Background())
++	store.attachCancel("cancelled", cancel)
++	if !store.Cancel("cancelled") || ctx.Err() == nil {
++		t.Fatal("cancel did not interrupt login")
++	}
++	saved := false
++	if err := store.finishOAuth("cancelled", func() error { saved = true; return nil }); err != errOAuthSessionNotPending || saved {
++		t.Fatal("cancelled flow saved credentials")
++	}
++	store.Register("completed", "codex")
++	if err := store.finishOAuth("completed", func() error { saved = true; return nil }); err != nil || !saved {
++		t.Fatal("completion failed")
++	}
++	if store.Cancel("completed") {
++		t.Fatal("completed flow was cancelled")
++	}
++}
++
++func TestCodexDeviceManagementPersistsCredential(t *testing.T) {
++	old := http.DefaultTransport
++	defer func() { http.DefaultTransport = old }()
++	jwt := "e30." + base64.RawURLEncoding.EncodeToString([]byte(`{"email":"device@example.test","https://api.openai.com/auth":{"chatgpt_account_id":"account","chatgpt_plan_type":"pro"}}`)) + ".signature"
++	http.DefaultTransport = deviceTransport(func(r *http.Request) (*http.Response, error) {
++		var body string
++		switch r.URL.Path {
++		case "/api/accounts/deviceauth/usercode":
++			body = `{"device_auth_id":"private","user_code":"ABCD","interval":1}`
++		case "/api/accounts/deviceauth/token":
++			body = `{"authorization_code":"code","code_verifier":"verifier","code_challenge":"challenge"}`
++		case "/oauth/token":
++			if err := r.ParseForm(); err != nil {
++				t.Error(err)
++			}
++			if r.Form.Get("redirect_uri") != "https://auth.openai.com/deviceauth/callback" {
++				t.Error("wrong device callback")
++			}
++			encoded, _ := json.Marshal(map[string]any{"access_token": "access", "refresh_token": "refresh", "expires_in": 3600, "id_token": jwt})
++			body = string(encoded)
++		default:
++			t.Errorf("unexpected request: %s", r.URL)
++			body = `{}`
++		}
++		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
++	})
++	directory := t.TempDir()
++	handler := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: directory}, nil)
++	persisted := make(chan struct{})
++	handler.postAuthPersistHook = func(_ context.Context, _ *coreauth.Auth) error { close(persisted); return nil }
++	router := gin.New()
++	router.GET("/auth", handler.StartOAuthV8)
++	response := httptest.NewRecorder()
++	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/auth?provider=codex&flow=device", nil))
++	if response.Code != 200 {
++		t.Fatalf("status %d: %s", response.Code, response.Body.String())
++	}
++	var result struct{ State string }
++	_ = json.Unmarshal(response.Body.Bytes(), &result)
++	select {
++	case <-persisted:
++	case <-time.After(time.Second):
++		t.Fatal("credential was not persisted")
++	}
++	session, ok := oauthSessions.Get(result.State)
++	if !ok || !session.Completed {
++		t.Fatal("device flow not completed")
++	}
++	files, err := filepath.Glob(filepath.Join(directory, "*.json"))
++	if err != nil || len(files) != 1 {
++		t.Fatalf("files: %v, %v", files, err)
++	}
++	data, err := os.ReadFile(files[0])
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !strings.Contains(string(data), "device@example.test") {
++		t.Fatal("saved wrong account")
++	}
++}
+diff --git a/internal/api/handlers/management/auth_files_devin_oauth.go b/internal/api/handlers/management/auth_files_devin_oauth.go
+index 2913dd8..63f0090 100644
+--- a/internal/api/handlers/management/auth_files_devin_oauth.go
++++ b/internal/api/handlers/management/auth_files_devin_oauth.go
+@@ -121,14 +121,10 @@ func (h *Handler) completeDevinOAuth(ctx context.Context, authDir, state, codeVe
+ 		}
+ 		return
+ 	}
+-	if errGuard := guardOAuthSessionPendingForSave(state, "devin"); errGuard != nil {
+-		return
+-	}
+-	if _, errSave := h.saveTokenRecord(ctx, record); errSave != nil {
++	if _, errSave := h.saveOAuthTokenRecord(ctx, state, record); errSave != nil {
+ 		SetOAuthSessionError(state, "Failed to save authentication tokens")
+ 		return
+ 	}
+-	CompleteOAuthSession(state)
+ 	log.Info("Devin authentication successful")
+ }
+ 
+diff --git a/internal/api/handlers/management/auth_files_fields.go b/internal/api/handlers/management/auth_files_fields.go
+index 2749677..0c77d35 100644
+--- a/internal/api/handlers/management/auth_files_fields.go
++++ b/internal/api/handlers/management/auth_files_fields.go
+@@ -977,7 +977,7 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
+ 			legacyID = strings.TrimSpace(legacyClaudeCredential.FileName)
+ 		}
+ 		if errDelete := store.Delete(ctx, legacyID); errDelete != nil {
+-			return savedPath, fmt.Errorf("canonical Claude credential saved but legacy credential cleanup failed: %w", errDelete)
++			return savedPath, &authCommitFollowupError{stage: "legacy-cleanup", cause: fmt.Errorf("canonical Claude credential saved but legacy credential cleanup failed: %w", errDelete)}
+ 		}
+ 	}
+ 	if h.postAuthPersistHook != nil {
+@@ -991,7 +991,7 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
+ 				PluginAuthParser: h.pluginHost,
+ 			}, savedPath, data)
+ 			if errSynthesize != nil {
+-				return savedPath, fmt.Errorf("synthesize persisted auth failed: %w", errSynthesize)
++				return savedPath, &authCommitFollowupError{stage: "synthesis", cause: fmt.Errorf("synthesize persisted auth failed: %w", errSynthesize)}
+ 			}
+ 			for _, auth := range auths {
+ 				if auth != nil && (auth.ID == record.ID || len(auths) == 1) {
+@@ -1001,7 +1001,7 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
+ 			}
+ 		}
+ 		if errHook := h.postAuthPersistHook(ctx, persistedRecord); errHook != nil {
+-			return savedPath, fmt.Errorf("post-auth persist hook failed: %w", errHook)
++			return savedPath, &authCommitFollowupError{stage: "post-persist-hook", cause: fmt.Errorf("post-auth persist hook failed: %w", errHook)}
+ 		}
+ 	}
+ 	return savedPath, nil
+diff --git a/internal/api/handlers/management/auth_files_oauth_save.go b/internal/api/handlers/management/auth_files_oauth_save.go
+new file mode 100644
+index 0000000..a97195e
+--- /dev/null
++++ b/internal/api/handlers/management/auth_files_oauth_save.go
+@@ -0,0 +1,35 @@
++package management
++
++import (
++	"context"
++	"errors"
++
++	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
++	log "github.com/sirupsen/logrus"
++)
++
++// authCommitFollowupError records failure after Store.Save acknowledged persistence.
++// It preserves the existing error for non-OAuth callers while identifying the commit boundary.
++type authCommitFollowupError struct {
++	stage string
++	cause error
++}
++
++func (e *authCommitFollowupError) Error() string { return e.cause.Error() }
++func (e *authCommitFollowupError) Unwrap() error { return e.cause }
++
++// saveOAuthTokenRecord commits credentials and session completion together with respect to cancellation.
++func (h *Handler) saveOAuthTokenRecord(ctx context.Context, state string, record *coreauth.Auth) (string, error) {
++	var path string
++	err := oauthSessions.finishOAuth(state, func() error {
++		var err error
++		path, err = h.saveTokenRecord(ctx, record)
++		var followup *authCommitFollowupError
++		if errors.As(err, &followup) {
++			log.WithField("stage", followup.stage).Warn("OAuth credentials saved; post-save synchronization failed")
++			return nil
++		}
++		return err
++	})
++	return path, err
++}
+diff --git a/internal/api/handlers/management/auth_files_oauth_save_test.go b/internal/api/handlers/management/auth_files_oauth_save_test.go
+new file mode 100644
+index 0000000..521d2ac
+--- /dev/null
++++ b/internal/api/handlers/management/auth_files_oauth_save_test.go
+@@ -0,0 +1,147 @@
++package management
++
++import (
++	"context"
++	"errors"
++	"os"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
++	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
++	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
++)
++
++func TestOAuthSaveCancellationIsAtomic(t *testing.T) {
++	for _, provider := range []string{"codex", "anthropic", "antigravity", "kimi", "kimi-ai", "xai", "devin", "meta"} {
++		t.Run(provider, func(t *testing.T) {
++			directory := t.TempDir()
++			h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: directory}, nil)
++			h.tokenStore = sdkAuth.NewFileTokenStore()
++			record := &coreauth.Auth{ID: "account.json", FileName: "account.json", Provider: provider, Metadata: map[string]any{"access_token": "test"}}
++			state := "save-cancel-" + provider
++			RegisterOAuthSession(state, provider)
++			if !CancelOAuthSession(state) {
++				t.Fatal("cancel failed")
++			}
++			if _, err := h.saveOAuthTokenRecord(context.Background(), state, record); !errors.Is(err, errOAuthSessionNotPending) {
++				t.Fatalf("cancelled save: %v", err)
++			}
++			files, err := os.ReadDir(directory)
++			if err != nil || len(files) != 0 {
++				t.Fatal("cancelled flow wrote credentials")
++			}
++
++			RegisterOAuthSession(state, provider)
++			saving := make(chan struct{})
++			release := make(chan struct{})
++			h.postAuthHook = func(context.Context, *coreauth.Auth) error { close(saving); <-release; return nil }
++			saved := make(chan error, 1)
++			go func() { _, err := h.saveOAuthTokenRecord(context.Background(), state, record); saved <- err }()
++			<-saving
++			cancellation := make(chan bool, 1)
++			attempted := make(chan struct{})
++			go func() { close(attempted); cancellation <- CancelOAuthSession(state) }()
++			<-attempted
++			close(release)
++			select {
++			case err := <-saved:
++				if err != nil {
++					t.Fatal(err)
++				}
++			case <-time.After(time.Second):
++				t.Fatal("save deadlocked")
++			}
++			select {
++			case cancelled := <-cancellation:
++				if cancelled {
++					t.Fatal("cancel reported success after credential commit")
++				}
++			case <-time.After(time.Second):
++				t.Fatal("cancel deadlocked")
++			}
++			session, ok := oauthSessions.Get(state)
++			if !ok || !session.Completed {
++				t.Fatal("saved account has no completed session")
++			}
++			if _, err := os.Stat(directory + "/account.json"); err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
++
++func TestOAuthSavePostPersistFailureKeepsCommittedOutcome(t *testing.T) {
++	directory := t.TempDir()
++	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: directory}, nil)
++	h.tokenStore = sdkAuth.NewFileTokenStore()
++	record := &coreauth.Auth{ID: "account.json", FileName: "account.json", Provider: "codex", Metadata: map[string]any{"type": "codex", "access_token": "test"}}
++	var hooked *coreauth.Auth
++	h.postAuthPersistHook = func(_ context.Context, auth *coreauth.Auth) error {
++		hooked = auth.Clone()
++		return errors.New("private-hook-error")
++	}
++	state := "saved-with-hook-error"
++	RegisterOAuthSession(state, "codex")
++	path, err := h.saveOAuthTokenRecord(context.Background(), state, record)
++	if err != nil {
++		t.Fatalf("durably saved login reported failure: %v", err)
++	}
++	if _, err := os.Stat(path); err != nil {
++		t.Fatal(err)
++	}
++	if hooked == nil || hooked.ID != record.ID || hooked.Attributes[coreauth.AttributePath] != path || hooked.Attributes[coreauth.AttributeSourceBackend] != coreauth.AuthSourceFile {
++		t.Fatalf("post-save synchronization did not receive the canonical source identity: %#v", hooked)
++	}
++	session, ok := oauthSessions.Get(state)
++	if !ok || !session.Completed {
++		t.Fatal("saved credential must have a completed login")
++	}
++	SetOAuthSessionError(state, "late failure")
++	session, _ = oauthSessions.Get(state)
++	if session.Status != "" || !session.Completed {
++		t.Fatal("late error replaced committed outcome")
++	}
++	if CancelOAuthSession(state) {
++		t.Fatal("cancellation won after credential commit")
++	}
++}
++
++type failingOAuthTokenStore struct{ coreauth.Store }
++
++func (s failingOAuthTokenStore) Save(context.Context, *coreauth.Auth) (string, error) {
++	// A store's error is authoritative even when it returns a nonempty diagnostic path.
++	return "/not-persisted/account.json", errors.New("store-failure")
++}
++
++func TestOAuthSaveBeforeCommitFailureRemainsRejected(t *testing.T) {
++	for _, stage := range []string{"pre-save-hook", "store"} {
++		t.Run(stage, func(t *testing.T) {
++			directory := t.TempDir()
++			h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: directory}, nil)
++			h.tokenStore = sdkAuth.NewFileTokenStore()
++			if stage == "pre-save-hook" {
++				h.postAuthHook = func(context.Context, *coreauth.Auth) error { return errors.New("hook-failure") }
++			} else {
++				h.tokenStore = failingOAuthTokenStore{Store: h.tokenStore}
++			}
++			record := &coreauth.Auth{ID: "account.json", FileName: "account.json", Provider: "codex", Metadata: map[string]any{"type": "codex", "access_token": "test"}}
++			state := "not-saved-" + stage
++			RegisterOAuthSession(state, "codex")
++			if _, err := h.saveOAuthTokenRecord(context.Background(), state, record); err == nil {
++				t.Fatal("pre-commit failure was swallowed")
++			}
++			files, err := os.ReadDir(directory)
++			if err != nil || len(files) != 0 {
++				t.Fatal("failed save left credentials")
++			}
++			session, ok := oauthSessions.Get(state)
++			if !ok || session.Completed {
++				t.Fatal("failed save marked enrollment completed")
++			}
++			if !CancelOAuthSession(state) {
++				t.Fatal("failed save prevented cancellation")
++			}
++		})
++	}
++}
+diff --git a/internal/api/handlers/management/auth_files_provider_oauth.go b/internal/api/handlers/management/auth_files_provider_oauth.go
+index 48fc4ef..9f583bc 100644
+--- a/internal/api/handlers/management/auth_files_provider_oauth.go
++++ b/internal/api/handlers/management/auth_files_provider_oauth.go
+@@ -174,10 +174,7 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
+ 			Storage:  tokenStorage,
+ 			Metadata: metadata,
+ 		}
+-		if errGuard := guardOAuthSessionPendingForSave(state, "anthropic"); errGuard != nil {
+-			return
+-		}
+-		savedPath, errSave := h.saveTokenRecord(ctx, record)
++		savedPath, errSave := h.saveOAuthTokenRecord(ctx, state, record)
+ 		if errSave != nil {
+ 			log.Errorf("Failed to save authentication tokens: %v", errSave)
+ 			SetOAuthSessionError(state, "Failed to save authentication tokens")
+@@ -189,7 +186,6 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
+ 			fmt.Println("API key obtained and saved")
+ 		}
+ 		fmt.Println("You can now use Claude services through this CLI")
+-		CompleteOAuthSession(state)
+ 	}()
+ 
+ 	c.JSON(200, gin.H{"status": "ok", "url": authURL, "state": state})
+@@ -336,10 +332,7 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
+ 				"plan_type": planType,
+ 			},
+ 		}
+-		if errGuard := guardOAuthSessionPendingForSave(state, "codex"); errGuard != nil {
+-			return
+-		}
+-		savedPath, errSave := h.saveTokenRecord(ctx, record)
++		savedPath, errSave := h.saveOAuthTokenRecord(ctx, state, record)
+ 		if errSave != nil {
+ 			SetOAuthSessionError(state, "Failed to save authentication tokens")
+ 			log.Errorf("Failed to save authentication tokens: %v", errSave)
+@@ -350,7 +343,6 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
+ 			fmt.Println("API key obtained and saved")
+ 		}
+ 		fmt.Println("You can now use Codex services through this CLI")
+-		CompleteOAuthSession(state)
+ 	}()
+ 
+ 	c.JSON(200, gin.H{"status": "ok", "url": authURL, "state": state})
+@@ -502,17 +494,13 @@ func (h *Handler) RequestAntigravityToken(c *gin.Context) {
+ 			Label:    label,
+ 			Metadata: metadata,
+ 		}
+-		if errGuard := guardOAuthSessionPendingForSave(state, "antigravity"); errGuard != nil {
+-			return
+-		}
+-		savedPath, errSave := h.saveTokenRecord(ctx, record)
++		savedPath, errSave := h.saveOAuthTokenRecord(ctx, state, record)
+ 		if errSave != nil {
+ 			log.Errorf("Failed to save token to file: %v", errSave)
+ 			SetOAuthSessionError(state, "Failed to save token to file")
+ 			return
+ 		}
+ 
+-		CompleteOAuthSession(state)
+ 		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
+ 		if projectID != "" {
+ 			fmt.Printf("Using GCP project: %s\n", util.HideAPIKey(projectID))
+@@ -609,17 +597,13 @@ func (h *Handler) RequestXAIToken(c *gin.Context) {
+ 				"base_url":  tokenStorage.BaseURL,
+ 			},
+ 		}
+-		if errGuard := guardOAuthSessionPendingForSave(state, "xai"); errGuard != nil {
+-			return
+-		}
+-		savedPath, errSave := h.saveTokenRecord(ctx, record)
++		savedPath, errSave := h.saveOAuthTokenRecord(ctx, state, record)
+ 		if errSave != nil {
+ 			log.Errorf("Failed to save xAI token to file: %v", errSave)
+ 			SetOAuthSessionError(state, "Failed to save token to file")
+ 			return
+ 		}
+ 
+-		CompleteOAuthSession(state)
+ 		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
+ 		fmt.Println("You can now use xAI services through this CLI")
+ 	}()
+@@ -685,17 +669,13 @@ func (h *Handler) RequestMetaToken(c *gin.Context) {
+ 		}
+ 
+ 		record := buildMetaAuthRecord(bundle, tokenStorage)
+-		if errGuard := guardOAuthSessionPendingForSave(state, "meta"); errGuard != nil {
+-			return
+-		}
+-		savedPath, errSave := h.saveTokenRecord(ctx, record)
++		savedPath, errSave := h.saveOAuthTokenRecord(ctx, state, record)
+ 		if errSave != nil {
+ 			log.Errorf("Failed to save Meta token to file: %v", errSave)
+ 			SetOAuthSessionError(state, "Failed to save token to file")
+ 			return
+ 		}
+ 
+-		CompleteOAuthSession(state)
+ 		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
+ 		fmt.Println("You can now use Meta services through this CLI")
+ 	}()
+@@ -887,10 +867,7 @@ func (h *Handler) requestKimiTokenWithDomain(c *gin.Context, domain string) {
+ 				"domain":   domain,
+ 			},
+ 		}
+-		if errGuard := guardOAuthSessionPendingForSave(state, providerName); errGuard != nil {
+-			return
+-		}
+-		savedPath, errSave := h.saveTokenRecord(ctx, record)
++		savedPath, errSave := h.saveOAuthTokenRecord(ctx, state, record)
+ 		if errSave != nil {
+ 			log.Errorf("Failed to save authentication tokens: %v", errSave)
+ 			SetOAuthSessionError(state, "Failed to save authentication tokens")
+@@ -899,7 +876,6 @@ func (h *Handler) requestKimiTokenWithDomain(c *gin.Context, domain string) {
+ 
+ 		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
+ 		fmt.Printf("You can now use %s services through this CLI\n", displayName)
+-		CompleteOAuthSession(state)
+ 	}()
+ 
+ 	response := gin.H{"status": "ok", "url": authURL, "state": state, "flow": "device"}
+diff --git a/internal/api/handlers/management/auth_files_v8.go b/internal/api/handlers/management/auth_files_v8.go
+index 7d8151a..9d94ee9 100644
+--- a/internal/api/handlers/management/auth_files_v8.go
++++ b/internal/api/handlers/management/auth_files_v8.go
+@@ -15,7 +15,11 @@ func (h *Handler) StartOAuthV8(c *gin.Context) {
+ 	case "claude":
+ 		h.RequestAnthropicToken(c)
+ 	case "codex":
+-		h.RequestCodexToken(c)
++		if c.Query("flow") == "device" {
++			h.RequestCodexDeviceToken(c)
++		} else {
++			h.RequestCodexToken(c)
++		}
+ 	case "antigravity":
+ 		h.RequestAntigravityToken(c)
+ 	case "kimi":
+diff --git a/internal/api/handlers/management/oauth_sessions.go b/internal/api/handlers/management/oauth_sessions.go
+index 336f9bb..8e20fc3 100644
+--- a/internal/api/handlers/management/oauth_sessions.go
++++ b/internal/api/handlers/management/oauth_sessions.go
+@@ -1,6 +1,7 @@
+ package management
+ 
+ import (
++	"context"
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+@@ -15,8 +16,9 @@ import (
+ 
+ const (
+ 	// oauthSessionTTL must cover device-code flows (xAI ~30m, Kimi ~15m).
+-	oauthSessionTTL          = 30 * time.Minute
+-	oauthCompletedSessionTTL = time.Minute
++	oauthSessionTTL = 30 * time.Minute
++	// Keep completion readable throughout device enrollment even when a browser suspends.
++	oauthCompletedSessionTTL = oauthSessionTTL
+ 	maxOAuthStateLength      = 128
+ )
+ 
+@@ -33,6 +35,7 @@ var (
+ )
+ 
+ type oauthSession struct {
++	Cancel    context.CancelFunc
+ 	Provider  string
+ 	Status    string
+ 	Source    string
+@@ -247,6 +250,9 @@ func (s *oauthSessionStore) Cancel(state string) bool {
+ 		return false
+ 	}
+ 	delete(s.sessions, state)
++	if session.Cancel != nil {
++		session.Cancel()
++	}
+ 	return true
+ }
+ 
+@@ -486,3 +492,34 @@ func WriteOAuthCallbackFileForPendingSession(authDir, provider, state, code, err
+ 	}
+ 	return writeOAuthCallbackFile(authDir, canonicalProvider, state, code, errorMessage)
+ }
++
++// attachCancel stops a device authorization as soon as its session is cancelled.
++func (s *oauthSessionStore) attachCancel(state string, cancel context.CancelFunc) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	session, ok := s.sessions[state]
++	if !ok || session.Completed || session.Status != "" {
++		cancel()
++		return
++	}
++	session.Cancel = cancel
++	s.sessions[state] = session
++}
++
++// finishOAuth serializes credential persistence with cancellation for every login flow.
++func (s *oauthSessionStore) finishOAuth(state string, save func() error) error {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	session, ok := s.sessions[state]
++	if !ok || session.Completed || session.Status != "" || time.Now().After(session.ExpiresAt) {
++		return errOAuthSessionNotPending
++	}
++	if err := save(); err != nil {
++		return err
++	}
++	session.Completed = true
++	session.Cancel = nil
++	session.ExpiresAt = time.Now().Add(s.completedTTL)
++	s.sessions[state] = session
++	return nil
++}
+diff --git a/internal/api/handlers/management/oauth_sessions_test.go b/internal/api/handlers/management/oauth_sessions_test.go
+index a6bc3fd..9c9becd 100644
+--- a/internal/api/handlers/management/oauth_sessions_test.go
++++ b/internal/api/handlers/management/oauth_sessions_test.go
+@@ -342,3 +342,39 @@ func replaceOAuthSessionStoreForTest(t *testing.T, store *oauthSessionStore) {
+ 		oauthSessions = original
+ 	})
+ }
++
++func TestOAuthCompletionSurvivesSuspendedBrowser(t *testing.T) {
++	for _, finish := range []string{"Complete", "CompleteProvider", "finishOAuth"} {
++		t.Run(finish, func(t *testing.T) {
++			store := newOAuthSessionStore(oauthSessionTTL)
++			store.Register("suspended-browser", "codex")
++			switch finish {
++			case "Complete":
++				store.Complete("suspended-browser")
++			case "CompleteProvider":
++				store.CompleteProvider("codex", oauthSessionSourceBuiltin)
++			case "finishOAuth":
++				if err := store.finishOAuth("suspended-browser", func() error { return nil }); err != nil {
++					t.Fatal(err)
++				}
++			}
++			// A browser can suspend for the entire advertised T3 enrollment lifetime.
++			store.mu.Lock()
++			store.purgeExpiredLocked(time.Now().Add(oauthSessionTTL - time.Second))
++			store.mu.Unlock()
++			result, ok := store.Get("suspended-browser")
++			if !ok || !result.Completed {
++				t.Fatal("saved credentials lost their completion result while the browser was suspended")
++			}
++			if store.Cancel("suspended-browser") {
++				t.Fatal("completed enrollment must not be cancelled")
++			}
++			store.mu.Lock()
++			store.purgeExpiredLocked(time.Now().Add(oauthSessionTTL + time.Second))
++			store.mu.Unlock()
++			if _, ok := store.Get("suspended-browser"); ok {
++				t.Fatal("completion result retained indefinitely")
++			}
++		})
++	}
++}
+diff --git a/internal/api/handlers/management/t3_authentication_failure_test.go b/internal/api/handlers/management/t3_authentication_failure_test.go
+new file mode 100644
+index 0000000..f41f319
+--- /dev/null
++++ b/internal/api/handlers/management/t3_authentication_failure_test.go
+@@ -0,0 +1,43 @@
++package management
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
++	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
++)
++
++func TestAuthFileEntryDistinguishesAuthenticationFailureFromCooldown(t *testing.T) {
++	now := time.Now().UTC()
++	for _, kind := range []string{"credential-quota", "all-models-quota", "expired-token", "unauthorized", "disabled-invalid-grant"} {
++		t.Run(kind, func(t *testing.T) {
++			dir := t.TempDir()
++			path := filepath.Join(dir, "account.json")
++			if err := os.WriteFile(path, []byte(`{"type":"codex"}`), 0600); err != nil {
++				t.Fatal(err)
++			}
++			h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: dir}, nil)
++			auth := &coreauth.Auth{ID: "account.json", FileName: "account.json", Provider: "codex", Status: coreauth.StatusError, Unavailable: true, Attributes: map[string]string{"path": path}, ModelStates: map[string]*coreauth.ModelState{"model-a": {Status: coreauth.StatusError, Unavailable: true, NextRetryAfter: now.Add(time.Hour), Quota: coreauth.QuotaState{Exceeded: true, Reason: "quota", NextRecoverAt: now.Add(time.Hour)}}}}
++			switch kind {
++			case "credential-quota":
++				auth.Quota = coreauth.QuotaState{Exceeded: true, Reason: "credential_quota", NextRecoverAt: now.Add(time.Hour)}
++			case "expired-token":
++				auth.Metadata = map[string]any{"access_token": "fixture", "expired": now.Add(-time.Minute).Format(time.RFC3339)}
++			case "unauthorized":
++				auth.LastError = &coreauth.Error{HTTPStatus: 401}
++			case "disabled-invalid-grant":
++				auth.Disabled = true
++				auth.Status = coreauth.StatusDisabled
++				auth.LastError = &coreauth.Error{Code: "invalid_grant", Message: "invalid_grant"}
++			}
++			entry := h.buildAuthFileEntry(auth, authFileQuotaContext{v8: true})
++			expected := kind != "credential-quota" && kind != "all-models-quota"
++			if got, ok := entry["authentication_failed"].(bool); !ok || got != expected {
++				t.Fatalf("authentication_failed=%v, expected %v", entry["authentication_failed"], expected)
++			}
++		})
++	}
++}
+diff --git a/sdk/api/handlers/openai/openai_handlers.go b/sdk/api/handlers/openai/openai_handlers.go
+index 4077ee5..88d8eb4 100644
+--- a/sdk/api/handlers/openai/openai_handlers.go
++++ b/sdk/api/handlers/openai/openai_handlers.go
+@@ -81,7 +81,7 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
+ 	// Get all available models
+ 	allModels := h.Models()
+ 
+-	// Filter to only include the 4 required fields: id, object, created, owned_by
++	// Preserve known input modalities alongside the OpenAI identity fields.
+ 	filteredModels := make([]map[string]any, len(allModels))
+ 	for i, model := range allModels {
+ 		filteredModel := map[string]any{
+@@ -99,6 +99,12 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
+ 			filteredModel["owned_by"] = ownedBy
+ 		}
+ 
++		if id, ok := model["id"].(string); ok {
++			if info := registry.GetGlobalRegistry().GetModelInfo(id, ""); info != nil && len(info.SupportedInputModalities) > 0 {
++				filteredModel["supported_input_modalities"] = append([]string(nil), info.SupportedInputModalities...)
++			}
++		}
++
+ 		filteredModels[i] = filteredModel
+ 	}
+ 
+diff --git a/sdk/api/handlers/openai/t3_model_modalities_test.go b/sdk/api/handlers/openai/t3_model_modalities_test.go
+new file mode 100644
+index 0000000..182cc4d
+--- /dev/null
++++ b/sdk/api/handlers/openai/t3_model_modalities_test.go
+@@ -0,0 +1,55 @@
++package openai
++
++import (
++	"encoding/json"
++	"net/http/httptest"
++	"reflect"
++	"testing"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
++	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
++)
++
++func TestT3ModelsPreserveKnownInputModalities(t *testing.T) {
++	r := registry.GetGlobalRegistry()
++	client := "t3-modalities-test"
++	r.RegisterClient(client, "openai-compatibility", []*registry.ModelInfo{
++		{ID: "t3-image-model", SupportedInputModalities: []string{"text", "image"}},
++		{ID: "t3-unknown-model"},
++	})
++	t.Cleanup(func() { r.UnregisterClient(client) })
++	handler := NewOpenAIAPIHandler(handlers.NewBaseAPIHandlers(&config.SDKConfig{}, nil))
++	response := httptest.NewRecorder()
++	ctx, _ := gin.CreateTestContext(response)
++	ctx.Request = httptest.NewRequest("GET", "/v1/models", nil)
++	handler.OpenAIModels(ctx)
++	if response.Code != 200 {
++		t.Fatalf("status %d: %s", response.Code, response.Body.String())
++	}
++	var result struct {
++		Data []struct {
++			ID    string   `json:"id"`
++			Input []string `json:"supported_input_modalities"`
++		} `json:"data"`
++	}
++	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
++		t.Fatal(err)
++	}
++	seen := false
++	for _, model := range result.Data {
++		if model.ID == "t3-image-model" {
++			seen = true
++			if !reflect.DeepEqual(model.Input, []string{"text", "image"}) {
++				t.Fatalf("image support lost: %v", model.Input)
++			}
++		}
++		if model.ID == "t3-unknown-model" && len(model.Input) != 0 {
++			t.Fatalf("invented modalities: %v", model.Input)
++		}
++	}
++	if !seen {
++		t.Fatal("missing image model")
++	}
++}
+diff --git a/sdk/auth/codex_device.go b/sdk/auth/codex_device.go
+index cc2febb..b2f66a5 100644
+--- a/sdk/auth/codex_device.go
++++ b/sdk/auth/codex_device.go
+@@ -84,9 +84,15 @@ func (a *CodexAuthenticator) loginWithDeviceFlow(ctx context.Context, cfg *confi
+ 
+ 	pollInterval := parseCodexDevicePollInterval(userCodeResp.Interval)
+ 
+-	fmt.Println("Starting Codex device authentication...")
+-	fmt.Printf("Codex device URL: %s\n", codexDeviceVerificationURL)
+-	fmt.Printf("Codex device code: %s\n", deviceCode)
++	if opts.DeviceAuthorization != nil {
++		if err := opts.DeviceAuthorization(DeviceAuthorization{URL: codexDeviceVerificationURL, UserCode: deviceCode, ExpiresIn: int(codexDeviceTimeout.Seconds())}); err != nil {
++			return nil, err
++		}
++	} else {
++		fmt.Println("Starting Codex device authentication...")
++		fmt.Printf("Codex device URL: %s\n", codexDeviceVerificationURL)
++		fmt.Printf("Codex device code: %s\n", deviceCode)
++	}
+ 
+ 	if !opts.NoBrowser {
+ 		if !browser.IsAvailable() {
+diff --git a/sdk/auth/interfaces.go b/sdk/auth/interfaces.go
+index 4388de8..00e7ed1 100644
+--- a/sdk/auth/interfaces.go
++++ b/sdk/auth/interfaces.go
+@@ -11,14 +11,22 @@ import (
+ 
+ var ErrRefreshNotSupported = errors.New("cliproxy auth: refresh not supported")
+ 
++// DeviceAuthorization carries the instructions shown to a user signing in.
++type DeviceAuthorization struct {
++	URL       string
++	UserCode  string
++	ExpiresIn int
++}
++
+ // LoginOptions captures generic knobs shared across authenticators.
+ // Provider-specific logic can inspect Metadata for extra parameters.
+ type LoginOptions struct {
+-	NoBrowser    bool
+-	ProjectID    string
+-	CallbackPort int
+-	Metadata     map[string]string
+-	Prompt       func(prompt string) (string, error)
++	DeviceAuthorization func(DeviceAuthorization) error
++	NoBrowser           bool
++	ProjectID           string
++	CallbackPort        int
++	Metadata            map[string]string
++	Prompt              func(prompt string) (string, error)
+ }
+ 
+ // Authenticator manages login and optional refresh flows for a provider.

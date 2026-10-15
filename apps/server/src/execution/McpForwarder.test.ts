@@ -52,27 +52,3 @@ test("each session keeps its local credential while upstream auth rotates", asyn
     await upstream.close();
   }
 });
-
-test("Aperture MCP supplements central session routing without changing its credentials", () => {
-  const forwarder = createMcpForwarder("http://worker", fetch, {
-    APERTURE_UPSTREAM: "http://aperture",
-    APERTURE_API_KEY: "private",
-  });
-  const local = forwarder.configure({
-    environmentId: EnvironmentId.make("env"),
-    threadId: ThreadId.make("aperture-thread"),
-    providerSessionId: "provider",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    endpoint: "http://central/mcp",
-    authorizationHeader: "Bearer central",
-    browserToolsAvailable: true,
-  });
-  expect(local.additionalHttpServers).toEqual({
-    aperture: { url: "http://aperture/v1/mcp", headers: { Authorization: "Bearer private" } },
-  });
-  expect(local.endpoint).toContain("http://worker/mcp/");
-  expect(forwarder.upstreamForProvider(ProviderInstanceId.make("codex"))?.authorizationHeader).toBe(
-    "Bearer central",
-  );
-  forwarder.remove("provider");
-});

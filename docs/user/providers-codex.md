@@ -1,80 +1,22 @@
 # Codex
 
-Use your ChatGPT plan or an existing Codex CLI login to code in T3 Code.
+Connect your ChatGPT account once and use its models with compatible coding
+harnesses. Codex runs in the deployment's execution workspace.
 
 ## Connect with ChatGPT
 
-Connect during onboarding or in **Settings → Providers**. Sign in on OpenAI
-and allow sharing of your ChatGPT plan. The deployment's execution image supplies
-Codex; provider settings do not install or update it.
+Open **Settings → Providers → Accounts**, choose **ChatGPT**, and start sign-in.
+Open the displayed sign-in page and enter the device code. Return to T3 after
+authorizing the account. When sign-in completes, choose Codex and a model in the
+composer.
 
-Manage shared usage and credits in ChatGPT through **Manage usage** in T3 Code.
-If a request uses a feature that ChatGPT sharing does not support, use another
-provider for that request.
+For another account, repeat the connection flow in **Accounts**. T3 manages the
+connected accounts centrally. You do not need a separate Codex home or a local
+CLI login. Disable an account to stop using it temporarily, or remove it to
+disconnect it. These actions preserve your conversation history.
 
-When reconnecting, choose the same account in T3 Code and on OpenAI's sign-in
-page. Disconnecting stops running threads but keeps their history and lets you
-reconnect later.
-
-If remote sign-in cannot return automatically, paste the full URL from the final
-localhost page into the sign-in panel, even if that page could not load.
-
-## Use an existing Codex login
-
-T3 Code can use your installed Codex and its existing login. Run `codex login`
-on the environment's machine to sign in. [Provider setup](./install.md#providers)
-covers installation and custom configuration.
-
-## Use multiple accounts
-
-Add another ChatGPT account in **Settings → Providers**, then select the account
-from the thread's model picker. Compatible accounts can continue the same thread.
-Connecting accounts through T3 Code leaves your CLI login unchanged.
-
-### Multiple CLI logins
-
-A shared Codex home with a shadow home lets work and personal accounts continue
-the same threads. The accounts share Codex sessions and configuration while keeping
-their own login and available models.
-
-Keep your first account in `~/.codex`. On the environment's machine, sign the
-second account into a fresh directory:
-
-```bash
-mkdir -p ~/.codex_personal
-CODEX_HOME=~/.codex_personal codex login
-```
-
-Then add a second Codex instance in **Settings > Providers**:
-
-| Instance       | CODEX_HOME path | Shadow home path    |
-| -------------- | --------------- | ------------------- |
-| Codex Work     | `~/.codex`      | Leave empty         |
-| Codex Personal | `~/.codex`      | `~/.codex_personal` |
-
-Both instances must use the same **CODEX_HOME path**. T3 Code prepares the shared
-state in the shadow directory; do not populate it by copying your whole Codex
-home.
-
-The shadow account needs its own `auth.json` file. If Codex uses an OS credential
-store, configure file storage for this setup. See
-[OpenAI's credential storage guide](https://learn.chatgpt.com/docs/auth#credential-storage).
-
-Use a completely separate **CODEX_HOME path**, with no shadow home, when you want
-separate Codex sessions and configuration. That instance cannot continue threads
-from the other home.
-
-## Switch accounts in an existing thread
-
-Choose the other account from the thread's model picker. T3 Code offers compatible
-Codex instances that share the thread's **CODEX_HOME path**. Changing accounts does
-not move the conversation into a separate Codex home.
-
-If the account is missing from the picker, compare the home paths in provider
-settings. If two instances show the same unexpected account or models, check their
-reported accounts, refresh provider status, and confirm the second instance has
-its own shadow path and login. A shadow-home conflict usually means the directory
-contains a copied Codex setup. Use a fresh shadow directory and sign in again.
+See [account and harness setup](./install.md#connect-a-provider-account) to use
+another model service with the Codex harness.
 
 ## Answer questions while Codex works
 
@@ -88,7 +30,7 @@ supports async questions.
 ## Approve app access
 
 Codex tools can request access to another app. Respond to the named app's request
-in the thread on web, desktop, or mobile. Some tools offer access for one request,
+in the thread. Some tools offer access for one request,
 the current session, or permanently. See [Permission modes](./permission-modes.md)
 for command and file approvals.
 

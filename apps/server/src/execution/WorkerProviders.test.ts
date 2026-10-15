@@ -8,6 +8,7 @@ import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as ServerConfig from "../config.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
 import * as Registry from "../provider/ProviderInstanceRegistry.ts";
@@ -81,6 +82,7 @@ it.effect(
         Effect.provide(
           Layer.mergeAll(
             TestProviderHost.layer(),
+            ServerConfig.layerTest("/workspace", { prefix: "t3-worker-provider-refresh-" }),
             CredentialSources.layer,
             Layer.mock(ServerSecretStore.ServerSecretStore)({}),
             Layer.mock(Registry.ProviderInstanceRegistry)({

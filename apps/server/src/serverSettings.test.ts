@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
@@ -99,6 +100,49 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
   });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  it.effect("persists managed gateway model migration on load and later preference writes", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fs.writeFileString(
+        config.settingsPath,
+        JSON.stringify({
+          providerInstances: { pi: { driver: "pi", displayName: "Pi · Aperture" } },
+          defaultModelSelection: { instanceId: "pi", model: "aperture/gpt" },
+          projectSettingsFolded: true,
+        }),
+      );
+      const loaded = yield* service.getSettings;
+      assert.equal(loaded.defaultModelSelection?.model, "gateway/gpt");
+      assert.deepEqual(
+        Object.values(loaded.providerInstances)
+          .map((instance) => instance.driver)
+          .sort(),
+        ["claudeAgent", "codex", "grok", "opencode", "pi"],
+      );
+      const persisted = yield* decodeServerSettingsJson(
+        yield* fs.readFileString(config.settingsPath),
+      );
+      assert.equal(persisted.defaultModelSelection?.model, "gateway/gpt");
+      assert.equal(persisted.providerInstances[ProviderInstanceId.make("pi")]?.displayName, "Pi");
+      const next = yield* service.updateSettings({
+        favorites: [{ provider: ProviderInstanceId.make("pi"), model: "aperture-chat/claude" }],
+      });
+      assert.equal(next.favorites?.[0]?.model, "gateway/claude");
+    }).pipe(
+      Effect.provide(
+        layerServerSettings().pipe(
+          Layer.provideMerge(
+            ConfigProvider.layer(
+              ConfigProvider.fromUnknown({ T3_GATEWAY_API_KEY: "inference-key" }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
   it.effect("serializes concurrent model preference edits without cancelling duplicate adds", () =>
     Effect.gen(function* () {
       const service = yield* ServerSettingsModule.ServerSettingsService;

@@ -5,11 +5,8 @@ import { codexThreadRuntimeParams } from "../orchestration-v2/Adapters/CodexAdap
 import { claudeMcpQueryOverrides } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { cursorMcpServers } from "@t3tools/provider-cursor/testing";
 
-test("native launch configuration carries Aperture and independently authenticated T3 MCP", () => {
-  const forwarder = createMcpForwarder("http://worker", fetch, {
-    APERTURE_UPSTREAM: "http://aperture",
-    APERTURE_API_KEY: "aperture-key",
-  });
+test("native launch configuration carries only the session-scoped T3 MCP", () => {
+  const forwarder = createMcpForwarder("http://worker");
   const threadId = ThreadId.make("native-mcp-launch");
   const local = forwarder.configure({
     environmentId: EnvironmentId.make("env"),
@@ -22,27 +19,15 @@ test("native launch configuration carries Aperture and independently authenticat
   });
   try {
     expect(codexThreadRuntimeParams({ mcpSession: local }).config.mcp_servers).toEqual({
-      aperture: {
-        url: "http://aperture/v1/mcp",
-        http_headers: { Authorization: "Bearer aperture-key" },
-      },
       "t3-code": {
         url: local.endpoint,
         http_headers: { Authorization: local.authorizationHeader },
       },
     });
     const claude = claudeMcpQueryOverrides({ mcpSession: local, readOnlySandbox: false });
-    expect(claude.mcpServers?.aperture).toEqual({
-      type: "http",
-      url: "http://aperture/v1/mcp",
-      headers: { Authorization: "Bearer aperture-key" },
-    });
-    expect(claude.allowedTools).toContain("mcp__aperture__*");
-    expect(cursorMcpServers(local)?.aperture).toEqual({
-      type: "http",
-      url: "http://aperture/v1/mcp",
-      headers: { Authorization: "Bearer aperture-key" },
-    });
+    expect(Object.keys(claude.mcpServers ?? {})).toEqual(["t3-code"]);
+    expect(claude.allowedTools).toContain("mcp__t3-code__*");
+    expect(Object.keys(cursorMcpServers(local) ?? {})).toEqual(["t3-code"]);
   } finally {
     forwarder.remove("provider");
   }

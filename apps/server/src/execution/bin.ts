@@ -63,6 +63,8 @@ const program = Effect.gen(function* () {
     let worker: ExecutionWorker | undefined;
     const executor = yield* makeProviderExecutor({
       adapters: providers.adapters,
+      prepareInference: providers.prepareInference,
+      normalizeSelection: providers.normalizeSelection,
       configureMcp: (config) => {
         Effect.runSync(mcpSessions.set(forwarder.configure(config)));
         providers.configureCredentialBroker(config.providerInstanceId, () =>

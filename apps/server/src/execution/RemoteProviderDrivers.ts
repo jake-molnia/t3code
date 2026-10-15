@@ -54,6 +54,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
   const setupTracker = yield* Effect.serviceOption(WorktreeSetupTracker.WorktreeSetupTracker);
   const attachments = yield* Effect.serviceOption(AttachmentStaging.AttachmentStaging);
   const advertisedMcp = yield* Config.option(Config.String("T3_MCP_ADVERTISED_URL"));
+  const gatewayManaged = Option.isSome(yield* Config.option(Config.String("T3_GATEWAY_API_KEY")));
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   return BUILT_IN_DRIVERS.map((driver): AnyProviderDriver => ({
     ...driver,
@@ -62,8 +63,11 @@ export const makeRemoteDrivers = Effect.gen(function* () {
         const instanceId = input.instanceId;
         const credentialRecipients = new Map<string, ExecutionClient>();
         let configuredUtility: ExecutionClient["identity"] | undefined;
-        const authPolicy = credentialPolicy(driver.driverKind, input.config);
+        const authPolicy = gatewayManaged
+          ? { kind: "workspace" as const }
+          : credentialPolicy(driver.driverKind, input.config);
         const managedCodex =
+          !gatewayManaged &&
           driver.driverKind === "codex" &&
           isCodexSettings(input.config) &&
           input.config.setupMode === "managed";
@@ -115,6 +119,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
             });
             yield* Effect.tryPromise(() => client.transient("configureProvider", encoded));
             if (
+              !gatewayManaged &&
               shareCredentials &&
               (driver.driverKind === "cursor" ||
                 driver.driverKind === "antigravity" ||
@@ -304,7 +309,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
             return yield* decodeSnapshot(raw);
           }).pipe(
             Effect.catch(() =>
-              lastSnapshot !== undefined
+              lastSnapshot !== undefined && !gatewayManaged
                 ? Effect.succeed(lastSnapshot)
                 : buildUnavailableProviderSnapshot({
                     instanceId,
