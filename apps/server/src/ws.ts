@@ -249,6 +249,31 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
 
+export const refreshProviderWorkspaceSnapshot = Effect.fn("ws.refreshProviderWorkspaceSnapshot")(
+  function* (
+    input: Parameters<ProviderRegistry.ProviderRegistry["Service"]["refreshWorkspaceSnapshot"]>[0],
+  ) {
+    const registry = yield* ProviderRegistry.ProviderRegistry;
+    const routes = yield* WorkspaceRouting.WorkspaceRouting;
+    const refresh = registry.refreshWorkspaceSnapshot(input);
+    if (input.fresh === true || !routes.enabled) return yield* refresh;
+    const observed = yield* routes.observe(input.cwd, refresh).pipe(
+      Effect.catchTags({
+        WorkspaceRoutingError: (cause) =>
+          Effect.fail(
+            new ProviderSetupError({
+              instanceId: input.instanceId,
+              operation: "refresh-workspace",
+              detail: "Could not observe provider workspace metadata.",
+              cause,
+            }),
+          ),
+      }),
+    );
+    return observed ?? (yield* registry.getProviders);
+  },
+);
+
 const resolveDiscoveryForConfig = <A, E, R>(
   discovery: Effect.Effect<A, E, R>,
   onTimeout: () => A,
@@ -2197,7 +2222,7 @@ const layerWsRpc = (
               yield* usageLimitSources.refresh;
             }
             let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
-              ? providerRegistry.refreshWorkspaceSnapshot({
+              ? refreshProviderWorkspaceSnapshot({
                   instanceId: input.instanceId,
                   cwd: input.cwd,
                   fresh: input.fresh === true,
