@@ -74,8 +74,6 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
         startupPresentation: "headless",
         desktopBootstrapToken: undefined,
         logWebSocketEvents: false,
-        tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
       });
     }),
   );

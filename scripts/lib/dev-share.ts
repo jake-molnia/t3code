@@ -3,10 +3,8 @@
  * can be opened from a phone, another laptop, or by whoever is reviewing the
  * work.
  *
- * Thin wrapper over `@t3tools/tailscale` (the same client the server's own
- * `--tailscale-serve` uses). What it adds is dev-share semantics: replacing a
- * stale mapping left by a killed run, and refusing to serve over routes it
- * could not remove.
+ * Dev-only wrapper over `@t3tools/tailscale`. It replaces stale mappings
+ * left by killed runs and refuses to serve over routes it could not remove.
  *
  * Because browser dev is single-origin (Vite proxies the backend — see
  * `resolveDevProxyTarget` in apps/web/vite.config.ts), one proxy rule covering

@@ -90,8 +90,6 @@ const makeConfig = (baseDir: string) =>
       startupPresentation: "browser",
       desktopBootstrapToken: undefined,
       logWebSocketEvents: false,
-      tailscaleServeEnabled: false,
-      tailscaleServePort: 443,
     } satisfies ServerConfig.ServerConfig["Service"];
   });
 

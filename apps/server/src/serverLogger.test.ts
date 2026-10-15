@@ -64,8 +64,6 @@ const layerConfig = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =
         ...derivedPaths,
         mode: "web",
         logWebSocketEvents: false,
-        tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
         port: 0,
         host: undefined,
         desktopBootstrapToken: undefined,

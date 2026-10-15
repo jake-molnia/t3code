@@ -21,8 +21,6 @@ export const DesktopBackendBootstrap = Schema.Struct({
   // the environment it hands this backend. Absent means the backend hydrates
   // PATH itself, which WSL and older desktops rely on.
   shellEnvironmentPrepared: Schema.optionalKey(Schema.Boolean),
-  tailscaleServeEnabled: Schema.Boolean,
-  tailscaleServePort: PortSchema,
   otlpTracesUrl: Schema.optional(Schema.String),
   otlpMetricsUrl: Schema.optional(Schema.String),
   otlpLogsUrl: Schema.optional(Schema.String),
