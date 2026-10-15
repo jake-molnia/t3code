@@ -7,8 +7,13 @@ const endpoint = (url: string | null) => ({ path, url, hasSecret: false });
 
 describe("webhookAddress", () => {
   it("uses an explicit public URL when the server has one", () => {
-    expect(webhookAddress(endpoint("https://relay.t3.codes/v1/hooks/k/t/x"), null)).toEqual({
-      address: "https://relay.t3.codes/v1/hooks/k/t/x",
+    expect(
+      webhookAddress(
+        endpoint("https://central.example.com/t3/api/hooks/k/x"),
+        "http://internal:3773/",
+      ),
+    ).toEqual({
+      address: "https://central.example.com/t3/api/hooks/k/x",
       copyable: true,
       note: null,
     });

@@ -97,6 +97,15 @@ as a task's schedule to run it whenever another service calls its URL, such as
 GitHub on a new pull request or a CI job that failed. After you save the task, copy its URL from the editor. The sender must be able to reach your deployment's HTTPS address.
 **Rotate** replaces the URL and the old one stops working.
 
+For agents to return the same public URL, the deployment administrator must set
+`T3CODE_PUBLIC_URL` on the central service, for example `https://t3.example.com`.
+Restart the service after changing it. If your reverse proxy mounts the service
+under a path, include that prefix, such as `https://example.com/t3/`, and configure
+the proxy to strip it before forwarding `/api/hooks/...` to the service.
+Use an HTTP(S) URL without credentials, a query string, or a fragment.
+This setting advertises an address; it does not configure DNS, TLS, or the proxy.
+Without it, the browser resolves the URL from its connection, and agents omit it.
+
 The prompt decides what the agent sees. Placeholders pull values out of the
 request: `{{body.path}}` for a JSON or form field, `{{headers.name}}`,
 `{{query.name}}`, `{{body}}` for the raw body, and `{{request}}` for everything.

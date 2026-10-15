@@ -20,7 +20,8 @@ import * as NetService from "@t3tools/shared/Net";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { deriveServerPaths } from "../config.ts";
+import { deriveServerPaths, ServerConfig } from "../config.ts";
+import * as PublicAddress from "../environment/PublicAddress.ts";
 import { resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
@@ -176,6 +177,64 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         );
         expect(config.cwd).toBe(cwd);
         expect(yield* fs.exists(cwd)).toBe(true);
+      }
+    }),
+  );
+
+  it.effect("loads and validates the canonical public address", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-public-url-" });
+      const flags = { ...minimalDesktopFlags(baseDir), mode: Option.some("web" as const) };
+      for (const publicUrl of [
+        "https://central.example",
+        "https://central.example/t3",
+        "https://central.example/t3/",
+        "http://central.internal:3773/t3/",
+      ]) {
+        const config = yield* resolveServerConfig(flags, Option.none()).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NetService.layer,
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({
+                  env: { T3CODE_PUBLIC_URL: publicUrl },
+                }),
+              ),
+            ),
+          ),
+        );
+        assert.equal(config.publicUrl?.href, `${publicUrl.replace(/\/+$/, "")}/`);
+        const advertised = yield* PublicAddress.PublicAddress.pipe(
+          Effect.provide(PublicAddress.layer),
+          Effect.provideService(ServerConfig, config),
+        );
+        assert.equal(advertised?.href, config.publicUrl?.href);
+      }
+      for (const publicUrl of [
+        "not a URL",
+        "/t3",
+        "ftp://central.example",
+        "https://user:password@central.example",
+        "https://central.example/?token=secret",
+        "https://central.example/#fragment",
+        "https://central.example/?",
+        "https://central.example/#",
+      ]) {
+        const result = yield* resolveServerConfig(flags, Option.none()).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NetService.layer,
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({
+                  env: { T3CODE_PUBLIC_URL: publicUrl },
+                }),
+              ),
+            ),
+          ),
+          Effect.exit,
+        );
+        assert.equal(result._tag, "Failure");
       }
     }),
   );

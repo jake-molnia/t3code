@@ -15,6 +15,7 @@ import * as EffectScheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as PublicAddress from "../environment/PublicAddress.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -22,6 +23,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
+const decodePublicUrl = Schema.decodeSync(PublicAddress.PublicUrl);
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 
 type LaunchInput = ThreadLaunchService.ThreadLaunchInput;
@@ -71,7 +73,7 @@ const withService = <A, E>(
     /** Secrets the user entered for an agent, by ref; consuming one removes it. */
     readonly secretsByRef: Map<string, string>;
   }) => Effect.Effect<A, E, never>,
-  options: { readonly gate?: Deferred.Deferred<void>; readonly relayHookBaseUrl?: string } = {},
+  options: { readonly gate?: Deferred.Deferred<void>; readonly publicUrl?: string } = {},
 ) =>
   Effect.gen(function* () {
     const launches = yield* Queue.unbounded<LaunchInput>();
@@ -97,8 +99,8 @@ const withService = <A, E>(
         },
       }),
       Layer.succeed(
-        ScheduledTaskService.ScheduledTaskWebhookOrigin,
-        Effect.succeed({ relayHookBaseUrl: options.relayHookBaseUrl ?? null }),
+        PublicAddress.PublicAddress,
+        options.publicUrl === undefined ? null : decodePublicUrl(options.publicUrl),
       ),
     );
     return yield* Effect.gen(function* () {
@@ -114,7 +116,7 @@ it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
       assert.equal(task.nextRunAt, null);
       assert.isDefined(task.webhook);
       assert.isTrue(task.webhook!.path.startsWith("/api/hooks/scheduled-task%3Ahook/"));
-      // Not linked to T3 Connect in tests.
+      // No public deployment address configured.
       assert.equal(task.webhook!.url, null);
 
       const result = yield* service.triggerWebhook(requestFor(task));
@@ -142,21 +144,7 @@ it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
   ),
 );
 
-it("builds the relay hook URL from the managed tunnel's key, never the environment id", () => {
-  const relayUrl = "https://relay.example.com/";
-  assert.equal(
-    ScheduledTaskService.relayHookBaseUrl({
-      relayUrl,
-      tunnelName: "t3coderelay-managedendpoint-dev-julius-0123456789abcdef",
-    }),
-    "https://relay.example.com/v1/hooks/0123456789abcdef",
-  );
-  for (const tunnelName of [undefined, "t3coderelay-managedendpoint", "x-0123456789ABCDEF"]) {
-    assert.isNull(ScheduledTaskService.relayHookBaseUrl({ relayUrl, tunnelName }));
-  }
-});
-
-it.effect("gives webhook tasks a relay URL when the environment has a managed tunnel", () =>
+it.effect("gives webhook tasks an absolute central URL", () =>
   withService(
     ({ service }) =>
       Effect.gen(function* () {
@@ -164,10 +152,10 @@ it.effect("gives webhook tasks a relay URL when the environment has a managed tu
         const token = task.webhook!.path.split("/").at(-1);
         assert.equal(
           task.webhook?.url,
-          `https://relay.example.com/v1/hooks/0123456789abcdef/scheduled-task%3Ahook/${token}`,
+          `https://central.example.com/t3/api/hooks/scheduled-task%3Ahook/${token}`,
         );
       }),
-    { relayHookBaseUrl: "https://relay.example.com/v1/hooks/0123456789abcdef" },
+    { publicUrl: "https://central.example.com/t3" },
   ),
 );
 
