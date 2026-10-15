@@ -23,6 +23,7 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as GitManager from "../git/GitManager.ts";
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
@@ -105,7 +106,17 @@ export const make = Effect.gen(function* () {
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const workspaceRouting = yield* Effect.serviceOption(WorkspaceRouting.WorkspaceRouting);
   const pendingBackfill = new Map<ThreadId, number>();
+  const readBranchPullRequest = (
+    input: Parameters<GitManager.GitManager["Service"]["branchPullRequest"]>[0],
+    options: Parameters<GitManager.GitManager["Service"]["branchPullRequest"]>[1],
+  ) => {
+    const read = git
+      .branchPullRequest(input, options)
+      .pipe(Effect.map((detected) => ({ detected })));
+    return Option.isSome(workspaceRouting) ? workspaceRouting.value.observe(input.cwd, read) : read;
+  };
 
   const finishBackfill = (threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id">>) => {
     for (const thread of threads) pendingBackfill.delete(thread.id);
@@ -192,18 +203,21 @@ export const make = Effect.gen(function* () {
             });
           if (first.branch !== null && repository === null) return finishBackfill(group);
           const worktreeExists =
-            first.worktreePath !== null && (yield* fileSystem.exists(first.worktreePath));
+            first.worktreePath !== null &&
+            (Option.isSome(workspaceRouting) || (yield* fileSystem.exists(first.worktreePath)));
           const cwd =
             worktreeExists && first.worktreePath !== null
               ? first.worktreePath
               : project.workspaceRoot;
-          const detected =
+          const observed =
             first.branch === null
-              ? null
-              : yield* git.branchPullRequest(
+              ? { detected: null }
+              : yield* readBranchPullRequest(
                   { cwd, branch: first.branch },
                   { refresh: request.refresh },
                 );
+          if (observed === null) return;
+          const { detected } = observed;
           if (detected !== null && !pullRequestMatchesProject(detected, resolvedProject)) {
             return finishBackfill(group);
           }
@@ -275,10 +289,12 @@ export const make = Effect.gen(function* () {
           if (updates.length === 0) return;
 
           if (detected !== null && first.branch !== null) {
-            const current = yield* git.branchPullRequest(
+            const latest = yield* readBranchPullRequest(
               { cwd, branch: first.branch },
               { freshGitState: true },
             );
+            if (latest === null) return;
+            const current = latest.detected;
             const currentIdentity = yield* repositoryIdentities.resolve(project.workspaceRoot, {
               refresh: true,
             });
