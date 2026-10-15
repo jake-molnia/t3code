@@ -33,7 +33,6 @@ import {
   ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
-  type ServerProviderUpdateState,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -66,13 +65,7 @@ import type {
   ProviderInstance,
   ProviderWorkspaceSnapshot,
 } from "@t3tools/provider-core/server/driver";
-import {
-  makeManualOnlyProviderMaintenanceCapabilities,
-  type ProviderMaintenanceCapabilities,
-} from "@t3tools/provider-core/server/maintenanceResolver";
 import type { ProviderSnapshotSource } from "./builtInProviderCatalog.ts";
-
-export type ProviderMaintenanceActionKind = "update";
 
 export class ProviderRegistry extends Context.Service<
   ProviderRegistry,
@@ -120,29 +113,6 @@ export class ProviderRegistry extends Context.Service<
     }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /**
-     * Resolve the maintenance capabilities owned by one live provider instance.
-     * Falls back to manual-only capabilities when the instance is not live.
-     * `fresh` re-derives ownership from the executable instead of the cache.
-     */
-    readonly getProviderMaintenanceCapabilitiesForInstance: (
-      instanceId: ProviderInstanceId,
-      provider: ProviderDriverKind,
-      options?: { readonly fresh?: boolean },
-    ) => Effect.Effect<ProviderMaintenanceCapabilities>;
-
-    /**
-     * Apply volatile maintenance-action state to one configured instance.
-     * This state is never persisted to disk. Today only update actions are
-     * projected onto `ServerProvider.updateState`; install/auth actions can
-     * extend this action map without adding driver-scoped APIs.
-     */
-    readonly setProviderMaintenanceActionState: (input: {
-      readonly instanceId: ProviderInstanceId;
-      readonly action: ProviderMaintenanceActionKind;
-      readonly state: ServerProviderUpdateState | null;
-    }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
-
-    /**
      * Stream of provider snapshot updates — one emission per aggregated
      * change. The array contains the full current state.
      */
@@ -163,12 +133,6 @@ const loadProviders = (
       concurrency: "unbounded",
     },
   );
-
-const makeManualProviderMaintenanceCapabilities = (provider: ProviderDriverKind) =>
-  makeManualOnlyProviderMaintenanceCapabilities({
-    provider,
-    packageName: null,
-  });
 
 const hasModelCapabilities = (model: ServerProvider["models"][number]): boolean =>
   (model.capabilities?.optionDescriptors?.length ?? 0) > 0;
@@ -479,10 +443,6 @@ export const layer = Layer.effect(
     const workspaceRefreshesRef = yield* Ref.make<
       ReadonlyMap<ProviderInstance, ReadonlySet<string>>
     >(new Map());
-    const maintenanceActionStatesRef = yield* Ref.make<
-      ReadonlyMap<ProviderInstanceId, { readonly update?: ServerProviderUpdateState | undefined }>
-    >(new Map());
-
     // Live-source registry — the dynamic counterpart to the boot-time
     // `bootSources`. Keyed by `instanceId`; the stored `ProviderInstance`
     // reference is used for identity equality so "no-op" reconciles
@@ -520,21 +480,6 @@ export const layer = Layer.effect(
         );
       });
 
-    const applyProviderUpdateState = Effect.fn("applyProviderUpdateState")(function* (
-      provider: ServerProvider,
-    ) {
-      const maintenanceActionStates = yield* Ref.get(maintenanceActionStatesRef);
-      const updateState = maintenanceActionStates.get(provider.instanceId)?.update;
-      if (!updateState) {
-        const { updateState: _updateState, ...providerWithoutUpdateState } = provider;
-        return providerWithoutUpdateState;
-      }
-      return {
-        ...provider,
-        updateState,
-      };
-    });
-
     const upsertProviders = Effect.fn("upsertProviders")(function* (
       nextProviders: ReadonlyArray<ServerProvider>,
       options?: {
@@ -544,13 +489,6 @@ export const layer = Layer.effect(
       },
     ) {
       const manifest = yield* manifestService.current;
-      const nextProvidersWithUpdateState = yield* Effect.forEach(
-        nextProviders,
-        applyProviderUpdateState,
-        {
-          concurrency: "unbounded",
-        },
-      );
       const [previousProviders, providers, providersToPersist] = yield* Ref.modify(
         providersRef,
         (previousProviders) => {
@@ -559,7 +497,7 @@ export const layer = Layer.effect(
           );
           const updatedKeys = new Set<ProviderInstanceId>();
 
-          for (const provider of nextProvidersWithUpdateState) {
+          for (const provider of nextProviders) {
             const key = snapshotInstanceKey(provider);
             updatedKeys.add(key);
             mergedProviders.set(
@@ -616,45 +554,6 @@ export const layer = Layer.effect(
       }
       return providers;
     });
-
-    const setProviderMaintenanceActionState = Effect.fn("setProviderMaintenanceActionState")(
-      function* (input: {
-        readonly instanceId: ProviderInstanceId;
-        readonly action: "update";
-        readonly state: ServerProviderUpdateState | null;
-      }) {
-        yield* Ref.update(maintenanceActionStatesRef, (previous) => {
-          const previousActions = previous.get(input.instanceId);
-          const nextActions = { ...previousActions };
-          if (input.state === null || input.state.status === "idle") {
-            delete nextActions[input.action];
-          } else {
-            nextActions[input.action] = input.state;
-          }
-
-          const next = new Map(previous);
-          if (Object.keys(nextActions).length === 0) {
-            next.delete(input.instanceId);
-          } else {
-            next.set(input.instanceId, nextActions);
-          }
-          return next;
-        });
-
-        const existingProviders = yield* Ref.get(providersRef);
-        const matchingProvider = existingProviders.find(
-          (candidate) => candidate.instanceId === input.instanceId,
-        );
-        if (!matchingProvider) {
-          return existingProviders;
-        }
-
-        const nextProvider = yield* applyProviderUpdateState(matchingProvider);
-        return yield* upsertProviders([nextProvider], {
-          persist: false,
-        });
-      },
-    );
 
     const refreshOneSource = Effect.fn("refreshOneSource")(function* (
       providerSource: ProviderSnapshotSource,
@@ -739,23 +638,6 @@ export const layer = Layer.effect(
         return yield* Ref.get(providersRef);
       }
       return yield* refreshOneSource(providerSource);
-    });
-
-    const getProviderMaintenanceCapabilitiesForInstance = Effect.fn(
-      "getProviderMaintenanceCapabilitiesForInstance",
-    )(function* (
-      instanceId: ProviderInstanceId,
-      provider: ProviderDriverKind,
-      options?: { readonly fresh?: boolean },
-    ) {
-      // Read the instance registry, not `liveSubsRef`: the latter trails
-      // reconciliation, and an update must never run a retired instance's
-      // command against a freshly configured executable.
-      const instance = yield* instanceRegistry.getInstance(instanceId);
-      if (!instance || instance.driverKind !== provider) {
-        return makeManualProviderMaintenanceCapabilities(provider);
-      }
-      return yield* instance.snapshot.resolveMaintenance(options);
     });
 
     /**
@@ -890,15 +772,6 @@ export const layer = Layer.effect(
         if (haveProvidersChanged(previousProviders, providers)) {
           yield* PubSub.publish(changesPubSub, providers);
         }
-        yield* Ref.update(maintenanceActionStatesRef, (previous) => {
-          const next = new Map(previous);
-          for (const instanceId of previous.keys()) {
-            if (!knownInstanceIds.has(instanceId)) {
-              next.delete(instanceId);
-            }
-          }
-          return next;
-        });
       }),
     );
     const syncLiveSourcesAndContinue = syncLiveSources.pipe(
@@ -1091,8 +964,6 @@ export const layer = Layer.effect(
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshWorkspaceSnapshot: (input) =>
         refreshWorkspaceSnapshot(input).pipe(Effect.catchCause(recoverRefreshFailure)),
-      getProviderMaintenanceCapabilitiesForInstance,
-      setProviderMaintenanceActionState,
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);
       },

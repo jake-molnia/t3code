@@ -50,7 +50,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
     accentColor,
     continuationGroupKey: continuationIdentity.continuationKey,
   });
-  const setup = { canAuthenticate: true, canInstall: true };
+  const setup = { canAuthenticate: true };
   const runtimePaths = {
     homePath: runtime.homeLayout.sharedHomePath,
     shadowHomePath: runtime.homeLayout.mode === "authOverlay" ? runtime.homePath : null,
@@ -200,7 +200,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
     Effect.provideService(Path.Path, path),
   );
   const snapshot = yield* makeManagedServerProvider({
-    resolveMaintenance: () => Effect.succeed({ provider: DRIVER, packageName: null, update: null }),
+    getVersionSource: () => Effect.succeed({ packageName: null }),
     getSettings: host.settings.get,
     streamSettings: host.settings.changes,
     haveSettingsChanged: () => false,

@@ -42,7 +42,7 @@ export function shouldShowProviderStatusBanner(
 }
 
 export function hasProviderSetup(status: ServerProvider): boolean {
-  return status.setup?.canAuthenticate === true || status.setup?.canInstall === true;
+  return status.setup?.canAuthenticate === true;
 }
 
 /** Broken-version guidance takes precedence over startup failures it can cause. */

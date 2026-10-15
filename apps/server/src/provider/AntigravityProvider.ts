@@ -1,6 +1,5 @@
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
-  ProviderDriverKind,
   type AntigravitySettings,
   type ProviderSetupError,
   type ServerProvider,
@@ -21,10 +20,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
-import {
-  makeManualOnlyProviderMaintenanceCapabilities,
-  type ProviderMaintenanceCapabilities,
-} from "@t3tools/provider-core/server/maintenanceResolver";
+import type { ProviderVersionSource } from "@t3tools/provider-core/server/versionAdvisory";
 import {
   buildServerProvider,
   isCommandMissingCause,
@@ -123,7 +119,7 @@ interface AntigravityProviderOptions {
   readonly supportsTextGeneration: Effect.Effect<boolean>;
   readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
   readonly clearUsage?: Effect.Effect<void>;
-  readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
+  readonly versionSource?: ProviderVersionSource;
   /** Auth type and label published once a session authenticates. */
   readonly auth?: { readonly type: string; readonly label: string };
 }
@@ -155,7 +151,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           : "Antigravity is disabled in T3 Code settings.",
       },
     }),
-    setup: { canAuthenticate: true, canInstall: false },
+    setup: { canAuthenticate: true },
     supportsConversationRollback: false,
     supportsTextGeneration: false,
     workspaceSnapshots: [],
@@ -245,14 +241,9 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     return yield* options.stampIdentity(next.draft);
   });
 
-  const maintenanceCapabilities =
-    options.maintenanceCapabilities ??
-    makeManualOnlyProviderMaintenanceCapabilities({
-      provider: ProviderDriverKind.make("antigravity"),
-      packageName: null,
-    });
+  const versionSource = options.versionSource ?? { packageName: null };
   const managed = yield* makeManagedServerProvider({
-    resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+    getVersionSource: () => Effect.succeed(versionSource),
     getSettings: Effect.succeed(settings),
     streamSettings: Stream.empty,
     haveSettingsChanged: () => false,

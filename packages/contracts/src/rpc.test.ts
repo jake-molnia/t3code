@@ -75,3 +75,12 @@ describe("WebSocket RPC contracts", () => {
     ).toBe(true);
   });
 });
+
+it("offers provider authentication and refresh without installer or updater RPCs", () => {
+  const methods = [...WsRpcGroup.requests.keys()];
+  expect(methods).not.toContain("server.updateProvider");
+  expect(methods).not.toContain("server.installProvider");
+  expect(methods.filter((method) => /provider.*(?:install|update)/i.test(method))).toEqual([]);
+  expect(methods).toContain("server.refreshProviders");
+  expect(methods.some((method) => /provider.*auth.*start/i.test(method))).toBe(true);
+});

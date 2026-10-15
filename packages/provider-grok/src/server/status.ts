@@ -35,8 +35,8 @@ import {
 } from "@t3tools/provider-core/server/snapshotProbe";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
-  type ProviderMaintenanceCapabilities,
-} from "@t3tools/provider-core/server/maintenanceResolver";
+  type ProviderVersionSource,
+} from "@t3tools/provider-core/server/versionAdvisory";
 import {
   GROK_DEFAULT_MODEL_SLUG,
   GROK_SUPPORTED_RUNTIME_MODES,
@@ -564,7 +564,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
 
 export const enrichGrokSnapshot = (input: {
   readonly snapshot: ServerProvider;
-  readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
+  readonly versionSource: ProviderVersionSource;
   readonly enableProviderUpdateChecks?: boolean;
   readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
 }): Effect.Effect<
@@ -574,7 +574,7 @@ export const enrichGrokSnapshot = (input: {
 > => {
   const { snapshot, publishSnapshot } = input;
 
-  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
+  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.versionSource, {
     enableProviderUpdateChecks: input.enableProviderUpdateChecks,
   }).pipe(
     Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
