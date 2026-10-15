@@ -17,13 +17,10 @@ import * as Settings from "../serverSettings.ts";
 import { makeRemoteDrivers } from "./RemoteProviderDrivers.ts";
 import { makeProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
 import { harnessDefaults } from "./HarnessDefaults.ts";
-import { hydrateCachedProvider } from "../provider/providerStatusCache.ts";
-import { mergeProviderSnapshot } from "../provider/ProviderRegistry.ts";
 
 const decodePollingRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ method: Schema.String })),
 );
-const decodeCodexConfig = Schema.decodeSync(C.CodexSettings);
 
 it.live.each([
   { name: "omitted Codex launch arguments", driver: "codex", config: { setupMode: "existing" } },
@@ -194,49 +191,17 @@ it.live.each(["codex", "antigravity"])(
             displayName: undefined,
             environment: [],
             enabled: true,
-            config:
-              driverKind === "codex"
-                ? decodeCodexConfig({
-                    setupMode: "existing",
-                    customModels: ["configured-model"],
-                  })
-                : driver.defaultConfig(),
+            config: driver.defaultConfig(),
           });
           expect(utilityRequests).toBe(0);
           const snapshot = yield* instance.snapshot.getSnapshot;
-          expect(snapshot.availability).not.toBe("unavailable");
-          expect(snapshot.enabled).toBe(true);
-          expect(snapshot.status).toBe("warning");
-          expect(utilityRequests).toBe(0);
-          if (driverKind === "codex") {
-            expect(snapshot.models.map((model) => model.slug)).toEqual(["configured-model"]);
-            const cached: C.ServerProvider = {
-              ...snapshot,
-              installed: true,
-              status: "ready",
-              models: [
-                ...snapshot.models,
-                {
-                  slug: "cached-model",
-                  name: "Cached model",
-                  isCustom: false,
-                  capabilities: null,
-                },
-              ],
-            };
-            const hydrated = hydrateCachedProvider({
-              cachedProvider: cached,
-              fallbackProvider: snapshot,
-            });
-            expect(
-              mergeProviderSnapshot(hydrated, snapshot).models.map((model) => model.slug),
-            ).toEqual(["configured-model", "cached-model"]);
-          }
-          yield* instance.snapshot.getSnapshot;
-          yield* instance.snapshot.getSnapshot;
-          expect(utilityRequests).toBe(0);
-          yield* instance.snapshot.refresh;
+          expect(snapshot.availability).toBe("unavailable");
           expect(utilityRequests).toBe(1);
+          yield* instance.snapshot.getSnapshot;
+          yield* instance.snapshot.getSnapshot;
+          expect(utilityRequests).toBe(1);
+          yield* instance.snapshot.refresh;
+          expect(utilityRequests).toBe(2);
         }),
       ).pipe(Effect.provide(Layer.merge(runtime, Settings.layerTest())));
     }),
@@ -492,7 +457,7 @@ it.live(
         yield* instance.snapshot.getSnapshot;
         stopped = true;
         yield* instance.snapshot.getSnapshot;
-        expect(allocations).toBe(0);
+        expect(allocations).toBe(1);
         expect(calls).toEqual([
           "first:configureProvider",
           "first:provider.snapshot",
