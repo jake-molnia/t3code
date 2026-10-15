@@ -24,8 +24,25 @@ setting you are editing, the layers icon counts them and the chain lists each on
 click a project to jump to it, or **Reset all** to make those projects follow the environment
 again.
 
-Providers and diagnostics are per machine: they show one environment at a time, the primary
-one until you pick another. Every other setting fans out to the selection.
+Providers, diagnostics, and MCP connections show one environment at a time, the primary
+one until you pick another. Other settings fan out to the selection.
+
+## MCP connections
+
+Open **Settings → MCP → Add connection**, enter the server URL, and sign in or supply
+an access token. Choose **No authentication** for an open server. Services without
+automatic OAuth registration need their own client ID and, when required, client secret.
+
+On the same page, select one or more projects and choose which connections and tools
+they can use. **Selected tools only** keeps newly added tools disabled; **All tools**
+includes new tools. Connections are shared, so assigning another project does not
+require another sign-in. Reconnect renews authentication while retaining assignments.
+
+Agents discover tools as needed instead of loading the entire catalog into a conversation.
+Removing project access blocks subsequent tool calls, including from an active thread.
+Disconnect removes the connection from every project. Already completed external actions
+are not undone. Integration execution requires a live thread in Full access and default
+interaction mode; tool discovery is also available while planning.
 
 With a project selected, a provider's switch in **Settings → Providers** turns it on or off for
 that project only, in either direction: a provider off on the machine can be used in one project,

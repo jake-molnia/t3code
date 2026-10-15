@@ -1,3 +1,13 @@
+import {
+  McpConnectionError,
+  McpConnectionsState,
+  McpConnectionTool,
+  McpConnectInput,
+  McpConnectResult,
+  McpConnectionIdInput,
+  McpSetAccessInput,
+  McpCompleteAuthInput,
+} from "./mcpConnections.ts";
 import { ServerReleaseNotice } from "./serverVersion.ts";
 import { ExecutionPoolsSnapshot } from "./executionPools.ts";
 import { SandboxIdeOpenInput, SandboxIdeOpenResult, SandboxIdeError } from "./sandboxIde.ts";
@@ -462,6 +472,15 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+
+  // Shared MCP connections
+  mcpConnectionsList: "mcpConnections.list",
+  mcpConnectionsConnect: "mcpConnections.connect",
+  mcpConnectionsRemove: "mcpConnections.remove",
+  mcpConnectionsRefresh: "mcpConnections.refresh",
+  mcpConnectionsTools: "mcpConnections.tools",
+  mcpConnectionsSetAccess: "mcpConnections.setAccess",
+  mcpConnectionsCompleteAuth: "mcpConnections.completeAuth",
 
   // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
@@ -1712,7 +1731,51 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
+const WsMcpConnectionsListRpc = Rpc.make(WS_METHODS.mcpConnectionsList, {
+  payload: Schema.Struct({}),
+  success: McpConnectionsState,
+  error: Schema.Union([McpConnectionError, EnvironmentAuthorizationError]),
+});
+const WsMcpConnectionsConnectRpc = Rpc.make(WS_METHODS.mcpConnectionsConnect, {
+  payload: McpConnectInput,
+  success: McpConnectResult,
+  error: Schema.Union([McpConnectionError, EnvironmentAuthorizationError]),
+});
+const WsMcpConnectionsRemoveRpc = Rpc.make(WS_METHODS.mcpConnectionsRemove, {
+  payload: McpConnectionIdInput,
+  success: Schema.Void,
+  error: Schema.Union([McpConnectionError, EnvironmentAuthorizationError]),
+});
+const WsMcpConnectionsRefreshRpc = Rpc.make(WS_METHODS.mcpConnectionsRefresh, {
+  payload: McpConnectionIdInput,
+  success: Schema.Void,
+  error: Schema.Union([McpConnectionError, EnvironmentAuthorizationError]),
+});
+const WsMcpConnectionsToolsRpc = Rpc.make(WS_METHODS.mcpConnectionsTools, {
+  payload: McpConnectionIdInput,
+  success: Schema.Array(McpConnectionTool),
+  error: Schema.Union([McpConnectionError, EnvironmentAuthorizationError]),
+});
+const WsMcpConnectionsSetAccessRpc = Rpc.make(WS_METHODS.mcpConnectionsSetAccess, {
+  payload: McpSetAccessInput,
+  success: Schema.Void,
+  error: Schema.Union([McpConnectionError, EnvironmentAuthorizationError]),
+});
+const WsMcpConnectionsCompleteAuthRpc = Rpc.make(WS_METHODS.mcpConnectionsCompleteAuth, {
+  payload: McpCompleteAuthInput,
+  success: Schema.Void,
+  error: Schema.Union([McpConnectionError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
+  WsMcpConnectionsListRpc,
+  WsMcpConnectionsConnectRpc,
+  WsMcpConnectionsRemoveRpc,
+  WsMcpConnectionsRefreshRpc,
+  WsMcpConnectionsToolsRpc,
+  WsMcpConnectionsSetAccessRpc,
+  WsMcpConnectionsCompleteAuthRpc,
+
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerGetReleaseNoticeRpc,

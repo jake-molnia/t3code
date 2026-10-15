@@ -1,3 +1,5 @@
+import { ExecutorToolkit } from "./toolkits/executor/tools.ts";
+import * as ExecutorHandlers from "./toolkits/executor/handlers.ts";
 import * as SandboxComputer from "../computer/SandboxComputer.ts";
 import * as ComputerHandlers from "./toolkits/computer/handlers.ts";
 import {
@@ -860,6 +862,7 @@ export const layerMcpTransport = McpServer.layerHttp({
 }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 export const layer = Layer.mergeAll(
+  toolkitRegistration(ExecutorToolkit, ExecutorHandlers.layer),
   layerComputerToolkit,
   layerPreviewToolkit,
   layerOrchestratorToolkit,

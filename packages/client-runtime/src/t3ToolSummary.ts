@@ -437,6 +437,12 @@ export function summarizeT3ToolCalls(
     case "html-render":
       label = phrase("Rendered", "render", quantity(selected.length, "HTML page"));
       break;
+    case "integration-search":
+      label = phrase("Searched", "search", `connected tools ${times}`);
+      break;
+    case "integration-execute":
+      label = phrase("Used", "use", `connected tools ${times}`);
+      break;
     case "capabilities":
       label = phrase("Checked", "check", `orchestration capabilities ${times}`);
       break;
