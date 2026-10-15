@@ -32,7 +32,13 @@ export const GatewaySnapshot = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("ready"),
     accounts: Schema.Array(GatewayAccount),
-    models: Schema.Array(Schema.Struct({ id: Schema.String })),
+    catalog: Schema.Union([
+      Schema.Struct({
+        kind: Schema.Literal("ready"),
+        models: Schema.Array(Schema.Struct({ id: Schema.String })),
+      }),
+      Schema.Struct({ kind: Schema.Literal("unavailable") }),
+    ]),
   }),
 ]);
 export type GatewaySnapshot = typeof GatewaySnapshot.Type;

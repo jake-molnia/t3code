@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run the bundled account gateway and central T3 server as one supervised unit."""
+import ctypes
 import fcntl
 import json
 import os
@@ -85,6 +86,41 @@ def configure(environment, arguments=()):
         raise
 
 
+def signal_child_group(child, signum):
+    # Popen starts each service in its own session; this never targets our group.
+    try:
+        os.killpg(child.pid, signum)
+    except ProcessLookupError:
+        pass
+
+
+def stop_children(children):
+    pending = list(children)
+    for child in pending:
+        signal_child_group(child, signal.SIGTERM)
+    deadline = time.monotonic() + 10
+    while pending:
+        for child in list(pending):
+            if child.poll() is not None:
+                # The subreaper adopts orphaned descendants, even if their service exited first.
+                try:
+                    while os.waitpid(-child.pid, os.WNOHANG)[0] > 0:
+                        pass
+                except ChildProcessError:
+                    pass
+            try:
+                os.killpg(child.pid, 0)
+            except ProcessLookupError:
+                pending.remove(child)
+        if not pending:
+            return
+        if deadline is not None and time.monotonic() >= deadline:
+            for child in pending:
+                signal_child_group(child, signal.SIGKILL)
+            deadline = None
+        time.sleep(0.05)
+
+
 def run(arguments):
     os.umask(0o077)
     environment = dict(os.environ)
@@ -99,8 +135,11 @@ def run(arguments):
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     try:
+        # Linux PR_SET_CHILD_SUBREAPER keeps orphaned service children here until reaped.
+        if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), 'Could not enable child process reaping')
         proxy = subprocess.Popen([environment.get('T3_CLIPROXY_BINARY', '/usr/local/bin/cliproxyapi'),
-                                  '-config', str(config)], env=environment)
+                                  '-config', str(config)], env=environment, start_new_session=True)
         children.append(proxy)
         deadline = time.monotonic() + 30
         while not stopping:
@@ -119,28 +158,23 @@ def run(arguments):
             time.sleep(0.05)
         if stopping:
             return 0
-        server = subprocess.Popen(arguments, env=environment)
+        server = subprocess.Popen(arguments, env=environment, start_new_session=True)
         children.append(server)
         while not stopping:
-            for child in children:
-                code = child.poll()
-                if code is not None:
-                    # A clean gateway exit still means the head cannot serve requests.
-                    return code if code > 0 else 1
+            proxy_code = proxy.poll()
+            if proxy_code is not None:
+                # A clean gateway exit still means the head cannot serve requests.
+                return proxy_code if proxy_code > 0 else 1
+            server_code = server.poll()
+            if server_code is not None:
+                return server_code if server_code >= 0 else 128 - server_code
             time.sleep(0.05)
         return 0
     finally:
-        for child in children:
-            if child.poll() is None:
-                child.terminate()
-        deadline = time.monotonic() + 10
-        for child in children:
-            try:
-                child.wait(timeout=max(0.01, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
-        lock.close()
+        try:
+            stop_children(children)
+        finally:
+            lock.close()
 
 
 if __name__ == '__main__':

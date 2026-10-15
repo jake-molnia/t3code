@@ -3,6 +3,7 @@ import {
   GatewayFlowId,
   ModelGatewayError,
   type GatewayAuth,
+  type GatewaySnapshot,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
@@ -12,6 +13,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   allowed: true,
+  snapshot: ((): GatewaySnapshot => ({
+    kind: "ready",
+    accounts: [],
+    catalog: { kind: "ready", models: [] },
+  }))(),
   start: vi.fn(),
   status: vi.fn(),
   cancel: vi.fn(),
@@ -35,7 +41,7 @@ vi.mock("../../state/server", () => ({
 }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: () => ({
-    data: { kind: "ready", accounts: [], models: [] },
+    data: state.snapshot,
     refresh: state.refresh,
   }),
 }));
@@ -113,6 +119,7 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
   state.allowed = true;
+  state.snapshot = { kind: "ready", accounts: [], catalog: { kind: "ready", models: [] } };
   state.start.mockReset().mockResolvedValue(AsyncResult.success(waiting));
   state.status.mockReset().mockResolvedValue(AsyncResult.success(waiting));
   state.cancel.mockReset().mockResolvedValue(AsyncResult.success({ kind: "cancelled", flowId }));
@@ -185,4 +192,20 @@ it("allows dismissal when cancellation cannot reach the gateway", async () => {
     button("Close").props.onClick();
   });
   expect(renderer?.root.findAllByType("footer")).toHaveLength(0);
+});
+
+it("keeps Add account available and retries discovery when only models are unavailable", async () => {
+  state.snapshot = { kind: "ready", accounts: [], catalog: { kind: "unavailable" } };
+  await act(async () => {
+    renderer = create(<GatewayAccountsSection environmentId={environmentId} />);
+  });
+  await act(async () => {
+    button("Retry model discovery").props.onClick();
+  });
+  expect(state.refresh).toHaveBeenCalledTimes(1);
+  expect(button("Add account").props.disabled).toBe(false);
+  await act(async () => {
+    button("Add account").props.onClick();
+  });
+  expect(button("Continue")).toBeDefined();
 });

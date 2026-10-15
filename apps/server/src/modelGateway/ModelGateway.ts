@@ -69,7 +69,7 @@ const Login = Schema.Struct({
   state: Schema.NonEmptyString,
   flow: Schema.optional(Schema.String),
   user_code: Schema.optional(Schema.String),
-  expires_in: Schema.optional(Schema.Number),
+  expires_in: Schema.optional(Schema.Number.check(Schema.isFinite(), Schema.isGreaterThan(0))),
 });
 const LoginStatus = Schema.Struct({ status: Schema.Literals(["ok", "wait", "error"]) });
 const MutationResult = Schema.Struct({ status: Schema.Literal("ok") });
@@ -106,6 +106,8 @@ export class ModelGateway extends Context.Service<
     ) => Effect.Effect<GatewaySnapshot, ModelGatewayError>;
   }
 >()("t3/modelGateway/ModelGateway") {}
+
+type GatewayCatalog = Extract<GatewaySnapshot, { kind: "ready" }>["catalog"];
 
 type Configuration = {
   readonly url: string;
@@ -173,7 +175,13 @@ const make = (
       return yield* Effect.gen(function* () {
         const accounts = yield* request("/v8/management/credentials", Credentials);
         const endpoints = yield* endpointGroups();
-        const models = yield* request("/v1/models", Models, undefined, true);
+        const catalog = yield* request("/v1/models", Models, undefined, true).pipe(
+          Effect.map(({ data }) => ({ kind: "ready", models: data }) satisfies GatewayCatalog),
+          Effect.catchTags({
+            ModelGatewayError: () =>
+              Effect.succeed({ kind: "unavailable" } satisfies GatewayCatalog),
+          }),
+        );
         return {
           kind: "ready",
           accounts: [
@@ -212,7 +220,7 @@ const make = (
                 }) satisfies GatewayAccount,
             ),
           ],
-          models: models.data,
+          catalog,
         } satisfies GatewaySnapshot;
       }).pipe(
         Effect.catchTags({
@@ -333,6 +341,7 @@ const make = (
               {
                 name: input.name,
                 "base-url": baseUrl.href.replace(/\/$/, ""),
+                // V8 expands group keys into the legacy api-key-entries field.
                 keys: [{ "api-key": input.apiKey }],
                 models: [...new Set(input.models)].map((name) => ({ name, alias: name })),
               },
@@ -367,7 +376,7 @@ const make = (
               Effect.mapError(() => new ModelGatewayError({ reason: "unavailable" })),
             ),
           );
-          const deadline = now + Math.min(Math.max(login.expires_in ?? 600, 1), 900) * 1_000;
+          const deadline = now + (login.expires_in ?? 600) * 1_000;
           const auth: GatewayAuth = {
             kind: "waiting",
             flowId,

@@ -250,3 +250,23 @@ test("cached complete gateway inventories do not regain native models during res
   expect(hydrated.models.map((model) => model.slug)).toEqual(["gateway/keep"]);
   expect(hydrated.modelsComplete).toBe(true);
 });
+
+test("OpenCode's generated registry preserves discovered image support without guessing unknown models", async () => {
+  const directory = await NodeFSP.mkdtemp(`${NodeOS.tmpdir()}/t3-gateway-images-`);
+  const gateway = createModelGatewayCatalog({
+    directory,
+    environment: { T3_GATEWAY_URL: "http://head/api/model-gateway", T3_GATEWAY_API_KEY: "key" },
+    request: async () =>
+      Response.json({
+        data: [{ id: "vision", supported_input_modalities: ["TEXT", "IMAGE"] }, { id: "unknown" }],
+      }),
+  });
+  try {
+    await gateway.refresh();
+    const written = JSON.parse(await NodeFSP.readFile(`${directory}/opencode2.json`, "utf8"));
+    expect(written.providers.gateway.models.vision.capabilities.input).toEqual(["text", "image"]);
+    expect(written.providers.gateway.models.unknown.capabilities.input).toEqual(["text"]);
+  } finally {
+    await NodeFSP.rm(directory, { recursive: true, force: true });
+  }
+});

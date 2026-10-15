@@ -110,6 +110,17 @@ export function GatewayAccountsSection({
       <p className="text-sm text-muted-foreground">
         Connect once, then use your models with any compatible harness.
       </p>
+      {allowed && snapshot?.kind === "ready" && snapshot.catalog.kind === "unavailable" ? (
+        <SettingsRow
+          title="Models are unavailable"
+          description="Your accounts are saved, but their models could not be loaded. You can still manage your accounts."
+          control={
+            <Button size="sm" variant="outline" onClick={query.refresh} disabled={query.isPending}>
+              Retry model discovery
+            </Button>
+          }
+        />
+      ) : null}
       <SettingsGroup>
         {!allowed ? (
           <SettingsRow
@@ -291,6 +302,7 @@ function GatewaySignIn({
   const [auth, setAuth] = useState<GatewayAuth | null>(null);
   const [endpoint, setEndpoint] = useState({ name: "", baseUrl: "", apiKey: "", models: "" });
   const [endpointSaved, setEndpointSaved] = useState(false);
+  const [endpointCatalogUnavailable, setEndpointCatalogUnavailable] = useState(false);
   const connected = endpointSaved || auth?.kind === "succeeded";
   const endpointModels = endpoint.models
     .split(/[\n,]/)
@@ -379,6 +391,9 @@ function GatewaySignIn({
       setPending(false);
       if (result._tag === "Success") {
         setEndpointSaved(true);
+        setEndpointCatalogUnavailable(
+          result.value.kind !== "ready" || result.value.catalog.kind === "unavailable",
+        );
         setEndpoint({ name: "", baseUrl: "", apiKey: "", models: "" });
       } else if (!isAtomCommandInterrupted(result)) setError(failureMessage(result));
       return;
@@ -454,7 +469,7 @@ function GatewaySignIn({
           </DialogTitle>
           <DialogDescription>
             {connected
-              ? "Its models are now available to compatible harnesses."
+              ? "Select one of its available models to start a conversation."
               : "Sign in with your provider. Your account is shared across your agents."}
           </DialogDescription>
         </DialogHeader>
@@ -543,7 +558,9 @@ function GatewaySignIn({
             {connected ? (
               <div className="flex items-center gap-2 text-sm">
                 <CheckIcon className="size-5 text-success" />
-                Your account is available to your agents.
+                {endpointCatalogUnavailable
+                  ? "Your account was saved. Model discovery is temporarily unavailable; retry it from Accounts."
+                  : "Your account is saved."}
               </div>
             ) : null}
             {interaction?.type === "deviceCode" ? (

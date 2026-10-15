@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise persistent gateway configuration and the head process lifecycle."""
+import ctypes
 import importlib.util
 import json
 import os
@@ -24,6 +25,7 @@ config = json.loads(Path(sys.argv[2]).read_text())
 Path(os.environ['PROXY_PID_FILE']).write_text(str(os.getpid()))
 if os.environ.get('PROXY_FAIL'):
     sys.exit(23)
+signal.signal(signal.SIGUSR1, lambda *_: sys.exit(0))
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         expected = 'Bearer ' + config['management']['secret-key']
@@ -42,11 +44,52 @@ assert os.environ['T3_GATEWAY_MANAGEMENT_URL'].startswith('http://127.0.0.1:')
 assert os.environ['T3_GATEWAY_MANAGEMENT_KEY'] and os.environ['T3_GATEWAY_API_KEY']
 print('server-ready', flush=True)
 if os.environ.get('APP_FAIL'): sys.exit(24)
+if os.environ.get('APP_SUCCESS'): sys.exit(0)
 while True: time.sleep(10)
 '''
 
 
+DESCENDANT = """import os, signal, time
+if os.environ.get('IGNORE_TERM'):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+print(os.getpid(), flush=True)
+while True: time.sleep(10)
+"""
+SPAWN_DESCENDANT = """import subprocess
+if os.environ.get('SPAWN_DESCENDANTS'):
+    descendant = subprocess.Popen([sys.executable, '-c', %r], stdout=subprocess.PIPE, text=True)
+    descendant_pid = descendant.stdout.readline().strip()
+    descendant.stdout.close()
+    from pathlib import Path
+    Path(os.environ[PID_VARIABLE] + '.descendant').write_text(descendant_pid)
+""" % DESCENDANT
+FAKE_PROXY = FAKE_PROXY.replace("class Handler", SPAWN_DESCENDANT.replace('PID_VARIABLE', "'PROXY_PID_FILE'") + "\nclass Handler")
+APP = APP.replace("print('server-ready'", SPAWN_DESCENDANT.replace('PID_VARIABLE', "'APP_PID_FILE'") + "\nprint('server-ready'")
+
+
 class HeadTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Adopt test descendants on a regression so fixture cleanup can reap them.
+        if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), 'Could not enable test subreaper')
+
+    def reap_fixture_descendants(self, pids):
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+
+    def descendant_pids(self, directory):
+        pids = [int((directory / name).read_text()) for name in ['proxy.pid.descendant', 'app.pid.descendant']]
+        self.addCleanup(self.reap_fixture_descendants, pids)
+        return pids
+
     def test_configuration_is_private_and_stable(self):
         with tempfile.TemporaryDirectory() as temporary:
             env = {'T3CODE_HOME': temporary, 'T3_GATEWAY_API_KEY': 'shared-worker-key'}
@@ -165,6 +208,62 @@ class HeadTests(unittest.TestCase):
             self.assertEqual(process.wait(timeout=5), 24)
             self.assert_stopped(directory / 'proxy.pid')
 
+    def test_successful_app_exit_preserves_zero(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            process = self.start(directory, APP_SUCCESS='1')
+            self.assertEqual(process.wait(timeout=5), 0)
+            self.assert_stopped(directory / 'proxy.pid')
+
+    def test_signal_stops_and_reaps_service_descendants(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            process = self.start(directory, SPAWN_DESCENDANTS='1')
+            self.ready(process)
+            pids = self.descendant_pids(directory)
+            for name, descendant in zip(['proxy.pid', 'app.pid'], pids):
+                service = int((directory / name).read_text())
+                self.assertEqual(os.getpgid(service), service)
+                self.assertEqual(os.getpgid(descendant), service)
+                self.assertNotEqual(service, os.getpgrp())
+            process.terminate()
+            self.assertEqual(process.wait(timeout=15), 0)
+            for pid in pids:
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+
+    def test_app_exit_kills_descendants_that_ignore_term(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            process = self.start(directory, APP_SUCCESS='1', SPAWN_DESCENDANTS='1', IGNORE_TERM='1')
+            self.ready(process)
+            pids = self.descendant_pids(directory)
+            with self.assertRaises(BlockingIOError):
+                head.configure({'T3CODE_HOME': str(directory / 'state')})
+            result = process.wait(timeout=15)
+            for pid in pids:
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+            self.assertEqual(result, 0)
+
+    def test_app_signal_exit_preserves_shell_status(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            process = self.start(directory)
+            self.ready(process)
+            os.kill(int((directory / 'app.pid').read_text()), signal.SIGTERM)
+            self.assertEqual(process.wait(timeout=5), 128 + signal.SIGTERM)
+            self.assert_stopped(directory / 'proxy.pid')
+
+    def test_proxy_clean_exit_is_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            process = self.start(directory)
+            self.ready(process)
+            os.kill(int((directory / 'proxy.pid').read_text()), signal.SIGUSR1)
+            self.assertEqual(process.wait(timeout=5), 1)
+            self.assert_stopped(directory / 'app.pid')
+
     def test_proxy_failure_prevents_server_start(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -215,6 +314,7 @@ print('gateway-check-passed', flush=True)
                 try:
                     output, _ = process.communicate(timeout=40)
                     self.assertIn('gateway-check-passed', output, output[-4000:])
+                    self.assertEqual(process.returncode, 0, output[-4000:])
                     current_keys = (base / 'model-gateway/keys.json').read_text()
                     if persisted_keys is not None:
                         self.assertEqual(current_keys, persisted_keys)

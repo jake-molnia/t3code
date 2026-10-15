@@ -5,12 +5,13 @@ import * as Schema from "effect/Schema";
 import type { ModelSelection, ServerProvider, ServerProviderModel } from "@t3tools/contracts";
 import { migrateGatewayModelSelection } from "./GatewayMigration.ts";
 
-// The pinned proxy deliberately exposes only OpenAI's model identity fields.
+// The pinned proxy patch preserves known input modalities alongside model identities.
 export const Catalog = Schema.Struct({
   data: Schema.Array(
     Schema.Struct({
       id: Schema.String.check(Schema.isMinLength(1)),
       owned_by: Schema.optionalKey(Schema.String),
+      supported_input_modalities: Schema.optionalKey(Schema.Array(Schema.String)),
     }),
   ),
 });
@@ -88,6 +89,18 @@ export function projectGatewaySnapshot(
 }
 
 /** One protocol group keeps every model selectable without duplicate protocol variants. */
+const openCodeInputModalities = (model: Catalog["data"][number]) => {
+  const supported = new Set(["text", "image", "audio", "video", "pdf"]);
+  const known = [
+    ...new Set(
+      model.supported_input_modalities
+        ?.map((value) => value.toLowerCase())
+        .filter((value) => supported.has(value)),
+    ),
+  ];
+  return known.length > 0 ? known : ["text"];
+};
+
 export function nativeGatewayConfigs(catalog: Catalog, upstream: string) {
   return {
     opencode: {
@@ -101,7 +114,11 @@ export function nativeGatewayConfigs(catalog: Catalog, upstream: string) {
               model.id,
               {
                 name: model.id,
-                capabilities: { tools: true, input: ["text"], output: ["text"] },
+                capabilities: {
+                  tools: true,
+                  input: openCodeInputModalities(model),
+                  output: ["text"],
+                },
               },
             ]),
           ),

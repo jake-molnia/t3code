@@ -2,6 +2,8 @@
 import * as NodeHttp from "node:http";
 import { AuthSessionId, GatewayAccountId, ModelGatewayError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
@@ -17,11 +19,12 @@ let status = "wait";
 let disabled = false;
 let removed = false;
 let fail = false;
+let failModels = false;
 let callbackCount = 0;
 let cancelCount = 0;
 let cancellation = Promise.withResolvers<void>();
 let cancelledStates: string[] = [];
-let expiresIn = 600;
+let expiresIn: number | undefined = 600;
 let cancellationFailures = 0;
 let cancellationFailure = Promise.withResolvers<void>();
 let currentState = "";
@@ -37,6 +40,7 @@ beforeEach(async () => {
   disabled = false;
   removed = false;
   fail = false;
+  failModels = false;
   callbackCount = 0;
   cancelCount = 0;
   cancellation = Promise.withResolvers<void>();
@@ -54,7 +58,7 @@ beforeEach(async () => {
       cancellationFailure.resolve();
       return;
     }
-    if (fail) {
+    if (fail || (failModels && target.pathname === "/v1/models")) {
       response.writeHead(503).end();
       return;
     }
@@ -140,6 +144,59 @@ const fixture = Layer.unwrap(
 );
 
 describe("ModelGateway", () => {
+  it.effect("uses the default enrollment lifetime only when the provider omits expiry", () =>
+    Effect.gen(function* () {
+      expiresIn = undefined;
+      const now = yield* Clock.currentTimeMillis;
+      const auth = yield* run((service) => service.start({ provider: "claude" }, owner));
+      expect(auth).toMatchObject({
+        expiresAt: DateTime.formatIso(DateTime.makeUnsafe(now + 600_000)),
+      });
+    }).pipe(Effect.provide(fixture)),
+  );
+
+  it.effect("keeps account management available when model discovery fails", () =>
+    Effect.gen(function* () {
+      failModels = true;
+      expect(yield* run((service) => service.snapshot())).toMatchObject({
+        kind: "ready",
+        accounts: [{ id: accountId }],
+        catalog: { kind: "unavailable" },
+      });
+      expect(
+        yield* run((service) => service.setEnabled({ accountId, enabled: false })),
+      ).toMatchObject({
+        kind: "ready",
+        accounts: [{ disabled: true }],
+        catalog: { kind: "unavailable" },
+      });
+      expect(
+        yield* run((service) =>
+          service.addEndpoint({
+            name: "new",
+            baseUrl: "https://api.example/v1",
+            apiKey: "key",
+            models: ["new-model"],
+          }),
+        ),
+      ).toMatchObject({
+        kind: "ready",
+        accounts: expect.arrayContaining([expect.objectContaining({ label: "new" })]),
+        catalog: { kind: "unavailable" },
+      });
+      expect(yield* run((service) => service.remove({ accountId }))).toMatchObject({
+        kind: "ready",
+        accounts: [expect.objectContaining({ label: "new" })],
+        catalog: { kind: "unavailable" },
+      });
+      failModels = false;
+      expect(yield* run((service) => service.snapshot())).toMatchObject({
+        kind: "ready",
+        catalog: { kind: "ready", models: [] },
+      });
+    }).pipe(Effect.provide(fixture)),
+  );
+
   it.effect(
     "retains expired sessions when cancellation is unavailable instead of pruning them",
     () =>
@@ -197,27 +254,34 @@ describe("ModelGateway", () => {
     }).pipe(Effect.provide(fixture)),
   );
 
-  it.effect(
-    "cancels a 30-minute upstream enrollment at the advertised 15-minute deadline without browser polling",
-    () =>
-      Effect.gen(function* () {
-        expiresIn = 1800;
-        const auth = yield* run((service) => service.start({ provider: "xai" }, owner));
-        const state = currentState;
-        yield* TestClock.adjust("901 seconds");
-        yield* Effect.promise(() => cancellation.promise);
-        expect(cancelledStates).toEqual([state]);
-        expect(
-          yield* run((service) => service.status({ flowId: auth.flowId }, owner)),
-        ).toMatchObject({ kind: "failed", reason: "expired" });
-      }).pipe(Effect.provide(fixture)),
+  it.effect("honors a 30-minute upstream enrollment deadline without browser polling", () =>
+    Effect.gen(function* () {
+      expiresIn = 1800;
+      const now = yield* Clock.currentTimeMillis;
+      const auth = yield* run((service) => service.start({ provider: "xai" }, owner));
+      expect(auth).toMatchObject({
+        expiresAt: DateTime.formatIso(DateTime.makeUnsafe(now + 1800_000)),
+      });
+      const state = currentState;
+      yield* TestClock.adjust("901 seconds");
+      expect(cancelCount).toBe(0);
+      expect(yield* run((service) => service.status({ flowId: auth.flowId }, owner))).toMatchObject(
+        { kind: "waiting" },
+      );
+      yield* TestClock.adjust("900 seconds");
+      yield* Effect.promise(() => cancellation.promise);
+      expect(cancelledStates).toEqual([state]);
+      expect(yield* run((service) => service.status({ flowId: auth.flowId }, owner))).toMatchObject(
+        { kind: "failed", reason: "expired" },
+      );
+    }).pipe(Effect.provide(fixture)),
   );
   it.effect("cancels an expired upstream flow before a new login prunes its local record", () =>
     Effect.gen(function* () {
       expiresIn = 1800;
       const old = yield* run((service) => service.start({ provider: "xai" }, owner));
       const state = currentState;
-      yield* TestClock.adjust("962 seconds");
+      yield* TestClock.adjust("1862 seconds");
       yield* run((service) => service.start({ provider: "xai" }, owner));
       expect(cancelledStates).toContain(state);
       expect(
@@ -262,7 +326,7 @@ describe("ModelGateway", () => {
             message: null,
           },
         ],
-        models: [{ id: "cross-provider-model" }],
+        catalog: { kind: "ready", models: [{ id: "cross-provider-model" }] },
       });
       fail = true;
       expect(yield* run((service) => service.snapshot())).toEqual({ kind: "unavailable" });
@@ -368,17 +432,17 @@ describe("ModelGateway", () => {
     Effect.gen(function* () {
       expect(
         yield* run((service) => service.setEnabled({ accountId, enabled: false })),
-      ).toMatchObject({ accounts: [{ disabled: true }], models: [] });
+      ).toMatchObject({ accounts: [{ disabled: true }], catalog: { kind: "ready", models: [] } });
       expect(
         yield* run((service) => service.setEnabled({ accountId, enabled: true })),
       ).toMatchObject({
         accounts: [{ disabled: false }],
-        models: [{ id: "cross-provider-model" }],
+        catalog: { kind: "ready", models: [{ id: "cross-provider-model" }] },
       });
       expect(yield* run((service) => service.remove({ accountId }))).toEqual({
         kind: "ready",
         accounts: [],
-        models: [],
+        catalog: { kind: "ready", models: [] },
       });
     }).pipe(Effect.provide(fixture)),
   );

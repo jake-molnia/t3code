@@ -569,7 +569,7 @@ index 336f9bb..8e20fc3 100644
 +	return nil
 +}
 diff --git a/internal/api/handlers/management/oauth_sessions_test.go b/internal/api/handlers/management/oauth_sessions_test.go
-index a6bc3fd..b979849 100644
+index a6bc3fd..9c9becd 100644
 --- a/internal/api/handlers/management/oauth_sessions_test.go
 +++ b/internal/api/handlers/management/oauth_sessions_test.go
 @@ -342,3 +342,39 @@ func replaceOAuthSessionStoreForTest(t *testing.T, store *oauthSessionStore) {
@@ -594,7 +594,7 @@ index a6bc3fd..b979849 100644
 +			}
 +			// A browser can suspend for the entire advertised T3 enrollment lifetime.
 +			store.mu.Lock()
-+			store.purgeExpiredLocked(time.Now().Add(15 * time.Minute))
++			store.purgeExpiredLocked(time.Now().Add(oauthSessionTTL - time.Second))
 +			store.mu.Unlock()
 +			result, ok := store.Get("suspended-browser")
 +			if !ok || !result.Completed {
@@ -610,6 +610,93 @@ index a6bc3fd..b979849 100644
 +				t.Fatal("completion result retained indefinitely")
 +			}
 +		})
++	}
++}
+diff --git a/sdk/api/handlers/openai/openai_handlers.go b/sdk/api/handlers/openai/openai_handlers.go
+index 4077ee5..88d8eb4 100644
+--- a/sdk/api/handlers/openai/openai_handlers.go
++++ b/sdk/api/handlers/openai/openai_handlers.go
+@@ -81,7 +81,7 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
+ 	// Get all available models
+ 	allModels := h.Models()
+ 
+-	// Filter to only include the 4 required fields: id, object, created, owned_by
++	// Preserve known input modalities alongside the OpenAI identity fields.
+ 	filteredModels := make([]map[string]any, len(allModels))
+ 	for i, model := range allModels {
+ 		filteredModel := map[string]any{
+@@ -99,6 +99,12 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
+ 			filteredModel["owned_by"] = ownedBy
+ 		}
+ 
++		if id, ok := model["id"].(string); ok {
++			if info := registry.GetGlobalRegistry().GetModelInfo(id, ""); info != nil && len(info.SupportedInputModalities) > 0 {
++				filteredModel["supported_input_modalities"] = append([]string(nil), info.SupportedInputModalities...)
++			}
++		}
++
+ 		filteredModels[i] = filteredModel
+ 	}
+ 
+diff --git a/sdk/api/handlers/openai/t3_model_modalities_test.go b/sdk/api/handlers/openai/t3_model_modalities_test.go
+new file mode 100644
+index 0000000..182cc4d
+--- /dev/null
++++ b/sdk/api/handlers/openai/t3_model_modalities_test.go
+@@ -0,0 +1,55 @@
++package openai
++
++import (
++	"encoding/json"
++	"net/http/httptest"
++	"reflect"
++	"testing"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
++	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
++)
++
++func TestT3ModelsPreserveKnownInputModalities(t *testing.T) {
++	r := registry.GetGlobalRegistry()
++	client := "t3-modalities-test"
++	r.RegisterClient(client, "openai-compatibility", []*registry.ModelInfo{
++		{ID: "t3-image-model", SupportedInputModalities: []string{"text", "image"}},
++		{ID: "t3-unknown-model"},
++	})
++	t.Cleanup(func() { r.UnregisterClient(client) })
++	handler := NewOpenAIAPIHandler(handlers.NewBaseAPIHandlers(&config.SDKConfig{}, nil))
++	response := httptest.NewRecorder()
++	ctx, _ := gin.CreateTestContext(response)
++	ctx.Request = httptest.NewRequest("GET", "/v1/models", nil)
++	handler.OpenAIModels(ctx)
++	if response.Code != 200 {
++		t.Fatalf("status %d: %s", response.Code, response.Body.String())
++	}
++	var result struct {
++		Data []struct {
++			ID    string   `json:"id"`
++			Input []string `json:"supported_input_modalities"`
++		} `json:"data"`
++	}
++	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
++		t.Fatal(err)
++	}
++	seen := false
++	for _, model := range result.Data {
++		if model.ID == "t3-image-model" {
++			seen = true
++			if !reflect.DeepEqual(model.Input, []string{"text", "image"}) {
++				t.Fatalf("image support lost: %v", model.Input)
++			}
++		}
++		if model.ID == "t3-unknown-model" && len(model.Input) != 0 {
++			t.Fatalf("invented modalities: %v", model.Input)
++		}
++	}
++	if !seen {
++		t.Fatal("missing image model")
 +	}
 +}
 diff --git a/sdk/auth/codex_device.go b/sdk/auth/codex_device.go
