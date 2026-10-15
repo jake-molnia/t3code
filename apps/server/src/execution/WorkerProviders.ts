@@ -125,7 +125,10 @@ export class WorkerProviderError extends Schema.TaggedError<WorkerProviderError>
 export const make = Effect.gen(function* () {
   const providerHost = yield* ProviderHost.ProviderHost;
   const config = yield* ServerConfig.ServerConfig;
-  const gateway = createModelGatewayCatalog({ directory: `${config.baseDir}/harnesses` });
+  const gateway = createModelGatewayCatalog({
+    directory: `${config.baseDir}/harnesses`,
+    cwd: providerHost.paths.cwd,
+  });
   const refreshGateway = Effect.tryPromise(() => gateway.refresh());
   const credentialContext = yield* Effect.context<
     | Crypto.Crypto
@@ -155,10 +158,13 @@ export const make = Effect.gen(function* () {
               ...input.settings,
               ...resolveModelPreferences(input.settings),
             });
-            configurations[input.instanceId] = yield* Effect.try(() => {
+            const configured = yield* Effect.try(() => {
               validateHarnessLaunch(input.config);
               return normalizeHarness(input.config);
             });
+            configurations[input.instanceId] = yield* Effect.tryPromise(() =>
+              gateway.configure(input.instanceId, configured),
+            );
             yield* mutator.reconcile(configurations);
             const instance = yield* registry.getInstance(input.instanceId);
             if (!instance) return yield* new WorkerProviderError({ operation: "configure" });
@@ -284,11 +290,16 @@ export const make = Effect.gen(function* () {
         }
         return yield* new WorkerProviderError({ operation: "invalid_auth_request" });
       }
-      if (method.startsWith("provider.")) yield* refreshGateway;
+      if (method.startsWith("provider."))
+        yield* Effect.tryPromise(() => gateway.refreshInstance(command.instanceId));
       if (method.startsWith("text.")) {
         const selection = yield* decodeInferenceSelection(command.input);
         yield* Effect.tryPromise(() =>
-          gateway.prepareInference(instance.driverKind, selection.modelSelection.model),
+          gateway.prepareInference(
+            instance.driverKind,
+            selection.modelSelection.model,
+            command.instanceId,
+          ),
         );
       }
       switch (method) {

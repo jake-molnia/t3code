@@ -48,10 +48,12 @@ def configure(environment, arguments=()):
         if credentials_path.exists():
             credentials = json.loads(credentials_path.read_text())
         else:
-            credentials = {'management': secrets.token_urlsafe(48), 'inference': secrets.token_urlsafe(48),
+            inference_key = environment.get('T3_GATEWAY_API_KEY')
+            if not inference_key or not inference_key.strip():
+                raise ValueError('T3_GATEWAY_API_KEY is required on first startup; configure the same key on execution workers')
+            credentials = {'management': environment.get('T3_GATEWAY_MANAGEMENT_KEY') or secrets.token_urlsafe(48),
+                           'inference': inference_key,
                            'port': int(environment.get('T3_CLIPROXY_PORT', '8317'))}
-            for key, variable in [('management', 'T3_GATEWAY_MANAGEMENT_KEY'), ('inference', 'T3_GATEWAY_API_KEY')]:
-                credentials[key] = environment.get(variable) or credentials[key]
             temporary = directory / 'keys.json.tmp'
             temporary.write_text(json.dumps(credentials))
             temporary.chmod(0o600)

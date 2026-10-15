@@ -1,32 +1,24 @@
 # Pi
 
-T3 Code can use your existing Pi coding agent installation while keeping Pi's models, auth,
-extensions, skills, context files, and native session history.
+Pi runs in the deployment's execution workspace and keeps its extensions, skills,
+context files, and native session history.
 
 ## Set Up Pi
 
-1. Your sandbox image must supply [Pi](https://pi.dev) 0.80.5 or newer. Contact your
-   deployment administrator if Pi is unavailable.
-2. Run `pi` in a terminal, then `/login` to connect your model provider or configure its API key.
-3. Open T3 Code Settings, enable Pi, and refresh the provider.
+Connect a model account in **Settings → Providers → Accounts**, then choose Pi and
+an available model in the composer. For other model services, add an **API endpoint**
+in Accounts. See [account and harness setup](./install.md#connect-a-provider-account).
 
-If `pi` is not on the server's `PATH`, set Pi's binary path to the executable. Provider environment
-variables and launch arguments are also available for installations that need a custom agent
-directory, endpoint, or model configuration. `--provider` must be paired with `--model`. T3 Code
-rejects launch arguments that change Pi's execution mode or select a session because T3 owns those
-parts of the process lifecycle.
+Your deployment's sandbox image supplies Pi. Provider versions change when your
+deployment administrator upgrades that image. Native Pi settings, extensions,
+skills, prompt templates, and unrelated provider definitions remain available.
 
-On a remote or headless server, connect to that machine over SSH and run `pi`, then `/login`.
-Open the authorization URL on your own computer. If the callback cannot reach the server,
-paste the final redirect URL or authorization code back into Pi when prompted. You can also
-set your model provider's API-key environment variable in the Pi instance's settings; mark
-secret values as sensitive.
-
-Provider versions change when your deployment administrator upgrades the sandbox image.
+Existing threads using `Pi default` keep the model chosen when their live session
+opened. If that model becomes unavailable, choose another model explicitly.
 
 ## What Carries Over
 
-T3 Code discovers the models reported by Pi and exposes their supported thinking levels. The
+T3 Code lists connected models and exposes their supported thinking levels. The
 thinking picker marks the discovered active model's configured level as its default without
 overriding it. Other models keep their Pi defaults when no level is selected. Threads
 use Pi's native session files for resume, rollback, and forks within the same Pi instance. Forks
@@ -65,11 +57,10 @@ threads.
 
 ## Troubleshooting
 
-- If Pi is unavailable, confirm that the configured binary runs on the server machine, then refresh
-  the provider in Settings.
-- If no models appear, open Pi directly and confirm its authentication and model configuration.
-- If discovery cannot complete, T3 Code keeps Pi available with the `Pi default` model. Start a
-  thread to let the interactive Pi session handle any startup prompt.
+- If Pi is unavailable, ask your deployment administrator to check the sandbox image,
+  then refresh the provider in Settings.
+- If no models appear, check the connected accounts in **Settings → Providers → Accounts**.
+  Resolve any account or connection error there before starting a turn.
 - If a project extension is missing, approve the project in Pi, then start a fresh provider session.
 - If a project skill is missing from the `$` menu, approve the project in Pi and refresh the provider.
 - The context meter appears once Pi reports usage for the thread. Some model providers only

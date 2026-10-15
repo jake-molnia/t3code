@@ -7,6 +7,7 @@ from pathlib import Path
 import secrets
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -17,12 +18,18 @@ args = parser.parse_args()
 package = args.package.resolve()
 assert (package / 'dist/client/index.html').is_file(), 'Bundled web client is missing'
 with tempfile.TemporaryDirectory(prefix='t3-web-smoke-') as temporary:
-    with socket.socket() as sock:
+    with socket.socket() as sock, socket.socket() as gateway_sock:
         sock.bind(('127.0.0.1', 0))
+        gateway_sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
+        gateway_port = gateway_sock.getsockname()[1]
     env = {'PATH': os.environ['PATH'], 'HOME': temporary,
+           'T3CODE_HOME': temporary, 'T3_CLIPROXY_PORT': str(gateway_port),
+           'T3_GATEWAY_API_KEY': secrets.token_urlsafe(32),
            'AGENT_RUNTIME_URL': 'http://127.0.0.1:9', 'AGENT_RUNTIME_TOKEN': secrets.token_urlsafe(32),
            'T3_MCP_ADVERTISED_URL': 'http://example.invalid'}
+    if 'T3_CLIPROXY_BINARY' in os.environ:
+        env['T3_CLIPROXY_BINARY'] = os.environ['T3_CLIPROXY_BINARY']
     # A killed container can leave a runtime PID that belongs to an unrelated
     # process after restart. Interactive `start` refuses it; supervised `serve`
     # must still acquire the real server lock and boot this retained state.
@@ -33,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix='t3-web-smoke-') as temporary:
         'origin': f'http://127.0.0.1:{port}', 'startedAt': '2026-10-01T00:00:00Z',
     }))
     with tempfile.TemporaryFile(mode='w+') as log:
-        process = subprocess.Popen(['node', str(package / 'dist/bin.mjs'), 'serve', '--host', '127.0.0.1', '--port', str(port), '--no-browser', '--base-dir', temporary], env=env, stdout=log, stderr=log)
+        process = subprocess.Popen([sys.executable, str(package / 'head-entrypoint.py'), 'node', str(package / 'dist/bin.mjs'), 'serve', '--host', '127.0.0.1', '--port', str(port), '--no-browser', '--base-dir', temporary], env=env, stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 45
             while True:
@@ -44,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix='t3-web-smoke-') as temporary:
                     with urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=1) as response:
                         html = response.read().decode()
                     assert '<html' in html.lower()
-                    print('Bundled central web served HTML despite an unrelated live PID in retained runtime state.')
+                    print('Bundled head gateway and central web served HTML despite an unrelated live PID in retained runtime state.')
                     break
                 except OSError:
                     if time.monotonic() > deadline:
@@ -54,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix='t3-web-smoke-') as temporary:
         finally:
             process.terminate()
             try:
-                process.wait(timeout=10)
+                process.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()

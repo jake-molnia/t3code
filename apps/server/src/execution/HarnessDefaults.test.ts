@@ -234,3 +234,28 @@ it.each(["instance", "inherited"])(
     );
   },
 );
+
+it("gateway routing retains native Pi and OpenCode configuration locations", () => {
+  const route = gatewayRouting(
+    JSON.stringify({
+      pi: {
+        environment: [{ name: "PI_CODING_AGENT_DIR", value: "/generated/pi", sensitive: false }],
+      },
+      opencode: {
+        environment: [
+          { name: "OPENCODE_CONFIG", value: "/generated/opencode.json", sensitive: false },
+        ],
+      },
+    }),
+  );
+  for (const [driver, name, value] of [
+    ["pi", "PI_CODING_AGENT_DIR", "/native/pi"],
+    ["opencode", "OPENCODE_CONFIG", "/native/custom.jsonc"],
+  ] as const) {
+    const instance = {
+      driver: ProviderDriverKind.make(driver),
+      environment: [{ name, value, sensitive: false }],
+    };
+    expect(route(instance).environment).toEqual(instance.environment);
+  }
+});

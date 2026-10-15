@@ -129,7 +129,11 @@ export function gatewayRouting(text: string, environment: NodeJS.ProcessEnv = pr
       ])
         variables.set(name, { name, value: "0", sensitive: false });
     }
-    for (const entry of route.environment ?? []) variables.set(entry.name, entry);
+    for (const entry of route.environment ?? []) {
+      // Native configuration locations belong to the instance. The catalog adds routing in place.
+      if (entry.name === "PI_CODING_AGENT_DIR" || entry.name === "OPENCODE_CONFIG") continue;
+      variables.set(entry.name, entry);
+    }
     return {
       ...instance,
       config: { ...execution, ...routing, ...(launchArgs !== undefined ? { launchArgs } : {}) },

@@ -63,22 +63,6 @@
   "opencode": {
     "config": {
       "serverUrl": ""
-    },
-    "environment": [
-      {
-        "name": "OPENCODE_CONFIG",
-        "value": "${T3_HARNESS_STATE_DIR}/opencode2.json",
-        "sensitive": false
-      }
-    ]
-  },
-  "pi": {
-    "environment": [
-      {
-        "name": "PI_CODING_AGENT_DIR",
-        "value": "${T3_HARNESS_STATE_DIR}/pi",
-        "sensitive": false
-      }
-    ]
+    }
   }
 }

@@ -184,7 +184,9 @@ export function GatewayAccountsSection({
                         ? account.provider === "openai-compatible"
                           ? "Configured"
                           : "Connected"
-                        : "Needs attention"}
+                        : account.status === "unavailable"
+                          ? "Unavailable"
+                          : "Needs attention"}
                   </Badge>
                   {account.status === "error" &&
                   PROVIDERS.some((provider) => provider.id === account.provider) ? (

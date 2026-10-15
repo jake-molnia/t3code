@@ -17,6 +17,12 @@ import { listenWorker } from "./WorkerHttpServer.ts";
 
 const decodeSnapshot = Schema.decodeSync(ServerProvider);
 
+const configurePi = (gateway: ReturnType<typeof createModelGatewayCatalog>, directory: string) =>
+  gateway.configure("pi", {
+    driver: ProviderDriverKind.make("pi"),
+    environment: [{ name: "PI_CODING_AGENT_DIR", value: `${directory}/pi`, sensitive: false }],
+  });
+
 const snapshot = (driver: string) => ({
   ...buildServerProvider({
     presentation: { displayName: driver },
@@ -106,6 +112,8 @@ test("a running worker discovers added accounts, removes stale models, and recov
     },
   });
   try {
+    await configurePi(gateway, directory);
+    await gateway.configure("opencode", { driver: ProviderDriverKind.make("opencode") });
     await gateway.refresh();
     expect(gateway.snapshot(snapshot("codex")).unavailableReason).toContain("Connect an account");
     await expect(gateway.prepareInference("codex", "new-model")).rejects.toThrow(
@@ -114,6 +122,7 @@ test("a running worker discovers added accounts, removes stale models, and recov
     ids = ["new-model"];
     await gateway.prepareInference("codex", "new-model");
     expect(gateway.snapshot(snapshot("codex")).models.map((model) => model.slug)).toEqual(ids);
+    await gateway.refreshInstance("pi");
     expect(
       JSON.parse(await NodeFSP.readFile(`${directory}/pi/models.json`, "utf8")).providers.gateway
         .models[0].id,
@@ -262,8 +271,12 @@ test("OpenCode's generated registry preserves discovered image support without g
       }),
   });
   try {
-    await gateway.refresh();
-    const written = JSON.parse(await NodeFSP.readFile(`${directory}/opencode2.json`, "utf8"));
+    const instance = await gateway.configure("opencode", {
+      driver: ProviderDriverKind.make("opencode"),
+    });
+    const path = instance.environment?.find((entry) => entry.name === "OPENCODE_CONFIG")?.value;
+    if (!path) throw new Error("Missing generated config path");
+    const written = JSON.parse(await NodeFSP.readFile(path, "utf8"));
     expect(written.providers.gateway.models.vision.capabilities.input).toEqual(["text", "image"]);
     expect(written.providers.gateway.models.unknown.capabilities.input).toEqual(["text"]);
   } finally {
@@ -281,6 +294,7 @@ test("Pi refresh makes the deployment credential authoritative without touching 
     request: async () => Response.json({ data: [{ id: "model" }] }),
   });
   try {
+    await configurePi(gateway, directory);
     for (const stale of ["stale-key", "another-stale-key"]) {
       await NodeFSP.writeFile(
         `${directory}/pi/auth.json`,
@@ -321,6 +335,7 @@ test("saved Pi default resolves its configured available model before catalog ad
     request: async () => Response.json({ data: [{ id: "other" }, { id: "preferred" }] }),
   });
   try {
+    await configurePi(gateway, directory);
     await gateway.prepareInference("pi", "default");
     expect(
       gateway.normalizeSelection("pi", {
@@ -333,6 +348,7 @@ test("saved Pi default resolves its configured available model before catalog ad
       environment: { T3_GATEWAY_URL: "http://head", T3_GATEWAY_API_KEY: "key" },
       request: async () => Response.json({ data: [{ id: "available" }] }),
     });
+    await configurePi(noSettings, `${directory}/new`);
     await noSettings.prepareInference("pi", "default");
     expect(
       noSettings.normalizeSelection("pi", {
@@ -340,6 +356,114 @@ test("saved Pi default resolves its configured available model before catalog ad
         model: "default",
       }).model,
     ).toBe("gateway/available");
+  } finally {
+    await NodeFSP.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("separate Pi instances retain native state and unrelated models while gateway routing refreshes", async () => {
+  const directory = await NodeFSP.mkdtemp(`${NodeOS.tmpdir()}/t3-native-pi-`);
+  const gateway = createModelGatewayCatalog({
+    directory: `${directory}/generated`,
+    environment: { HOME: directory, T3_GATEWAY_URL: "http://head", T3_GATEWAY_API_KEY: "key" },
+    request: async () => Response.json({ data: [{ id: "one" }, { id: "two" }] }),
+  });
+  try {
+    for (const id of ["one", "two"]) {
+      const native = `${directory}/${id}`;
+      await NodeFSP.mkdir(native);
+      await NodeFSP.writeFile(
+        `${native}/settings.json`,
+        JSON.stringify({
+          defaultModel: id,
+          extensions: [`./${id}.ts`],
+          skills: ["./skills"],
+          theme: "native",
+        }),
+      );
+      await NodeFSP.writeFile(
+        `${native}/models.json`,
+        JSON.stringify({
+          customField: id,
+          providers: {
+            other: { baseUrl: "http://native", models: [{ id: "private" }] },
+            gateway: { apiKey: "stale" },
+          },
+        }),
+      );
+      const instance = await gateway.configure(ProviderInstanceId.make(id), {
+        driver: ProviderDriverKind.make("pi"),
+        environment: [{ name: "PI_CODING_AGENT_DIR", value: native, sensitive: false }],
+      });
+      expect(
+        instance.environment?.find((entry) => entry.name === "PI_CODING_AGENT_DIR")?.value,
+      ).toBe(native);
+      await gateway.prepareInference("pi", "default", id);
+      expect(
+        gateway.normalizeSelection("pi", {
+          instanceId: ProviderInstanceId.make(id),
+          model: "default",
+        }).model,
+      ).toBe(`gateway/${id}`);
+      const saved = JSON.parse(await NodeFSP.readFile(`${native}/models.json`, "utf8"));
+      expect(saved.customField).toBe(id);
+      expect(saved.providers.other.models).toEqual([{ id: "private" }]);
+      expect(saved.providers.gateway.models.map((model: { id: string }) => model.id)).toEqual([
+        "one",
+        "two",
+      ]);
+      expect(JSON.parse(await NodeFSP.readFile(`${native}/settings.json`, "utf8"))).toMatchObject({
+        extensions: [`./${id}.ts`],
+        skills: ["./skills"],
+        theme: "native",
+      });
+    }
+  } finally {
+    await NodeFSP.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode preserves explicit JSONC, inline configuration and native execution settings", async () => {
+  const directory = await NodeFSP.mkdtemp(`${NodeOS.tmpdir()}/t3-native-opencode-`);
+  const source = `${directory}/native.jsonc`;
+  const text =
+    '{// native comment\n"permissions":[{"action":"*","resource":"*","effect":"deny"}],"references":{"fixture":"./relative"},"providers":{"other":{"models":{"private":{}}}},"experimental":{"portable_shell_scanner":true},}';
+  await NodeFSP.writeFile(source, text);
+  const content = JSON.stringify({
+    agents: { custom: { description: "retained" } },
+    providers: { otherInline: { models: { private: {} } } },
+  });
+  const gateway = createModelGatewayCatalog({
+    directory: `${directory}/generated`,
+    environment: {
+      HOME: directory,
+      OPENCODE_CONFIG: source,
+      OPENCODE_CONFIG_CONTENT: content,
+      T3_GATEWAY_URL: "http://head",
+      T3_GATEWAY_API_KEY: "key",
+    },
+    request: async () => Response.json({ data: [{ id: "model" }] }),
+  });
+  try {
+    const instance = await gateway.configure(ProviderInstanceId.make("custom"), {
+      driver: ProviderDriverKind.make("opencode"),
+    });
+    const path = instance.environment?.find((entry) => entry.name === "OPENCODE_CONFIG")?.value;
+    if (!path) throw new Error("Missing generated config path");
+    const derived = JSON.parse(await NodeFSP.readFile(path, "utf8"));
+    expect(derived.permissions).toEqual([{ action: "*", resource: "*", effect: "deny" }]);
+    expect(derived.experimental).toEqual({ portable_shell_scanner: true });
+    expect(derived.providers.other.models).toEqual({ private: {} });
+    expect(derived.providers.gateway.models.model).toBeDefined();
+    expect(await NodeFSP.readFile(source, "utf8")).toBe(text);
+    const inlineText = instance.environment?.find(
+      (entry) => entry.name === "OPENCODE_CONFIG_CONTENT",
+    )?.value;
+    if (!inlineText) throw new Error("Missing inline config");
+    const inline = JSON.parse(inlineText);
+    expect(inline.agents.custom.description).toBe("retained");
+    expect(inline.providers.otherInline.models).toEqual({ private: {} });
+    expect(inline.providers.gateway.settings.baseURL).toBe("http://head/v1");
   } finally {
     await NodeFSP.rm(directory, { recursive: true, force: true });
   }

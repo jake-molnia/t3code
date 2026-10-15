@@ -85,7 +85,7 @@ persistence with cancellation for the supported sign-in flows. It also preserves
 modalities in model discovery so OpenCode can send images to models that accept them.
 
 Before the first head startup, set `T3_GATEWAY_API_KEY` to a random secret shared
-with execution workers. Set each worker's `T3_GATEWAY_URL` to the head's reachable
+with execution workers. First startup fails if this key is missing. Set each worker's `T3_GATEWAY_URL` to the head's reachable
 URL ending in `/api/model-gateway`, without `/v1`. Give workers the same
 `T3_GATEWAY_API_KEY`. The head forwards authenticated inference requests to its
 loopback proxy. Keep the proxy management port private.
@@ -95,6 +95,12 @@ account credentials, gateway configuration, and `keys.json`. The head generates
 the management key and retains both keys across restarts. A supplied key that
 differs from the saved key prevents startup. Management changes, including API
 endpoints added in T3, survive restarts.
+
+Gateway routing preserves native Pi settings, extensions, skills, and prompt
+templates. OpenCode retains its explicit and inline configuration, including
+permissions and relative references. A live Pi session keeps the model resolved
+from `default` when it opened; if that model becomes unavailable, select another
+model explicitly.
 
 The supervisor starts T3 after the proxy's authenticated management API is ready.
 If either process exits, the supervisor stops the other. A head restart interrupts

@@ -43,6 +43,12 @@ const Credentials = Schema.Struct({
       disabled: Schema.optional(Schema.Boolean),
       unavailable: Schema.optional(Schema.Boolean),
       status: Schema.optional(Schema.String),
+      authentication_failed: Schema.optional(Schema.Boolean),
+      cooldowns: Schema.optional(
+        Schema.NullOr(
+          Schema.Array(Schema.Struct({ reason: Schema.String, remaining_seconds: Schema.Number })),
+        ),
+      ),
       runtime_only: Schema.optional(Schema.Boolean),
     }),
   ),
@@ -187,27 +193,42 @@ const make = (
           accounts: [
             ...accounts.files
               .filter((account) => !account.runtime_only)
-              .map(
-                (account) =>
-                  ({
-                    id: GatewayAccountId.make(account.name),
-                    provider: account.provider,
-                    label: account.email || account.label || account.name,
-                    disabled: account.disabled ?? false,
-                    status:
-                      account.status === "error"
-                        ? "error"
-                        : account.unavailable
-                          ? "unavailable"
-                          : "ready",
-                    message:
-                      account.status === "error"
-                        ? "Reconnect this account."
-                        : account.unavailable
+              .map((account) => {
+                const cooldowns = account.cooldowns ?? [];
+                const temporaryRestriction =
+                  account.unavailable &&
+                  cooldowns.some(
+                    (cooldown) =>
+                      cooldown.remaining_seconds > 0 &&
+                      [
+                        "quota",
+                        "credential_quota",
+                        "transient_error",
+                        "cloudflare_challenge",
+                      ].includes(cooldown.reason),
+                  );
+                const status =
+                  account.authentication_failed === true
+                    ? "error"
+                    : account.status === "error" || account.unavailable
+                      ? "unavailable"
+                      : "ready";
+                return {
+                  id: GatewayAccountId.make(account.name),
+                  provider: account.provider,
+                  label: account.email || account.label || account.name,
+                  disabled: account.disabled ?? false,
+                  status,
+                  message:
+                    status === "error"
+                      ? "Reconnect this account."
+                      : status === "unavailable"
+                        ? temporaryRestriction
                           ? "This account is temporarily unavailable."
-                          : null,
-                  }) satisfies GatewayAccount,
-              ),
+                          : "This account is unavailable."
+                        : null,
+                } satisfies GatewayAccount;
+              }),
             ...endpoints.map(
               (endpoint) =>
                 ({
@@ -376,7 +397,10 @@ const make = (
               Effect.mapError(() => new ModelGatewayError({ reason: "unavailable" })),
             ),
           );
-          const deadline = now + (login.expires_in ?? 600) * 1_000;
+          // Kimi omits expiry when its native poller uses the 15-minute default.
+          const fallbackExpiry =
+            input.provider === "kimi" || input.provider === "kimi-ai" ? 900 : 600;
+          const deadline = now + (login.expires_in ?? fallbackExpiry) * 1_000;
           const auth: GatewayAuth = {
             kind: "waiting",
             flowId,

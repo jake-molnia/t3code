@@ -90,6 +90,18 @@ class HeadTests(unittest.TestCase):
         self.addCleanup(self.reap_fixture_descendants, pids)
         return pids
 
+    def test_first_start_requires_shared_inference_key(self):
+        for key in [None, '', '   ']:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary:
+                environment = {'T3CODE_HOME': temporary}
+                if key is not None:
+                    environment['T3_GATEWAY_API_KEY'] = key
+                with self.assertRaisesRegex(ValueError, 'T3_GATEWAY_API_KEY.*required'):
+                    _, lock = head.configure(environment)
+                    lock.close()
+                self.assertFalse((Path(temporary) / 'model-gateway/keys.json').exists())
+                self.assertFalse((Path(temporary) / 'model-gateway/config.yaml').exists())
+
     def test_configuration_is_private_and_stable(self):
         with tempfile.TemporaryDirectory() as temporary:
             env = {'T3CODE_HOME': temporary, 'T3_GATEWAY_API_KEY': 'shared-worker-key'}
@@ -134,7 +146,7 @@ class HeadTests(unittest.TestCase):
             ]
             for env, arguments, expected in cases:
                 with self.subTest(arguments=arguments):
-                    config, lock = head.configure(dict(env), arguments)
+                    config, lock = head.configure(dict(env, T3_GATEWAY_API_KEY='path-test-worker-key'), arguments)
                     try:
                         self.assertEqual(config.parent, expected / 'model-gateway')
                         self.assertEqual(json.loads(config.read_text())['oauth']['auth-dir'],
@@ -155,7 +167,7 @@ class HeadTests(unittest.TestCase):
         env = dict(os.environ, T3CODE_HOME=str(directory / 'state'), T3_CLIPROXY_BINARY=str(proxy),
                    T3_CLIPROXY_PORT=str(port), PROXY_PID_FILE=str(directory / 'proxy.pid'),
                    APP_PID_FILE=str(directory / 'app.pid'), **extra)
-        env.pop('T3_GATEWAY_API_KEY', None)
+        env['T3_GATEWAY_API_KEY'] = 'supervisor-test-worker-key'
         env.pop('T3_GATEWAY_MANAGEMENT_KEY', None)
         process = subprocess.Popen([sys.executable, str(ENTRYPOINT), sys.executable, '-c', APP, *arguments],
                                    env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -290,9 +302,14 @@ class HeadTests(unittest.TestCase):
                 port = sock.getsockname()[1]
             base = Path(temporary) / 'mounted-state'
             env = dict(os.environ, T3_CLIPROXY_PORT=str(port))
+            env.pop('T3_GATEWAY_MANAGEMENT_KEY', None)
             persisted_keys = None
             for mode in ['create', 'read']:
                 env['T3CODE_HOME'] = str(Path(temporary) / ('ambient-' + mode))
+                if mode == 'create':
+                    env['T3_GATEWAY_API_KEY'] = 'real-proxy-test-worker-key'
+                else:
+                    env.pop('T3_GATEWAY_API_KEY', None)
                 arguments = ['--base-dir', str(base)] if mode == 'create' else [f'--base-dir={base}']
                 script = """import json, os, sys, urllib.request
 origin = os.environ['T3_GATEWAY_MANAGEMENT_URL']

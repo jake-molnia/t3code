@@ -201,6 +201,8 @@ it.effect.each(["aperture-anthropic/claude", "default"])(
       const received: string[] = [];
       let available = true;
       let preparedDefault = false;
+      let currentDefault = "gateway/claude";
+      const admitted = new Set(["gateway/claude"]);
       let closed = false;
       const unused = () => Effect.die("Unexpected provider operation");
       const providerThread: C.OrchestrationV2ProviderThread = {
@@ -271,15 +273,19 @@ it.effect.each(["aperture-anthropic/claude", "default"])(
         publish: async () => {},
         normalizeSelection: (driver, selection) =>
           selection.model === "default" && preparedDefault
-            ? { ...selection, model: "gateway/claude" }
+            ? { ...selection, model: currentDefault }
             : migrateGatewayModelSelection(driver, selection),
         prepareInference: async (driver, model) => {
           if (!available) throw new Error("The model gateway is unavailable.");
           if (model === "default") {
             preparedDefault = true;
-            prepared.push("gateway/claude");
-          } else if (model)
-            prepared.push(migrateGatewayModelSelection(driver, { instanceId, model }).model);
+            prepared.push(currentDefault);
+          } else if (model) {
+            const resolved = migrateGatewayModelSelection(driver, { instanceId, model }).model;
+            if (!admitted.has(resolved))
+              throw new Error("The selected model is no longer available. Select another model.");
+            prepared.push(resolved);
+          }
         },
       });
       const input = {
@@ -296,6 +302,18 @@ it.effect.each(["aperture-anthropic/claude", "default"])(
       yield* executor.execute("ensureThread", { sessionId: providerSessionId, input });
       expect(prepared).toEqual(["gateway/claude", "gateway/claude"]);
       expect(received).toEqual(prepared);
+      currentDefault = "gateway/new-model";
+      admitted.add(currentDefault);
+      yield* executor.execute("ensureThread", { sessionId: providerSessionId, input });
+      expect(received).toEqual(["gateway/claude", "gateway/claude", "gateway/claude"]);
+      admitted.delete("gateway/claude");
+      const removed = yield* Effect.flip(
+        executor
+          .execute("ensureThread", { sessionId: providerSessionId, input })
+          .pipe(Effect.asVoid),
+      );
+      expect(removed.code).toBe("provider_execution");
+      expect(received).toHaveLength(3);
       available = false;
       const failure = yield* Effect.flip(
         executor
@@ -303,7 +321,7 @@ it.effect.each(["aperture-anthropic/claude", "default"])(
           .pipe(Effect.asVoid),
       );
       expect(failure.code).toBe("provider_execution");
-      expect(received).toHaveLength(2);
+      expect(received).toHaveLength(3);
       yield* executor.execute("closeSession", { sessionId: providerSessionId, input: {} });
       expect(closed).toBe(true);
     }).pipe(Effect.scoped),

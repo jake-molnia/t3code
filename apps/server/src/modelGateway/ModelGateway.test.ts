@@ -1,6 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Real upstream HTTP fixture verifies authentication and request serialization.
 import * as NodeHttp from "node:http";
-import { AuthSessionId, GatewayAccountId, ModelGatewayError } from "@t3tools/contracts";
+import {
+  AuthSessionId,
+  GatewayAccountId,
+  ModelGatewayError,
+  type GatewayProvider,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -25,6 +30,7 @@ let cancelCount = 0;
 let cancellation = Promise.withResolvers<void>();
 let cancelledStates: string[] = [];
 let expiresIn: number | undefined = 600;
+let credentialPayload: unknown = undefined;
 let cancellationFailures = 0;
 let cancellationFailure = Promise.withResolvers<void>();
 let currentState = "";
@@ -46,6 +52,7 @@ beforeEach(async () => {
   cancellation = Promise.withResolvers<void>();
   cancelledStates = [];
   expiresIn = 600;
+  credentialPayload = undefined;
   cancellationFailures = 0;
   cancellationFailure = Promise.withResolvers<void>();
   requests = [];
@@ -75,7 +82,9 @@ beforeEach(async () => {
       payload = { "api-keys": { "openai-compatibility": groups } };
     else if (target.pathname.endsWith("auth-url")) {
       currentState = `state-${requests.length}`;
-      const device = target.searchParams.get("provider") === "codex";
+      const device = ["codex", "kimi", "kimi-ai"].includes(
+        target.searchParams.get("provider") ?? "",
+      );
       payload = {
         status: "ok",
         url: "https://login.example/device",
@@ -102,7 +111,7 @@ beforeEach(async () => {
       removed = true;
       payload = { status: "ok" };
     } else if (target.pathname.endsWith("credentials"))
-      payload = {
+      payload = credentialPayload ?? {
         files: removed
           ? []
           : [
@@ -143,7 +152,171 @@ const fixture = Layer.unwrap(
   ),
 );
 
+// Captured from pinned V8 ListAuthFiles, including its cooldown and passive quota shapes.
+const cooldownCredentials = {
+  "credential-quota": {
+    authentication_failed: false,
+    cooldowns: [
+      {
+        scope: "credential",
+        reason: "credential_quota",
+        retry_at: "2026-10-15T08:09:07.025307445Z",
+        remaining_seconds: 3600,
+      },
+    ],
+    disabled: false,
+    name: "account.json",
+    provider: "codex",
+    quota: {
+      observed_at: "2026-10-15T07:09:07.025307445Z",
+      signals: {
+        "x-codex-primary-used-percent": "100",
+      },
+    },
+    runtime_only: false,
+    status: "error",
+    status_message: "quota exhausted",
+    unavailable: true,
+  },
+  "all-models-quota": {
+    authentication_failed: false,
+    cooldowns: [
+      {
+        scope: "model",
+        model_key: "model-a",
+        reason: "quota",
+        retry_at: "2026-10-15T08:09:07.025307445Z",
+        remaining_seconds: 3600,
+        backoff_level: 0,
+        http_status: 429,
+      },
+    ],
+    disabled: false,
+    name: "account.json",
+    provider: "codex",
+    quota: {
+      signals: {},
+    },
+    runtime_only: false,
+    status: "error",
+    status_message: "quota exhausted",
+    unavailable: true,
+  },
+  "expired-with-quota": {
+    authentication_failed: true,
+    cooldowns: [
+      {
+        scope: "model",
+        model_key: "model-a",
+        reason: "quota",
+        retry_at: "2026-10-15T08:09:07.025307445Z",
+        remaining_seconds: 3600,
+        backoff_level: 0,
+        http_status: 429,
+      },
+    ],
+    disabled: false,
+    name: "account.json",
+    provider: "codex",
+    quota: {
+      signals: {},
+    },
+    runtime_only: false,
+    status: "error",
+    status_message: "token expired",
+    unavailable: true,
+  },
+  "unauthorized-with-quota": {
+    authentication_failed: true,
+    cooldowns: [
+      {
+        scope: "model",
+        model_key: "model-a",
+        reason: "quota",
+        retry_at: "2026-10-15T08:09:07.025307445Z",
+        remaining_seconds: 3600,
+        backoff_level: 0,
+        http_status: 429,
+      },
+    ],
+    disabled: false,
+    name: "account.json",
+    provider: "codex",
+    quota: {
+      signals: {},
+    },
+    runtime_only: false,
+    status: "error",
+    status_message: "unauthorized (refresh token invalid)",
+    unavailable: true,
+  },
+};
+
 describe("ModelGateway", () => {
+  it.effect("does not invent a reconnect requirement for an opaque upstream error", () =>
+    Effect.gen(function* () {
+      credentialPayload = {
+        files: [
+          {
+            name: "account.json",
+            provider: "codex",
+            status: "error",
+            unavailable: true,
+            cooldowns: null,
+          },
+        ],
+      };
+      expect(yield* run((service) => service.snapshot())).toMatchObject({
+        kind: "ready",
+        accounts: [{ status: "unavailable", message: "This account is unavailable." }],
+      });
+    }).pipe(Effect.provide(fixture)),
+  );
+
+  it.effect.each(
+    Object.entries(cooldownCredentials).map(([name, credential]) => ({ name, credential })),
+  )("classifies pinned credential state: $name", ({ name, credential }) =>
+    Effect.gen(function* () {
+      credentialPayload = { files: [credential] };
+      const temporary = name === "credential-quota" || name === "all-models-quota";
+      expect(yield* run((service) => service.snapshot())).toMatchObject({
+        kind: "ready",
+        accounts: [
+          {
+            status: temporary ? "unavailable" : "error",
+            message: temporary
+              ? "This account is temporarily unavailable."
+              : "Reconnect this account.",
+          },
+        ],
+      });
+    }).pipe(Effect.provide(fixture)),
+  );
+  const kimiProviders: ReadonlyArray<GatewayProvider> = ["kimi", "kimi-ai"];
+  it.effect.each(kimiProviders)(
+    "matches native 15-minute %s enrollment when expiry is omitted",
+    (provider) =>
+      Effect.gen(function* () {
+        expiresIn = undefined;
+        const now = yield* Clock.currentTimeMillis;
+        const auth = yield* run((service) => service.start({ provider }, owner));
+        expect(auth).toMatchObject({
+          expiresAt: DateTime.formatIso(DateTime.makeUnsafe(now + 900_000)),
+          interaction: { type: "deviceCode" },
+        });
+        yield* TestClock.adjust("601 seconds");
+        expect(cancelCount).toBe(0);
+        expect(
+          yield* run((service) => service.status({ flowId: auth.flowId }, owner)),
+        ).toMatchObject({ kind: "waiting" });
+        yield* TestClock.adjust("300 seconds");
+        yield* Effect.promise(() => cancellation.promise);
+        expect(
+          yield* run((service) => service.status({ flowId: auth.flowId }, owner)),
+        ).toMatchObject({ kind: "failed", reason: "expired" });
+      }).pipe(Effect.provide(fixture)),
+  );
+
   it.effect("uses the default enrollment lifetime only when the provider omits expiry", () =>
     Effect.gen(function* () {
       expiresIn = undefined;

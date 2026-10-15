@@ -1,9 +1,17 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Worker-owned native harness configuration boundary.
 // @effect-diagnostics globalFetch:off -- Worker inference catalog transport, bounded and scoped per worker.
 import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import * as NodeOS from "node:os";
+import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Schema from "effect/Schema";
 import { lock } from "proper-lockfile";
-import type { ModelSelection, ServerProvider, ServerProviderModel } from "@t3tools/contracts";
+import type {
+  ModelSelection,
+  ProviderInstanceConfig,
+  ServerProvider,
+  ServerProviderModel,
+} from "@t3tools/contracts";
 import { migrateGatewayModelId, migrateGatewayModelSelection } from "./GatewayMigration.ts";
 
 // The pinned proxy patch preserves known input modalities alongside model identities.
@@ -125,8 +133,6 @@ export function nativeGatewayConfigs(catalog: Catalog, upstream: string) {
           ),
         },
       },
-      permissions: [{ action: "*", resource: "*", effect: "allow" }],
-      experimental: { portable_shell_scanner: false, policies: [] },
     },
     pi: {
       providers: {
@@ -192,15 +198,46 @@ async function reconcilePiAccess(directory: string) {
   return typeof settings.defaultModel === "string" ? settings.defaultModel : undefined;
 }
 
+const decodeRecord = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown));
+const decodeOpenCodeConfig = Schema.decodeUnknownSync(
+  fromLenientJson(Schema.Record(Schema.String, Schema.Unknown)),
+);
+
+async function updateNativeRecord(
+  path: string,
+  update: (saved: Record<string, unknown>) => Record<string, unknown>,
+) {
+  await NodeFSP.mkdir(NodePath.dirname(path), { recursive: true, mode: 0o700 });
+  const release = await lock(path, {
+    realpath: false,
+    retries: { retries: 10, minTimeout: 20, maxTimeout: 200 },
+  });
+  try {
+    const saved = await readPiRecord(path);
+    const next = update(saved);
+    if (JSON.stringify(next) === JSON.stringify(saved)) return;
+    await NodeFSP.writeFile(`${path}.tmp`, JSON.stringify(next, null, 2), { mode: 0o600 });
+    await NodeFSP.rename(`${path}.tmp`, path);
+  } finally {
+    await release();
+  }
+}
+
+type NativeConfiguration =
+  | { driver: "pi"; directory: string; defaultModel?: string | undefined }
+  | { driver: "opencode"; path: string; source?: string };
+
 /** Each worker owns its catalog and files; no catalog is shared between workspaces. */
 export function createModelGatewayCatalog(options: {
   directory: string;
+  cwd?: string;
   environment?: NodeJS.ProcessEnv;
   request?: typeof fetch;
 }) {
   const environment = options.environment ?? process.env;
   const base = environment.T3_GATEWAY_URL?.replace(/\/$/, "");
   const request = options.request ?? fetch;
+  const apiKey = environment.T3_GATEWAY_API_KEY ?? "";
   if (base) {
     const url = new URL(base);
     if (
@@ -211,17 +248,21 @@ export function createModelGatewayCatalog(options: {
       url.hash
     )
       throw new Error("Invalid model gateway URL");
-    if (!environment.T3_GATEWAY_API_KEY)
-      throw new Error("Model gateway requires T3_GATEWAY_API_KEY");
+    if (!apiKey) throw new Error("Model gateway requires T3_GATEWAY_API_KEY");
   }
   let state: GatewayCatalogState = base ? { kind: "unavailable" } : { kind: "disabled" };
   let pending: Promise<GatewayCatalogState> | undefined;
-  let written: string | undefined;
-  let piDefaultModel: string | undefined;
+  const instances = new Map<string, NativeConfiguration>();
   const normalizeSelection = (driver: string, selection: ModelSelection) => {
     if (!base) return selection;
-    if (driver === "pi" && selection.model === "default" && piDefaultModel)
-      return { ...selection, model: gatewayModelSlug(driver, piDefaultModel) };
+    const native = instances.get(selection.instanceId);
+    if (
+      driver === "pi" &&
+      selection.model === "default" &&
+      native?.driver === "pi" &&
+      native.defaultModel
+    )
+      return { ...selection, model: gatewayModelSlug(driver, native.defaultModel) };
     return migrateGatewayModelSelection(driver, selection);
   };
   const refresh = async (): Promise<GatewayCatalogState> => {
@@ -230,7 +271,7 @@ export function createModelGatewayCatalog(options: {
     pending = (async () => {
       try {
         const response = await request(`${base}/v1/models`, {
-          headers: { Authorization: `Bearer ${environment.T3_GATEWAY_API_KEY}` },
+          headers: { Authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(15_000),
           redirect: "error",
         });
@@ -239,19 +280,6 @@ export function createModelGatewayCatalog(options: {
         const catalog = {
           data: [...new Map(decoded.data.map((model) => [model.id, model])).values()],
         };
-        const serialized = JSON.stringify(catalog);
-        if (serialized !== written) {
-          const configs = nativeGatewayConfigs(catalog, base);
-          await NodeFSP.mkdir(`${options.directory}/pi`, { recursive: true, mode: 0o700 });
-          for (const [path, value] of [
-            [`${options.directory}/pi/models.json`, configs.pi],
-            [`${options.directory}/opencode2.json`, configs.opencode],
-          ] as const) {
-            await NodeFSP.writeFile(`${path}.tmp`, JSON.stringify(value, null, 2), { mode: 0o600 });
-            await NodeFSP.rename(`${path}.tmp`, path);
-          }
-          written = serialized;
-        }
         state = { kind: "ready", catalog };
       } catch {
         // Do not retain a ready catalog after an outage or malformed response.
@@ -265,27 +293,136 @@ export function createModelGatewayCatalog(options: {
       pending = undefined;
     }
   };
+  const writeNativeConfiguration = async (
+    native: NativeConfiguration | undefined,
+    catalog: Catalog,
+  ) => {
+    if (!native || !base) return;
+    const configs = nativeGatewayConfigs(catalog, base);
+    if (native.driver === "pi") {
+      await updateNativeRecord(`${native.directory}/models.json`, (saved) => ({
+        ...saved,
+        providers: {
+          ...decodeRecord(saved.providers ?? {}),
+          gateway: configs.pi.providers.gateway,
+        },
+      }));
+      return;
+    }
+    const source = native.source
+      ? decodeOpenCodeConfig(await NodeFSP.readFile(native.source, "utf8"))
+      : {};
+    await updateNativeRecord(native.path, () => ({
+      ...source,
+      providers: {
+        ...decodeRecord(source.providers ?? {}),
+        gateway: configs.opencode.providers.gateway,
+      },
+    }));
+  };
+  const configure = async (
+    instanceId: string,
+    instance: ProviderInstanceConfig,
+  ): Promise<ProviderInstanceConfig> => {
+    if (
+      !base ||
+      instance.enabled === false ||
+      (instance.driver !== "pi" && instance.driver !== "opencode")
+    ) {
+      instances.delete(instanceId);
+      return instance;
+    }
+    let native: NativeConfiguration;
+    const variables = new Map((instance.environment ?? []).map((entry) => [entry.name, entry]));
+    const effective = {
+      ...environment,
+      ...Object.fromEntries((instance.environment ?? []).map((entry) => [entry.name, entry.value])),
+    };
+    const cwd = options.cwd ?? process.cwd();
+    const home = effective.HOME || NodeOS.homedir();
+    const set = (name: string, value: string, sensitive = false) =>
+      variables.set(name, { name, value, sensitive });
+    set("T3_GATEWAY_API_KEY", apiKey, true);
+    if (instance.driver === "pi") {
+      const configured = effective.PI_CODING_AGENT_DIR || NodePath.join(home, ".pi", "agent");
+      const directory = NodePath.resolve(
+        cwd,
+        configured.startsWith("~/") ? NodePath.join(home, configured.slice(2)) : configured,
+      );
+      const previous = instances.get(instanceId);
+      native = {
+        driver: "pi",
+        directory,
+        ...(previous?.driver === "pi" && previous.directory === directory && previous.defaultModel
+          ? { defaultModel: previous.defaultModel }
+          : {}),
+      };
+      set("PI_CODING_AGENT_DIR", directory);
+    } else {
+      const source = effective.OPENCODE_CONFIG
+        ? NodePath.resolve(cwd, effective.OPENCODE_CONFIG)
+        : undefined;
+      // Keep explicit documents beside their original so native file, plugin and reference paths keep their meaning.
+      const path = NodePath.join(
+        source ? NodePath.dirname(source) : options.directory,
+        `.t3-gateway-${Buffer.from(instanceId).toString("base64url")}.json`,
+      );
+      native = { driver: "opencode", path, ...(source ? { source } : {}) };
+      set("OPENCODE_CONFIG", path);
+      const inline = effective.OPENCODE_CONFIG_CONTENT
+        ? decodeOpenCodeConfig(effective.OPENCODE_CONFIG_CONTENT)
+        : {};
+      const { models: _models, ...route } = nativeGatewayConfigs({ data: [] }, base).opencode
+        .providers.gateway;
+      set(
+        "OPENCODE_CONFIG_CONTENT",
+        JSON.stringify({
+          ...inline,
+          providers: { ...decodeRecord(inline.providers ?? {}), gateway: route },
+        }),
+      );
+    }
+    const next = await refresh();
+    if (next.kind === "ready") await writeNativeConfiguration(native, next.catalog);
+    instances.set(instanceId, native);
+    return { ...instance, environment: [...variables.values()] };
+  };
   return {
     refresh,
+    configure,
+    async refreshInstance(instanceId: string) {
+      const next = await refresh();
+      if (next.kind === "ready")
+        await writeNativeConfiguration(instances.get(instanceId), next.catalog);
+      return next;
+    },
     requiresSessionRestart: (driver: string) => Boolean(base) && driver === "pi",
     normalizeSelection,
     snapshot: (snapshot: ServerProvider) => projectGatewaySnapshot(snapshot, state),
-    async prepareInference(driver: string, model?: string) {
+    async prepareInference(driver: string, model?: string, instanceId = driver) {
       const next = await refresh();
       const reason = gatewayUnavailableReason(next, driver);
       if (reason) throw new Error(reason);
-      if (next.kind === "ready" && driver === "pi") {
-        const preferred = await reconcilePiAccess(`${options.directory}/pi`);
-        piDefaultModel =
+      if (next.kind === "ready") {
+        if ((driver === "pi" || driver === "opencode") && !instances.has(instanceId))
+          throw new Error(
+            "The harness configuration is unavailable. Reconnect before starting a turn.",
+          );
+        await writeNativeConfiguration(instances.get(instanceId), next.catalog);
+      }
+      const native = instances.get(instanceId);
+      if (next.kind === "ready" && native?.driver === "pi") {
+        const preferred = await reconcilePiAccess(native.directory);
+        native.defaultModel =
           next.catalog.data.find((entry) => entry.id === preferred)?.id ??
-          next.catalog.data.find((entry) => entry.id === piDefaultModel)?.id ??
+          next.catalog.data.find((entry) => entry.id === native.defaultModel)?.id ??
           next.catalog.data[0]?.id;
       }
       const requested =
         model === undefined
           ? undefined
-          : driver === "pi" && model === "default"
-            ? piDefaultModel && gatewayModelSlug(driver, piDefaultModel)
+          : driver === "pi" && model === "default" && native?.driver === "pi"
+            ? native.defaultModel && gatewayModelSlug(driver, native.defaultModel)
             : migrateGatewayModelId(driver, model);
       if (
         next.kind === "ready" &&

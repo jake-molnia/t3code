@@ -1,3 +1,15 @@
+diff --git a/internal/api/handlers/management/auth_files.go b/internal/api/handlers/management/auth_files.go
+index 86878e9..a372963 100644
+--- a/internal/api/handlers/management/auth_files.go
++++ b/internal/api/handlers/management/auth_files.go
+@@ -676,6 +676,7 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quota authFileQu
+ 		"source":         "memory",
+ 		"size":           int64(0),
+ 	}
++	entry["authentication_failed"] = isPersistentAuthFailure(auth, time.Now().UTC()) || coreauth.HasDisabledInvalidGrantFailure(auth)
+ 	entry["success"] = auth.Success
+ 	entry["failed"] = auth.Failed
+ 	entry["recent_requests"] = auth.RecentRequestsSnapshot(time.Now())
 diff --git a/internal/api/handlers/management/auth_files_codex_device.go b/internal/api/handlers/management/auth_files_codex_device.go
 new file mode 100644
 index 0000000..c1babbf
@@ -732,6 +744,55 @@ index a6bc3fd..9c9becd 100644
 +			store.mu.Unlock()
 +			if _, ok := store.Get("suspended-browser"); ok {
 +				t.Fatal("completion result retained indefinitely")
++			}
++		})
++	}
++}
+diff --git a/internal/api/handlers/management/t3_authentication_failure_test.go b/internal/api/handlers/management/t3_authentication_failure_test.go
+new file mode 100644
+index 0000000..f41f319
+--- /dev/null
++++ b/internal/api/handlers/management/t3_authentication_failure_test.go
+@@ -0,0 +1,43 @@
++package management
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
++	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
++)
++
++func TestAuthFileEntryDistinguishesAuthenticationFailureFromCooldown(t *testing.T) {
++	now := time.Now().UTC()
++	for _, kind := range []string{"credential-quota", "all-models-quota", "expired-token", "unauthorized", "disabled-invalid-grant"} {
++		t.Run(kind, func(t *testing.T) {
++			dir := t.TempDir()
++			path := filepath.Join(dir, "account.json")
++			if err := os.WriteFile(path, []byte(`{"type":"codex"}`), 0600); err != nil {
++				t.Fatal(err)
++			}
++			h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: dir}, nil)
++			auth := &coreauth.Auth{ID: "account.json", FileName: "account.json", Provider: "codex", Status: coreauth.StatusError, Unavailable: true, Attributes: map[string]string{"path": path}, ModelStates: map[string]*coreauth.ModelState{"model-a": {Status: coreauth.StatusError, Unavailable: true, NextRetryAfter: now.Add(time.Hour), Quota: coreauth.QuotaState{Exceeded: true, Reason: "quota", NextRecoverAt: now.Add(time.Hour)}}}}
++			switch kind {
++			case "credential-quota":
++				auth.Quota = coreauth.QuotaState{Exceeded: true, Reason: "credential_quota", NextRecoverAt: now.Add(time.Hour)}
++			case "expired-token":
++				auth.Metadata = map[string]any{"access_token": "fixture", "expired": now.Add(-time.Minute).Format(time.RFC3339)}
++			case "unauthorized":
++				auth.LastError = &coreauth.Error{HTTPStatus: 401}
++			case "disabled-invalid-grant":
++				auth.Disabled = true
++				auth.Status = coreauth.StatusDisabled
++				auth.LastError = &coreauth.Error{Code: "invalid_grant", Message: "invalid_grant"}
++			}
++			entry := h.buildAuthFileEntry(auth, authFileQuotaContext{v8: true})
++			expected := kind != "credential-quota" && kind != "all-models-quota"
++			if got, ok := entry["authentication_failed"].(bool); !ok || got != expected {
++				t.Fatalf("authentication_failed=%v, expected %v", entry["authentication_failed"], expected)
 +			}
 +		})
 +	}
