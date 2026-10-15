@@ -1,6 +1,5 @@
 import {
   CLIENT_GUARDED_RPC_SCOPES,
-  type DeviceListInput,
   clientRpcRequiredScopes,
   authScopeRequiredResponse,
   AssetCreateUrlInput,
@@ -190,15 +189,6 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.previewReportStatus]: AuthPreviewOperateScope,
   [WS_METHODS.subscribePreviewEvents]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeDiscoveredLocalServers]: AuthOrchestrationReadScope,
-  [WS_METHODS.deviceConfigure]: AuthSettingsWriteScope,
-  [WS_METHODS.deviceTestHost]: AuthSettingsWriteScope,
-  [WS_METHODS.deviceList]: AuthOrchestrationReadScope,
-  [WS_METHODS.deviceOpen]: AuthOrchestrationOperateScope,
-  [WS_METHODS.deviceClose]: AuthOrchestrationOperateScope,
-  [WS_METHODS.deviceShutdown]: AuthOrchestrationOperateScope,
-  [WS_METHODS.deviceDetail]: AuthOrchestrationReadScope,
-  [WS_METHODS.deviceAction]: AuthOrchestrationOperateScope,
-  [WS_METHODS.subscribeDeviceState]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeServerConfig]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeServerLifecycle]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
@@ -273,9 +263,3 @@ export const layer = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
     const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
     return requiredScope === undefined ? effect : Effect.fail(rpcAuthorizationError(requiredScope));
   });
-
-/** Retrying can install or restart tools even though ordinary listing is readable. */
-export const requiredScopeForDeviceList = (input: DeviceListInput): AuthEnvironmentScope =>
-  input.retryHostId || input.updateTool
-    ? AuthOrchestrationOperateScope
-    : AuthOrchestrationReadScope;

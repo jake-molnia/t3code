@@ -386,7 +386,7 @@ describe("McpConnections", () => {
     },
   );
 
-  it.effect("consumes resume ownership before concurrent retries can call upstream twice", () => {
+  it.effect("reserves resume ownership so concurrent retries cannot call upstream twice", () => {
     const f = fixture();
     return Effect.gen(function* () {
       const service = yield* McpConnections.McpConnections;

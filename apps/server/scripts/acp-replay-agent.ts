@@ -188,6 +188,7 @@ function emitInbound(recorded: LogicalFrame): void {
   const frame = materializeInbound(recorded) as LogicalFrame;
   switch (frame.kind) {
     case "notification":
+      advance();
       send({
         jsonrpc: "2.0",
         method: frame.method,
@@ -198,6 +199,7 @@ function emitInbound(recorded: LogicalFrame): void {
       const id = nextAgentRequestId;
       nextAgentRequestId += 1;
       pendingAgentRequestMethods.set(String(id), frame.method);
+      advance();
       send({
         jsonrpc: "2.0",
         id,
@@ -214,6 +216,8 @@ function emitInbound(recorded: LogicalFrame): void {
         return;
       }
       pendingClientRequestIds.delete(frame.method);
+      // A client can close the process as soon as it receives the last response.
+      advance();
       send({
         jsonrpc: "2.0",
         id,
@@ -248,7 +252,6 @@ function flushInbound(): void {
     }
     emitInbound(frame);
     if (stopped) return;
-    advance();
   }
 }
 
