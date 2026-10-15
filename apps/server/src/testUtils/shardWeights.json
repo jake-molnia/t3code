@@ -3,7 +3,6 @@
   "src/auth/SessionStore.test.ts": 0.5,
   "src/checkpointing/CheckpointStore.test.ts": 0.7,
   "src/cli/project.test.ts": 0.7,
-  "src/device/sshDeviceScript.test.ts": 3,
   "src/git/GitManager.test.ts": 22.7,
   "src/git/detachStackFrame.memory.test.ts": 0.5,
   "src/mcp/OrchestratorMcpToolkit.integration.test.ts": 9.1,

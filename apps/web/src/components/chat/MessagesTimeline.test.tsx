@@ -1982,12 +1982,16 @@ describe("MessagesTimeline", () => {
       {
         id: "run-1",
         ordinal: 1,
+        startedAt: null,
+        completedAt: null,
         providerInstanceId: "codex_personal",
         modelSelection: { instanceId: "codex_personal", model: "gpt-5.6-sol" },
       },
       {
         id: "run-2",
         ordinal: 2,
+        startedAt: null,
+        completedAt: null,
         providerInstanceId: "claudeAgent",
         modelSelection: { instanceId: "claudeAgent", model: "claude-fable-5" },
       },
