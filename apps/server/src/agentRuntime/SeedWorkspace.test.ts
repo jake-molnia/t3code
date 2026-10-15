@@ -34,7 +34,7 @@ const replies: Record<string, unknown> = {
   "asset.stage": { complete: true, path: "/tmp/staged" },
 };
 
-it.each([
+it.effect.each([
   ["git.isRepository", "destination.inspect"],
   ["git.captureCheckpoint", "source.checkpoint"],
   ["git.bundleFork", "source.bundle"],
@@ -42,30 +42,30 @@ it.each([
   ["asset.read", "source.read"],
   ["asset.stage", "destination.stage"],
   ["git.importFork", "destination.import"],
-])("retains the failed %s boundary and worker code", async (failedMethod, operation) => {
-  const client = createExecutionClient({
-    identity,
-    token: "local-test-token",
-    endpoint: "http://seed.invalid",
-    fetch: async (_url, init) => {
-      const body: unknown = JSON.parse(String(init?.body));
-      if (
-        typeof body !== "object" ||
-        body === null ||
-        !("method" in body) ||
-        typeof body.method !== "string"
-      )
-        throw new Error("Missing test operation");
-      return Response.json(
-        body.method === failedMethod
-          ? { ok: false, code: "worker_not_admitting" }
-          : { ok: true, value: replies[body.method] ?? null },
-        { status: body.method === failedMethod ? 409 : 200 },
-      );
-    },
-  });
-  const error = await Effect.runPromise(
-    Effect.flip(
+])("retains the failed %s boundary and worker code", ([failedMethod, operation]) =>
+  Effect.gen(function* () {
+    const client = createExecutionClient({
+      identity,
+      token: "local-test-token",
+      endpoint: "http://seed.invalid",
+      fetch: async (_url, init) => {
+        const body: unknown = JSON.parse(String(init?.body));
+        if (
+          typeof body !== "object" ||
+          body === null ||
+          !("method" in body) ||
+          typeof body.method !== "string"
+        )
+          throw new Error("Missing test operation");
+        return Response.json(
+          body.method === failedMethod
+            ? { ok: false, code: "worker_not_admitting" }
+            : { ok: true, value: replies[body.method] ?? null },
+          { status: body.method === failedMethod ? 409 : 200 },
+        );
+      },
+    });
+    const error = yield* Effect.flip(
       seedWorkspace({
         source: client,
         destination: client,
@@ -73,32 +73,34 @@ it.each([
         destinationCwd: "destination",
         key: "root",
       }),
-    ),
-  );
-  expect(error).toBeInstanceOf(SeedWorkspaceError);
-  expect(error).toMatchObject({ operation, code: "worker_not_admitting" });
-  expect(error.message).toBe(`Project seed ${operation} failed (worker_not_admitting)`);
-});
+    );
+    expect(error).toBeInstanceOf(SeedWorkspaceError);
+    expect(error).toMatchObject({ operation, code: "worker_not_admitting" });
+    expect(error.message).toBe(`Project seed ${operation} failed (worker_not_admitting)`);
+  }),
+);
 
-it("keeps transport classification without exposing rejected messages", async () => {
-  const secret = "sensitive-provider-stderr";
-  const client = createExecutionClient({
-    identity,
-    token: "local-test-token",
-    endpoint: "http://seed.invalid",
-    fetch: async () => {
-      throw new Error(secret);
-    },
-  });
-  const error = await Effect.runPromise(Effect.flip(inspectSeedDestination(client, "destination")));
-  expect(error).toMatchObject({ operation: "destination.inspect", code: "unavailable" });
-  expect(error.message).not.toContain(secret);
-});
+it.effect("keeps transport classification without exposing rejected messages", () =>
+  Effect.gen(function* () {
+    const secret = "sensitive-provider-stderr";
+    const client = createExecutionClient({
+      identity,
+      token: "local-test-token",
+      endpoint: "http://seed.invalid",
+      fetch: async () => {
+        throw new Error(secret);
+      },
+    });
+    const error = yield* Effect.flip(inspectSeedDestination(client, "destination"));
+    expect(error).toMatchObject({ operation: "destination.inspect", code: "unavailable" });
+    expect(error.message).not.toContain(secret);
+  }),
+);
 
-it("retains the original rejection for diagnostics but displays only safe codes", async () => {
-  const cause = new ExecutionOperationError("secret value in invalid code");
-  const error = await Effect.runPromise(
-    Effect.flip(
+it.effect("retains the original rejection for diagnostics but displays only safe codes", () =>
+  Effect.gen(function* () {
+    const cause = new ExecutionOperationError("secret value in invalid code");
+    const error = yield* Effect.flip(
       inspectSeedDestination(
         {
           call: async () => {
@@ -107,16 +109,20 @@ it("retains the original rejection for diagnostics but displays only safe codes"
         },
         "destination",
       ),
-    ),
-  );
-  expect(error).toMatchObject({ operation: "destination.inspect", code: "request_failed", cause });
-  expect(error.message).not.toContain(cause.code);
-});
+    );
+    expect(error).toMatchObject({
+      operation: "destination.inspect",
+      code: "request_failed",
+      cause,
+    });
+    expect(error.message).not.toContain(cause.code);
+  }),
+);
 
-it("rejects an LFS object whose transferred content digest differs from its pointer", async () => {
-  let staged = 0;
-  const error = await Effect.runPromise(
-    Effect.flip(
+it.effect("rejects an LFS object whose transferred content digest differs from its pointer", () =>
+  Effect.gen(function* () {
+    let staged = 0;
+    const error = yield* Effect.flip(
       transferForkBundle({
         source: {
           call: async (method) =>
@@ -140,8 +146,8 @@ it("rejects an LFS object whose transferred content digest differs from its poin
           lfsObjects: [{ oid: "c".repeat(64), path: "/local-lfs-object" }],
         },
       }),
-    ),
-  );
-  expect(error).toMatchObject({ operation: "source.snapshot", code: "lfs_digest_mismatch" });
-  expect(staged).toBe(1);
-});
+    );
+    expect(error).toMatchObject({ operation: "source.snapshot", code: "lfs_digest_mismatch" });
+    expect(staged).toBe(1);
+  }),
+);

@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Exercise the actual HTTP transport boundary.
-import * as Http from "node:http";
+import * as NodeHttp from "node:http";
 import { afterEach, expect, test } from "@effect/vitest";
 import {
   createExecutionClient,
@@ -16,7 +16,7 @@ const identity: ExecutionIdentity = {
   generation: 1,
   incarnation: "i",
 };
-const servers: Http.Server[] = [];
+const servers: NodeHttp.Server[] = [];
 afterEach(async () => {
   for (const server of servers.splice(0)) {
     server.closeAllConnections();
@@ -25,8 +25,8 @@ afterEach(async () => {
     );
   }
 });
-async function fixture(handle: Http.RequestListener, requestTimeoutMs = 1_000) {
-  const server = Http.createServer(handle);
+async function fixture(handle: NodeHttp.RequestListener, requestTimeoutMs = 1_000) {
+  const server = NodeHttp.createServer(handle);
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
