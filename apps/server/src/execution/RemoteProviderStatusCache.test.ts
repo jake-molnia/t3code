@@ -1,3 +1,7 @@
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as ConfigProvider from "effect/ConfigProvider";
+import { FetchHttpClient } from "effect/http";
+import * as RuntimeSchema from "../agentRuntime/Schema.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as C from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -51,10 +55,17 @@ const cached: C.ServerProvider = {
   skills: [],
 };
 
-it.layer(NodeServices.layer)("remote provider persisted status", (it) => {
+it.layer(
+  Layer.mergeAll(
+    NodeServices.layer,
+    NodeSqliteClient.layer({ filename: ":memory:" }),
+    FetchHttpClient.layer,
+  ),
+)("remote provider persisted status", (it) => {
   it.effect.each([
     "native",
     "complete",
+    "gateway",
     "missing",
     "malformed",
     "identity",
@@ -63,6 +74,26 @@ it.layer(NodeServices.layer)("remote provider persisted status", (it) => {
     "disabled",
   ] as const)("%s cache on cold factory creation", (scenario) =>
     Effect.gen(function* () {
+      const passiveRuntime =
+        scenario === "gateway"
+          ? yield* Effect.gen(function* () {
+              yield* RuntimeSchema.migrate;
+              return yield* Runtime.RuntimeClient.pipe(
+                Effect.provide(
+                  Runtime.layer.pipe(
+                    Layer.provide(
+                      ConfigProvider.layer(
+                        ConfigProvider.fromUnknown({
+                          AGENT_RUNTIME_URL: "http://controller.invalid",
+                          AGENT_RUNTIME_TOKEN: "test-token",
+                        }),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            })
+          : undefined;
       const fs = yield* FileSystem.FileSystem;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "remote-provider-status-cache-" });
       const config = yield* ServerConfig.ServerConfig.pipe(
@@ -79,7 +110,7 @@ it.layer(NodeServices.layer)("remote provider persisted status", (it) => {
           : {}),
         ...(scenario === "driver" ? { driver: C.ProviderDriverKind.make("grok") } : {}),
         ...(scenario === "enabled" ? { enabled: false } : {}),
-        ...(scenario === "complete" ? { modelsComplete: true } : {}),
+        ...(scenario === "complete" || scenario === "gateway" ? { modelsComplete: true } : {}),
       };
       if (scenario !== "missing") yield* writeProviderStatusCache({ filePath, provider: stored });
       if (scenario === "malformed") yield* fs.writeFileString(filePath, "not-json");
@@ -113,7 +144,15 @@ it.layer(NodeServices.layer)("remote provider persisted status", (it) => {
         },
       });
       yield* Effect.gen(function* () {
-        const drivers = yield* makeRemoteDrivers;
+        const drivers = yield* makeRemoteDrivers.pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromUnknown(
+                scenario === "gateway" ? { T3_GATEWAY_API_KEY: "gateway-test-key" } : {},
+              ),
+            ),
+          ),
+        );
         const driver = drivers.find((entry) => entry.driverKind === "codex");
         if (!driver) return yield* Effect.die("Missing Codex driver");
         const instance = yield* driver.create({
@@ -130,7 +169,7 @@ it.layer(NodeServices.layer)("remote provider persisted status", (it) => {
         });
         expect(allocations).toBe(0);
         const snapshot = yield* instance.snapshot.getSnapshot;
-        const reusable = scenario === "native" || scenario === "complete";
+        const reusable = scenario === "native" || scenario === "complete" || scenario === "gateway";
         expect(allocations).toBe(reusable || scenario === "disabled" ? 0 : 1);
         if (scenario === "disabled") {
           expect(snapshot.enabled).toBe(false);
@@ -151,7 +190,8 @@ it.layer(NodeServices.layer)("remote provider persisted status", (it) => {
             installed: true,
             auth: { status: "authenticated" },
           });
-          if (scenario === "complete") expect(snapshot.models).toEqual(cached.models);
+          if (scenario === "complete" || scenario === "gateway")
+            expect(snapshot.models).toEqual(cached.models);
           else {
             expect(snapshot.models.map((model) => model.slug)).toEqual([
               "built-in",
@@ -186,7 +226,10 @@ it.layer(NodeServices.layer)("remote provider persisted status", (it) => {
             Layer.succeed(ServerConfig.ServerConfig, config),
             Layer.mock(Runtime.RuntimeClient)({
               enabled: true,
-              observeWorkspace: () => Effect.succeed({ kind: "stopped" }),
+              observeWorkspace: (workspaceId) =>
+                passiveRuntime
+                  ? passiveRuntime.observeWorkspace(workspaceId)
+                  : Effect.succeed({ kind: "stopped" }),
               forUtility: () =>
                 Effect.sync(() => {
                   allocations++;
