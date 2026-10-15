@@ -227,8 +227,6 @@ function startServer() {
       t3Home: home,
       host: "127.0.0.1",
       desktopBootstrapToken: bootstrap,
-      tailscaleServeEnabled: false,
-      tailscaleServePort: 443,
     }),
   );
   const ready = Promise.withResolvers<void>();

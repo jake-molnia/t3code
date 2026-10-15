@@ -23,6 +23,7 @@ import * as CliError from "effect/cli/CliError";
 
 import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
+import * as PublicAddress from "../environment/PublicAddress.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 
@@ -66,18 +67,6 @@ const logWebSocketEventsFlag = Flag.Boolean("log-websocket-events").pipe(
   Flag.withAlias("log-ws-events"),
   Flag.optional,
 );
-const tailscaleServeFlag = Flag.Boolean("tailscale-serve").pipe(
-  Flag.withDescription(
-    "Configure Tailscale Serve to expose this backend over HTTPS on the Tailnet.",
-  ),
-  Flag.optional,
-);
-const tailscaleServePortFlag = Flag.Int("tailscale-serve-port").pipe(
-  Flag.withSchema(PortSchema),
-  Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale-serve is enabled."),
-  Flag.optional,
-);
-
 // Trace file location, shared by the server and `t3 trace summary`.
 export const traceFileConfig = Config.String("T3CODE_TRACE_FILE").pipe(
   Config.option,
@@ -123,6 +112,10 @@ const EnvServerConfig = Config.all({
   ),
   port: Config.Port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.String("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  publicUrl: Config.schema(PublicAddress.PublicUrl, "T3CODE_PUBLIC_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   t3Home: Config.String("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.URL("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devAllowedOrigins: Config.String("T3CODE_DEV_ALLOWED_ORIGINS").pipe(
@@ -143,14 +136,6 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
   logWebSocketEvents: Config.Boolean("T3CODE_LOG_WS_EVENTS").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
-  tailscaleServeEnabled: Config.Boolean("T3CODE_TAILSCALE_SERVE").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
-  tailscaleServePort: Config.Port("T3CODE_TAILSCALE_SERVE_PORT").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
@@ -186,8 +171,6 @@ export interface CliServerFlags {
   readonly noBrowser: Option.Option<boolean>;
   readonly bootstrapFd: Option.Option<number>;
   readonly logWebSocketEvents: Option.Option<boolean>;
-  readonly tailscaleServeEnabled: Option.Option<boolean>;
-  readonly tailscaleServePort: Option.Option<number>;
 }
 
 export interface CliAuthLocationFlags {
@@ -219,8 +202,6 @@ export const sharedServerCommandFlags = {
   noBrowser: noBrowserFlag,
   bootstrapFd: bootstrapFdFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
-  tailscaleServeEnabled: tailscaleServeFlag,
-  tailscaleServePort: tailscaleServePortFlag,
 } as const;
 
 const resolveOptionPrecedence = <Value>(
@@ -261,8 +242,6 @@ export const resolveServerConfig = (
       noBrowser: flags.noBrowser ?? Option.none(),
       bootstrapFd: flags.bootstrapFd ?? Option.none(),
       logWebSocketEvents: flags.logWebSocketEvents ?? Option.none(),
-      tailscaleServeEnabled: flags.tailscaleServeEnabled ?? Option.none(),
-      tailscaleServePort: flags.tailscaleServePort ?? Option.none(),
     } satisfies CliServerFlags;
     const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
     const bootstrapEnvelope =
@@ -357,22 +336,6 @@ export const resolveServerConfig = (
       ),
       () => Boolean(devUrl),
     );
-    const tailscaleServeEnabled = Option.getOrElse(
-      resolveOptionPrecedence(
-        normalizedFlags.tailscaleServeEnabled,
-        Option.fromUndefinedOr(env.tailscaleServeEnabled),
-        Option.fromUndefinedOr(bootstrap?.tailscaleServeEnabled),
-      ),
-      () => false,
-    );
-    const tailscaleServePort = Option.getOrElse(
-      resolveOptionPrecedence(
-        normalizedFlags.tailscaleServePort,
-        Option.fromUndefinedOr(env.tailscaleServePort),
-        Option.fromUndefinedOr(bootstrap?.tailscaleServePort),
-      ),
-      () => 443,
-    );
     const staticDir = devUrl ? undefined : yield* ServerConfig.resolveStaticDir();
     const host = Option.getOrElse(
       resolveOptionPrecedence(
@@ -438,6 +401,7 @@ export const resolveServerConfig = (
       host,
       staticDir,
       devUrl,
+      ...(env.publicUrl === undefined ? {} : { publicUrl: env.publicUrl }),
       ...(devAuthToken === undefined ? {} : { devAuthToken }),
       devAllowedOrigins: env.devAllowedOrigins,
       noBrowser,
@@ -449,8 +413,6 @@ export const resolveServerConfig = (
       desktopTelemetryControlFd,
       resourceMonitorPath,
       logWebSocketEvents,
-      tailscaleServeEnabled,
-      tailscaleServePort,
     };
 
     return config;
@@ -471,8 +433,6 @@ export const resolveCliAuthConfig = (
       noBrowser: Option.none(),
       bootstrapFd: Option.none(),
       logWebSocketEvents: Option.none(),
-      tailscaleServeEnabled: Option.none(),
-      tailscaleServePort: Option.none(),
     },
     cliLogLevel,
   );

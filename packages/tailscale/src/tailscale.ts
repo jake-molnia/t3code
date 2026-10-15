@@ -1,16 +1,13 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientRequest } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-export const DEFAULT_TAILSCALE_SERVE_PORT = 443;
+const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 export const TAILSCALE_STATUS_TIMEOUT = Duration.millis(1_500);
 const TAILSCALE_SERVE_TIMEOUT = Duration.seconds(10);
-const TAILSCALE_PROBE_TIMEOUT = Duration.millis(2_500);
 
 // tailscale is a real executable everywhere (`tailscale.exe` on Windows), so
 // it is always spawned directly rather than through cmd.exe shell mode.
@@ -361,21 +358,3 @@ export const disableTailscaleServe = (
       TAILSCALE_SERVE_TIMEOUT,
     );
   });
-
-export const probeTailscaleHttpsEndpoint = (input: {
-  readonly baseUrl: string;
-  readonly timeout?: Duration.Input;
-}): Effect.Effect<boolean, never, HttpClient.HttpClient> =>
-  Effect.gen(function* () {
-    const client = yield* HttpClient.HttpClient;
-    const response = yield* Effect.gen(function* () {
-      const url = new URL("/.well-known/t3/environment", input.baseUrl);
-      const request = HttpClientRequest.get(url.toString());
-      return yield* client.execute(request);
-    }).pipe(Effect.timeoutOption(input.timeout ?? TAILSCALE_PROBE_TIMEOUT));
-
-    return Option.match(response, {
-      onNone: () => false,
-      onSome: (httpResponse) => httpResponse.status >= 200 && httpResponse.status < 300,
-    });
-  }).pipe(Effect.orElseSucceed(() => false));
