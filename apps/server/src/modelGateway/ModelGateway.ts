@@ -31,6 +31,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as Schedule from "effect/Schedule";
 
 const Credentials = Schema.Struct({
   files: Schema.Array(
@@ -124,6 +125,7 @@ const make = (
   refreshModels: Effect.Effect<void> = Effect.void,
 ) =>
   Effect.gen(function* () {
+    const scope = yield* Effect.scope;
     const crypto = yield* Crypto.Crypto;
     const httpClient = yield* HttpClient.HttpClient;
     const sessions = new Map<GatewayFlowId, Session>();
@@ -219,29 +221,54 @@ const make = (
         }),
       );
     });
+    const expire = Effect.fn("ModelGateway.expire")(function* (
+      flowId: GatewayFlowId,
+      session: Session,
+    ) {
+      if (session.auth.kind !== "waiting") return;
+      const cancellation = yield* request(
+        `/v8/management/oauth/session?state=${encodeURIComponent(session.upstreamState)}`,
+        CancelResult,
+        { method: "DELETE" },
+      );
+      const completed =
+        !cancellation.cancelled &&
+        (yield* request(
+          `/v8/management/oauth/status?state=${encodeURIComponent(session.upstreamState)}`,
+          LoginStatus,
+        )).status === "ok";
+      session.auth = completed
+        ? { kind: "succeeded", flowId }
+        : { kind: "failed", flowId, reason: "expired" };
+      if (completed) yield* refresh;
+    });
+    const trackDeadline = (flowId: GatewayFlowId, session: Session) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        yield* Effect.sleep(Math.max(0, session.deadline - now));
+        yield* expire(flowId, session).pipe(
+          lock.withPermits(1),
+          Effect.retry({ schedule: Schedule.spaced("5 seconds"), times: 2 }),
+          Effect.catchTags({
+            ModelGatewayError: () =>
+              Effect.logWarning(
+                "Could not cancel expired model gateway sign-in; retaining the pending session for retry.",
+              ),
+          }),
+        );
+        const afterExpiry = yield* Clock.currentTimeMillis;
+        yield* Effect.sleep(Math.max(0, session.deadline + 60_000 - afterExpiry));
+        yield* Effect.sync(() => {
+          if (session.auth.kind !== "waiting") sessions.delete(flowId);
+        }).pipe(lock.withPermits(1));
+      });
     const owned = (input: GatewayFlowInput, owner: AuthSessionId) =>
       Effect.gen(function* () {
         const session = sessions.get(input.flowId);
         if (!session || session.owner !== owner)
           return yield* new ModelGatewayError({ reason: "invalid-flow" });
         const now = yield* Clock.currentTimeMillis;
-        if (session.deadline <= now && session.auth.kind === "waiting") {
-          const cancellation = yield* request(
-            `/v8/management/oauth/session?state=${encodeURIComponent(session.upstreamState)}`,
-            CancelResult,
-            { method: "DELETE" },
-          );
-          const completed =
-            !cancellation.cancelled &&
-            (yield* request(
-              `/v8/management/oauth/status?state=${encodeURIComponent(session.upstreamState)}`,
-              LoginStatus,
-            )).status === "ok";
-          session.auth = completed
-            ? { kind: "succeeded", flowId: input.flowId }
-            : { kind: "failed", flowId: input.flowId, reason: "expired" };
-          if (completed) yield* refresh;
-        }
+        if (session.deadline <= now) yield* expire(input.flowId, session);
         return session;
       });
     const status = Effect.fn("ModelGateway.status")(function* (
@@ -262,6 +289,23 @@ const make = (
         session.auth = { kind: "failed", flowId: input.flowId, reason: "rejected" };
       return session.auth;
     });
+    yield* Effect.addFinalizer(() =>
+      Effect.forEach(
+        [...sessions.values()].filter((session) => session.auth.kind === "waiting"),
+        (session) =>
+          request(
+            `/v8/management/oauth/session?state=${encodeURIComponent(session.upstreamState)}`,
+            CancelResult,
+            { method: "DELETE" },
+          ).pipe(
+            Effect.catchTags({
+              ModelGatewayError: () =>
+                Effect.logWarning("Could not cancel model gateway sign-in during shutdown."),
+            }),
+          ),
+        { concurrency: 4, discard: true },
+      ),
+    );
     return ModelGateway.of({
       snapshot,
       addEndpoint: (input) =>
@@ -300,9 +344,11 @@ const make = (
       start: (input, owner) =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          // Terminal states remain readable briefly; abandoned sessions cannot grow this map forever.
+          // A pending upstream enrollment must be cancelled before its local record is forgotten.
           for (const [id, session] of sessions) {
-            if (session.deadline + 60_000 < now) sessions.delete(id);
+            if (session.deadline <= now) yield* expire(id, session);
+            if (session.deadline + 60_000 < now && session.auth.kind !== "waiting")
+              sessions.delete(id);
             else if (
               session.auth.kind === "waiting" &&
               session.deadline > now &&
@@ -338,13 +384,15 @@ const make = (
                     acceptsCallback: login.flow !== "device",
                   },
           };
-          sessions.set(flowId, {
+          const session: Session = {
             owner,
             provider: input.provider,
             upstreamState: login.state,
             deadline,
             auth,
-          });
+          };
+          sessions.set(flowId, session);
+          yield* trackDeadline(flowId, session).pipe(Effect.forkIn(scope));
           return auth;
         }).pipe(lock.withPermits(1)),
       status: (input, owner) => status(input, owner).pipe(lock.withPermits(1)),

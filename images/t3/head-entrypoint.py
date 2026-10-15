@@ -12,8 +12,33 @@ import time
 import urllib.request
 
 
-def configure(environment):
-    directory = Path(environment.get('T3CODE_HOME', '/data/t3')) / 'model-gateway'
+def resolve_base_dir(environment, arguments):
+    # Match serve's --base-dir > T3CODE_HOME > ~/.t3 precedence and path expansion.
+    # --home-dir belongs to the dev runner, not the server CLI.
+    selected = environment.get('T3CODE_HOME')
+    arguments = iter(arguments)
+    for argument in arguments:
+        if argument == '--':
+            break
+        if argument == '--base-dir':
+            selected = next(arguments, None)
+            if selected is None or selected.startswith('--'):
+                raise ValueError('--base-dir requires a path')
+        elif argument.startswith('--base-dir='):
+            selected = argument.split('=', 1)[1]
+    home_directory = environment.get('HOME') or str(Path.home())
+    selected = selected.strip() if selected else ''
+    if not selected:
+        selected = os.path.join(home_directory, '.t3')
+    elif selected == '~':
+        selected = home_directory
+    elif selected.startswith(('~/', '~\\')):
+        selected = os.path.join(home_directory, selected[2:])
+    return Path(os.path.abspath(selected))
+
+
+def configure(environment, arguments=()):
+    directory = resolve_base_dir(environment, arguments) / 'model-gateway'
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = (directory / 'supervisor.lock').open('a')
     try:
@@ -63,7 +88,7 @@ def configure(environment):
 def run(arguments):
     os.umask(0o077)
     environment = dict(os.environ)
-    config, lock = configure(environment)
+    config, lock = configure(environment, arguments)
     children = []
     stopping = False
 

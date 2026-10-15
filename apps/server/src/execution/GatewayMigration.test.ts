@@ -133,3 +133,40 @@ test("gateway hydration keeps custom identities, disabled harnesses, and unrelat
   ).toHaveLength(1);
   expect(migrateGatewaySettings(next)).toBe(next);
 });
+
+test("retained OpenCode instances use the image executable only when no binary was chosen", () => {
+  const current = decodeSettings({
+    providerInstances: {
+      original: { driver: ProviderDriverKind.make("opencode"), config: { serverPassword: "kept" } },
+      empty: {
+        driver: ProviderDriverKind.make("opencode"),
+        enabled: false,
+        config: { binaryPath: "" },
+      },
+      explicit: {
+        driver: ProviderDriverKind.make("opencode"),
+        config: { binaryPath: "/custom/opencode" },
+      },
+      explicitName: {
+        driver: ProviderDriverKind.make("opencode"),
+        config: { binaryPath: "opencode" },
+      },
+    },
+  });
+  const next = migrateGatewaySettings(current);
+  expect(next.providerInstances[ProviderInstanceId.make("original")]?.config).toEqual({
+    serverPassword: "kept",
+    binaryPath: "opencode2",
+  });
+  expect(next.providerInstances[ProviderInstanceId.make("empty")]).toMatchObject({
+    enabled: false,
+    config: { binaryPath: "opencode2" },
+  });
+  expect(next.providerInstances[ProviderInstanceId.make("explicit")]?.config).toEqual({
+    binaryPath: "/custom/opencode",
+  });
+  expect(next.providerInstances[ProviderInstanceId.make("explicitName")]?.config).toEqual({
+    binaryPath: "opencode",
+  });
+  expect(migrateGatewaySettings(next)).toBe(next);
+});

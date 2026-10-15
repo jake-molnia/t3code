@@ -19,6 +19,11 @@ let removed = false;
 let fail = false;
 let callbackCount = 0;
 let cancelCount = 0;
+let cancellation = Promise.withResolvers<void>();
+let cancelledStates: string[] = [];
+let expiresIn = 600;
+let cancellationFailures = 0;
+let cancellationFailure = Promise.withResolvers<void>();
 let currentState = "";
 let requests: string[] = [];
 let server: ReturnType<typeof NodeHttp.createServer>;
@@ -34,10 +39,21 @@ beforeEach(async () => {
   fail = false;
   callbackCount = 0;
   cancelCount = 0;
+  cancellation = Promise.withResolvers<void>();
+  cancelledStates = [];
+  expiresIn = 600;
+  cancellationFailures = 0;
+  cancellationFailure = Promise.withResolvers<void>();
   requests = [];
   server = NodeHttp.createServer(async (request, response) => {
     const target = new URL(request.url ?? "/", "http://localhost");
     requests.push(`${request.method} ${target.pathname}`);
+    if (target.pathname.endsWith("oauth/session") && cancellationFailures > 0) {
+      cancellationFailures--;
+      response.writeHead(503).end();
+      cancellationFailure.resolve();
+      return;
+    }
     if (fail) {
       response.writeHead(503).end();
       return;
@@ -60,11 +76,14 @@ beforeEach(async () => {
         status: "ok",
         url: "https://login.example/device",
         state: currentState,
+        expires_in: expiresIn,
         ...(device ? { flow: "device", user_code: "ABCD-EFGH" } : {}),
       };
     } else if (target.pathname.endsWith("oauth/status")) payload = { status };
     else if (target.pathname.endsWith("oauth/session")) {
       cancelCount++;
+      cancelledStates.push(target.searchParams.get("state") ?? "");
+      cancellation.resolve();
       payload = { status: "ok", cancelled: status === "wait" };
     } else if (target.pathname.endsWith("oauth/callback")) {
       callbackCount++;
@@ -121,6 +140,92 @@ const fixture = Layer.unwrap(
 );
 
 describe("ModelGateway", () => {
+  it.effect(
+    "retains expired sessions when cancellation is unavailable instead of pruning them",
+    () =>
+      Effect.gen(function* () {
+        const auth = yield* run((service) => service.start({ provider: "codex" }, owner));
+        fail = true;
+        yield* TestClock.adjust("662 seconds");
+        expect(
+          yield* run((service) => service.start({ provider: "codex" }, owner)).pipe(Effect.flip),
+        ).toMatchObject({ reason: "unavailable" });
+        fail = false;
+        expect(
+          yield* run((service) => service.status({ flowId: auth.flowId }, owner)),
+        ).toMatchObject({ kind: "failed", reason: "expired" });
+        expect(cancelCount).toBe(1);
+      }).pipe(Effect.provide(fixture)),
+  );
+
+  it.effect("retries deadline cancellation after a transient gateway failure", () =>
+    Effect.gen(function* () {
+      const auth = yield* run((service) => service.start({ provider: "codex" }, owner));
+      cancellationFailures = 1;
+      yield* TestClock.adjust("601 seconds");
+      yield* Effect.promise(() => cancellationFailure.promise);
+      yield* TestClock.adjust("5 seconds");
+      yield* Effect.promise(() => cancellation.promise);
+      expect(yield* run((service) => service.status({ flowId: auth.flowId }, owner))).toMatchObject(
+        { kind: "failed", reason: "expired" },
+      );
+      expect(
+        requests.filter((request) => request === "DELETE /v8/management/oauth/session"),
+      ).toHaveLength(2);
+    }).pipe(Effect.provide(fixture)),
+  );
+  it.effect("cancels pending enrollment when the service closes and stops its deadline fiber", () =>
+    Effect.gen(function* () {
+      yield* run((service) => service.start({ provider: "codex" }, owner)).pipe(
+        Effect.provide(fixture),
+      );
+      expect(cancelCount).toBe(1);
+      yield* TestClock.adjust("901 seconds");
+      expect(cancelCount).toBe(1);
+    }),
+  );
+  it.effect("releases terminal sessions without another login request", () =>
+    Effect.gen(function* () {
+      const auth = yield* run((service) => service.start({ provider: "codex" }, owner));
+      status = "ok";
+      yield* run((service) => service.status({ flowId: auth.flowId }, owner));
+      yield* TestClock.adjust("661 seconds");
+      expect(
+        yield* run((service) => service.status({ flowId: auth.flowId }, owner)).pipe(Effect.flip),
+      ).toMatchObject({ reason: "invalid-flow" });
+      expect(cancelCount).toBe(0);
+    }).pipe(Effect.provide(fixture)),
+  );
+
+  it.effect(
+    "cancels a 30-minute upstream enrollment at the advertised 15-minute deadline without browser polling",
+    () =>
+      Effect.gen(function* () {
+        expiresIn = 1800;
+        const auth = yield* run((service) => service.start({ provider: "xai" }, owner));
+        const state = currentState;
+        yield* TestClock.adjust("901 seconds");
+        yield* Effect.promise(() => cancellation.promise);
+        expect(cancelledStates).toEqual([state]);
+        expect(
+          yield* run((service) => service.status({ flowId: auth.flowId }, owner)),
+        ).toMatchObject({ kind: "failed", reason: "expired" });
+      }).pipe(Effect.provide(fixture)),
+  );
+  it.effect("cancels an expired upstream flow before a new login prunes its local record", () =>
+    Effect.gen(function* () {
+      expiresIn = 1800;
+      const old = yield* run((service) => service.start({ provider: "xai" }, owner));
+      const state = currentState;
+      yield* TestClock.adjust("962 seconds");
+      yield* run((service) => service.start({ provider: "xai" }, owner));
+      expect(cancelledStates).toContain(state);
+      expect(
+        yield* run((service) => service.status({ flowId: old.flowId }, owner)).pipe(Effect.flip),
+      ).toMatchObject({ reason: "invalid-flow" });
+    }).pipe(Effect.provide(fixture)),
+  );
+
   it.effect("expires abandoned enrollment without leaving an upstream login active", () =>
     Effect.gen(function* () {
       const auth = yield* run((service) => service.start({ provider: "codex" }, owner));

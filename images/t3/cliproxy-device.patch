@@ -492,7 +492,7 @@ index 7d8151a..9d94ee9 100644
  		h.RequestAntigravityToken(c)
  	case "kimi":
 diff --git a/internal/api/handlers/management/oauth_sessions.go b/internal/api/handlers/management/oauth_sessions.go
-index 336f9bb..96e2267 100644
+index 336f9bb..8e20fc3 100644
 --- a/internal/api/handlers/management/oauth_sessions.go
 +++ b/internal/api/handlers/management/oauth_sessions.go
 @@ -1,6 +1,7 @@
@@ -503,7 +503,19 @@ index 336f9bb..96e2267 100644
  	"encoding/json"
  	"errors"
  	"fmt"
-@@ -33,6 +34,7 @@ var (
+@@ -15,8 +16,9 @@ import (
+ 
+ const (
+ 	// oauthSessionTTL must cover device-code flows (xAI ~30m, Kimi ~15m).
+-	oauthSessionTTL          = 30 * time.Minute
+-	oauthCompletedSessionTTL = time.Minute
++	oauthSessionTTL = 30 * time.Minute
++	// Keep completion readable throughout device enrollment even when a browser suspends.
++	oauthCompletedSessionTTL = oauthSessionTTL
+ 	maxOAuthStateLength      = 128
+ )
+ 
+@@ -33,6 +35,7 @@ var (
  )
  
  type oauthSession struct {
@@ -511,7 +523,7 @@ index 336f9bb..96e2267 100644
  	Provider  string
  	Status    string
  	Source    string
-@@ -247,6 +249,9 @@ func (s *oauthSessionStore) Cancel(state string) bool {
+@@ -247,6 +250,9 @@ func (s *oauthSessionStore) Cancel(state string) bool {
  		return false
  	}
  	delete(s.sessions, state)
@@ -521,7 +533,7 @@ index 336f9bb..96e2267 100644
  	return true
  }
  
-@@ -486,3 +491,34 @@ func WriteOAuthCallbackFileForPendingSession(authDir, provider, state, code, err
+@@ -486,3 +492,34 @@ func WriteOAuthCallbackFileForPendingSession(authDir, provider, state, code, err
  	}
  	return writeOAuthCallbackFile(authDir, canonicalProvider, state, code, errorMessage)
  }
@@ -555,6 +567,50 @@ index 336f9bb..96e2267 100644
 +	session.ExpiresAt = time.Now().Add(s.completedTTL)
 +	s.sessions[state] = session
 +	return nil
++}
+diff --git a/internal/api/handlers/management/oauth_sessions_test.go b/internal/api/handlers/management/oauth_sessions_test.go
+index a6bc3fd..b979849 100644
+--- a/internal/api/handlers/management/oauth_sessions_test.go
++++ b/internal/api/handlers/management/oauth_sessions_test.go
+@@ -342,3 +342,39 @@ func replaceOAuthSessionStoreForTest(t *testing.T, store *oauthSessionStore) {
+ 		oauthSessions = original
+ 	})
+ }
++
++func TestOAuthCompletionSurvivesSuspendedBrowser(t *testing.T) {
++	for _, finish := range []string{"Complete", "CompleteProvider", "finishOAuth"} {
++		t.Run(finish, func(t *testing.T) {
++			store := newOAuthSessionStore(oauthSessionTTL)
++			store.Register("suspended-browser", "codex")
++			switch finish {
++			case "Complete":
++				store.Complete("suspended-browser")
++			case "CompleteProvider":
++				store.CompleteProvider("codex", oauthSessionSourceBuiltin)
++			case "finishOAuth":
++				if err := store.finishOAuth("suspended-browser", func() error { return nil }); err != nil {
++					t.Fatal(err)
++				}
++			}
++			// A browser can suspend for the entire advertised T3 enrollment lifetime.
++			store.mu.Lock()
++			store.purgeExpiredLocked(time.Now().Add(15 * time.Minute))
++			store.mu.Unlock()
++			result, ok := store.Get("suspended-browser")
++			if !ok || !result.Completed {
++				t.Fatal("saved credentials lost their completion result while the browser was suspended")
++			}
++			if store.Cancel("suspended-browser") {
++				t.Fatal("completed enrollment must not be cancelled")
++			}
++			store.mu.Lock()
++			store.purgeExpiredLocked(time.Now().Add(oauthSessionTTL + time.Second))
++			store.mu.Unlock()
++			if _, ok := store.Get("suspended-browser"); ok {
++				t.Fatal("completion result retained indefinitely")
++			}
++		})
++	}
 +}
 diff --git a/sdk/auth/codex_device.go b/sdk/auth/codex_device.go
 index cc2febb..b2f66a5 100644

@@ -1,3 +1,7 @@
+import { hydrateCachedProvider } from "../provider/providerStatusCache.ts";
+import * as Schema from "effect/Schema";
+import { ServerProvider } from "@t3tools/contracts";
+import { mergeProviderSnapshot } from "../provider/ProviderRegistry.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Integration test of retained native harness files.
 import { expect, test } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
@@ -10,6 +14,8 @@ import {
   projectGatewaySnapshot,
 } from "./ModelGatewayCatalog.ts";
 import { listenWorker } from "./WorkerHttpServer.ts";
+
+const decodeSnapshot = Schema.decodeSync(ServerProvider);
 
 const snapshot = (driver: string) => ({
   ...buildServerProvider({
@@ -159,4 +165,88 @@ test("independent worker catalogs do not share account models or failures", asyn
   } finally {
     await NodeFSP.rm(directory, { recursive: true, force: true });
   }
+});
+
+test("gateway entries keep native metadata without retaining custom-model ownership", () => {
+  const current = {
+    ...snapshot("codex"),
+    models: [{ slug: "shared-model", name: "Useful label", isCustom: true, capabilities: null }],
+  };
+  const next = projectGatewaySnapshot(current, {
+    kind: "ready",
+    catalog: { data: [{ id: "shared-model" }] },
+  });
+  expect(next.models).toEqual([{ ...current.models[0], isCustom: false }]);
+});
+test.each(["pi", "grok", "claudeAgent"])(
+  "%s replaces its central inventory after gateway removal",
+  (driver) => {
+    const initial = projectGatewaySnapshot(snapshot(driver), {
+      kind: "ready",
+      catalog: { data: [{ id: "keep" }, { id: "remove" }] },
+    });
+    const refreshed = decodeSnapshot(
+      projectGatewaySnapshot(snapshot(driver), {
+        kind: "ready",
+        catalog: { data: [{ id: "keep" }] },
+      }),
+    );
+    const merged = mergeProviderSnapshot(initial, refreshed);
+    expect(merged.models.map((model) => model.slug)).toEqual([
+      driver === "pi" ? "gateway/keep" : "keep",
+    ]);
+    const unavailable = decodeSnapshot(
+      projectGatewaySnapshot(snapshot(driver), { kind: "unavailable" }),
+    );
+    expect(mergeProviderSnapshot(merged, unavailable).models).toEqual([]);
+  },
+);
+test("gateway authentication replaces a stale native Pi sign-in warning", () => {
+  const current: ServerProvider = {
+    ...snapshot("pi"),
+    status: "warning",
+    auth: { status: "unauthenticated" },
+    message: "Sign in to Pi.",
+  };
+  const next = projectGatewaySnapshot(current, {
+    kind: "ready",
+    catalog: { data: [{ id: "connected" }] },
+  });
+  expect(next.auth.status).toBe("authenticated");
+  expect(next.status).toBe("ready");
+  expect(next.message).toBeUndefined();
+});
+test("gateway authentication preserves executable and launch failures", () => {
+  const failure: ServerProvider = {
+    ...snapshot("pi"),
+    status: "error",
+    auth: { status: "unknown" },
+    message: "Pi CLI failed to run.",
+  };
+  const next = projectGatewaySnapshot(failure, {
+    kind: "ready",
+    catalog: { data: [{ id: "connected" }] },
+  });
+  expect(next.status).toBe("error");
+  expect(next.message).toBe(failure.message);
+  expect(
+    projectGatewaySnapshot(
+      { ...failure, installed: false },
+      { kind: "ready", catalog: { data: [{ id: "connected" }] } },
+    ).installed,
+  ).toBe(false);
+});
+
+test("cached complete gateway inventories do not regain native models during restart", () => {
+  const native = snapshot("pi");
+  const cached = projectGatewaySnapshot(native, {
+    kind: "ready",
+    catalog: { data: [{ id: "keep" }] },
+  });
+  const hydrated = hydrateCachedProvider({
+    cachedProvider: decodeSnapshot(cached),
+    fallbackProvider: native,
+  });
+  expect(hydrated.models.map((model) => model.slug)).toEqual(["gateway/keep"]);
+  expect(hydrated.modelsComplete).toBe(true);
 });

@@ -1,5 +1,7 @@
+import * as Schema from "effect/Schema";
+import { resolveCodexLaunchArgs } from "../provider/codexLaunchArgs.ts";
 import { describe, it, expect, afterEach, vi } from "@effect/vitest";
-import { ProviderDriverKind } from "@t3tools/contracts";
+import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
 import {
   harnessDefaults,
   gatewayRouting,
@@ -7,6 +9,8 @@ import {
   validateHarnessLaunch,
   deploymentHarnessDefaults,
 } from "./HarnessDefaults.ts";
+
+const decodeCodexSettings = Schema.decodeUnknownSync(CodexSettings);
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -53,6 +57,7 @@ describe("sandbox harness defaults", () => {
       environment: [
         { name: "OPENAI_API_KEY", value: "gateway-key", sensitive: true },
         { name: "CUSTOM", value: "kept", sensitive: false },
+        { name: "T3CODE_CODEX_LAUNCH_ARGS", value: "", sensitive: false },
       ],
     });
     expect(apply({ ...instance, enabled: false })).toEqual({ ...instance, enabled: false });
@@ -188,3 +193,44 @@ describe("sandbox harness defaults", () => {
     ).toEqual({ runtimeMode: "full-access", interactionMode: "plan", cwd: "/workspace" });
   });
 });
+
+it.each(["instance", "inherited"])(
+  "Codex %s launch arguments cannot discard gateway routing",
+  (source) => {
+    const environment = { T3CODE_CODEX_LAUNCH_ARGS: "--enable execution-feature" };
+    const apply = gatewayRouting(
+      JSON.stringify({
+        codex: {
+          config: {
+            setupMode: "existing",
+            launchArgs: "-c model_provider=gateway",
+          },
+        },
+      }),
+      environment,
+    );
+    const next = apply({
+      driver: ProviderDriverKind.make("codex"),
+      config: { launchArgs: "--enable configured-feature" },
+      ...(source === "instance"
+        ? {
+            environment: [
+              {
+                name: "T3CODE_CODEX_LAUNCH_ARGS",
+                value: "--enable instance-feature",
+                sensitive: false,
+              },
+            ],
+          }
+        : {}),
+    });
+    const config = decodeCodexSettings(next.config);
+    const resolved = resolveCodexLaunchArgs(config.launchArgs, {
+      ...environment,
+      ...Object.fromEntries(next.environment?.map((entry) => [entry.name, entry.value]) ?? []),
+    });
+    expect(resolved).toBe(
+      `${source === "instance" ? "--enable instance-feature" : "--enable execution-feature"} -c model_provider=gateway`,
+    );
+  },
+);

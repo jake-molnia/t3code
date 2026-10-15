@@ -70,7 +70,12 @@ export function migrateGatewaySettings(settings: ServerSettings): ServerSettings
           : {};
       const useGateway =
         instance.driver === "codex" && !("setupMode" in config && config.setupMode === "existing");
-      if (!name && !useGateway) return [id, instance] as const;
+      const useImageOpenCode =
+        instance.driver === "opencode" &&
+        (!("binaryPath" in config) ||
+          typeof config.binaryPath !== "string" ||
+          !config.binaryPath.trim());
+      if (!name && !useGateway && !useImageOpenCode) return [id, instance] as const;
       changed = true;
       return [
         id,
@@ -78,6 +83,7 @@ export function migrateGatewaySettings(settings: ServerSettings): ServerSettings
           ...instance,
           ...(name ? { displayName: name } : {}),
           ...(useGateway ? { config: { ...config, setupMode: "existing" } } : {}),
+          ...(useImageOpenCode ? { config: { ...config, binaryPath: "opencode2" } } : {}),
         },
       ] as const;
     }),

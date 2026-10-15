@@ -35,8 +35,9 @@ server = http.server.HTTPServer(('127.0.0.1', config['server']['port']), Handler
 server.serve_forever()
 '''
 
-APP = '''import os, pathlib, sys, time
+APP = '''import json, os, pathlib, sys, time
 pathlib.Path(os.environ['APP_PID_FILE']).write_text(str(os.getpid()))
+pathlib.Path(os.environ['APP_PID_FILE'] + '.arguments').write_text(json.dumps(sys.argv[1:]))
 assert os.environ['T3_GATEWAY_MANAGEMENT_URL'].startswith('http://127.0.0.1:')
 assert os.environ['T3_GATEWAY_MANAGEMENT_KEY'] and os.environ['T3_GATEWAY_API_KEY']
 print('server-ready', flush=True)
@@ -74,7 +75,34 @@ class HeadTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'differs from the persisted'):
                 head.configure({'T3CODE_HOME': temporary, 'T3_GATEWAY_API_KEY': 'wrong'})
 
-    def start(self, directory, **extra):
+    def test_configuration_matches_server_path_resolution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment = {'HOME': temporary, 'T3CODE_HOME': str(directory / 'ambient')}
+            cases = [
+                (environment, [], directory / 'ambient'),
+                ({'HOME': temporary}, [], directory / '.t3'),
+                ({'HOME': temporary, 'T3CODE_HOME': '~/from-env'}, [], directory / 'from-env'),
+                (environment, ['--base-dir', '~/from-flag'], directory / 'from-flag'),
+                (environment, ['--base-dir=~'], directory),
+                (environment, ['--base-dir', f'  {directory}/trimmed  '], directory / 'trimmed'),
+                (environment, ['--base-dir', os.path.relpath(directory / 'relative')], directory / 'relative'),
+                (environment, ['--base-dir='], directory / '.t3'),
+            ]
+            for env, arguments, expected in cases:
+                with self.subTest(arguments=arguments):
+                    config, lock = head.configure(dict(env), arguments)
+                    try:
+                        self.assertEqual(config.parent, expected / 'model-gateway')
+                        self.assertEqual(json.loads(config.read_text())['oauth']['auth-dir'],
+                                         str(expected / 'model-gateway/accounts'))
+                    finally:
+                        lock.close()
+            for arguments in [['--base-dir'], ['--base-dir', '--port', '3773']]:
+                with self.subTest(arguments=arguments), self.assertRaisesRegex(ValueError, 'requires a path'):
+                    head.configure(dict(environment), arguments)
+
+    def start(self, directory, arguments=(), **extra):
         proxy = directory / 'proxy.py'
         proxy.write_text(FAKE_PROXY)
         proxy.chmod(0o700)
@@ -86,7 +114,7 @@ class HeadTests(unittest.TestCase):
                    APP_PID_FILE=str(directory / 'app.pid'), **extra)
         env.pop('T3_GATEWAY_API_KEY', None)
         env.pop('T3_GATEWAY_MANAGEMENT_KEY', None)
-        process = subprocess.Popen([sys.executable, str(ENTRYPOINT), sys.executable, '-c', APP],
+        process = subprocess.Popen([sys.executable, str(ENTRYPOINT), sys.executable, '-c', APP, *arguments],
                                    env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(self.stop, process)
         return process
@@ -104,6 +132,21 @@ class HeadTests(unittest.TestCase):
         pid = int(path.read_text())
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
+
+    def test_explicit_base_dir_keeps_gateway_with_server_state(self):
+        for equals in [False, True]:
+            with self.subTest(equals=equals), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                base = directory / 'mounted state'
+                arguments = [f'--base-dir={base}'] if equals else ['--base-dir', str(base)]
+                process = self.start(directory, arguments=arguments)
+                self.ready(process)
+                try:
+                    self.assertTrue((base / 'model-gateway/keys.json').is_file())
+                    self.assertFalse((directory / 'state/model-gateway').exists())
+                    self.assertEqual(json.loads((directory / 'app.pid.arguments').read_text()), arguments)
+                finally:
+                    self.stop(process)
 
     def test_signal_stops_both_children(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -146,8 +189,12 @@ class HeadTests(unittest.TestCase):
             with socket.socket() as sock:
                 sock.bind(('127.0.0.1', 0))
                 port = sock.getsockname()[1]
-            env = dict(os.environ, T3CODE_HOME=temporary, T3_CLIPROXY_PORT=str(port))
+            base = Path(temporary) / 'mounted-state'
+            env = dict(os.environ, T3_CLIPROXY_PORT=str(port))
+            persisted_keys = None
             for mode in ['create', 'read']:
+                env['T3CODE_HOME'] = str(Path(temporary) / ('ambient-' + mode))
+                arguments = ['--base-dir', str(base)] if mode == 'create' else [f'--base-dir={base}']
                 script = """import json, os, sys, urllib.request
 origin = os.environ['T3_GATEWAY_MANAGEMENT_URL']
 headers = {'Authorization': 'Bearer ' + os.environ['T3_GATEWAY_MANAGEMENT_KEY'], 'Content-Type': 'application/json'}
@@ -163,11 +210,16 @@ else:
     assert config['api-keys']['openai-compatibility'][0]['name'] == 'restart-check'
 print('gateway-check-passed', flush=True)
 """
-                process = subprocess.Popen([sys.executable, str(ENTRYPOINT), sys.executable, '-c', script, mode],
+                process = subprocess.Popen([sys.executable, str(ENTRYPOINT), sys.executable, '-c', script, mode, *arguments],
                                            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 try:
                     output, _ = process.communicate(timeout=40)
                     self.assertIn('gateway-check-passed', output, output[-4000:])
+                    current_keys = (base / 'model-gateway/keys.json').read_text()
+                    if persisted_keys is not None:
+                        self.assertEqual(current_keys, persisted_keys)
+                    persisted_keys = current_keys
+                    self.assertFalse(Path(env['T3CODE_HOME']).exists())
                 finally:
                     self.stop(process)
 

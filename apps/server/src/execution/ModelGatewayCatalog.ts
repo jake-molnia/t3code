@@ -48,6 +48,7 @@ export function projectGatewaySnapshot(
       ...snapshot,
       setup,
       models: [],
+      modelsComplete: true,
       updateRequiredModels: [],
       availability: "unavailable",
       unavailableReason: reason ?? "The model gateway is unavailable.",
@@ -56,19 +57,34 @@ export function projectGatewaySnapshot(
   const models = state.catalog.data.map((model): ServerProviderModel => {
     const slug = gatewayModelSlug(snapshot.driver, model.id);
     const existing = native.get(slug);
-    return (
-      existing ?? {
-        slug,
-        name: model.id,
-        isCustom: false,
-        capabilities: null,
-        ...(snapshot.driver === "pi" || snapshot.driver === "opencode"
-          ? { subProvider: "gateway" }
-          : {}),
-      }
-    );
+    return existing
+      ? { ...existing, isCustom: false }
+      : {
+          slug,
+          name: model.id,
+          isCustom: false,
+          capabilities: null,
+          ...(snapshot.driver === "pi" || snapshot.driver === "opencode"
+            ? { subProvider: "gateway" }
+            : {}),
+        };
   });
-  return { ...snapshot, setup, models, updateRequiredModels: [] };
+  const nativeAuthWarning =
+    snapshot.enabled &&
+    snapshot.installed &&
+    snapshot.status === "warning" &&
+    snapshot.auth.status === "unauthenticated" &&
+    snapshot.compatibilityAdvisory?.status !== "unsupported" &&
+    snapshot.compatibilityAdvisory?.status !== "broken";
+  return {
+    ...snapshot,
+    ...(nativeAuthWarning ? { status: "ready", message: undefined } : {}),
+    auth: { status: "authenticated", type: "apiKey", label: "Model gateway", canLogout: false },
+    setup,
+    models,
+    modelsComplete: true,
+    updateRequiredModels: [],
+  };
 }
 
 /** One protocol group keeps every model selectable without duplicate protocol variants. */

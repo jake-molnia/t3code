@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import type { ProviderInstanceConfig } from "@t3tools/contracts";
 import type { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as Schema from "effect/Schema";
+import { resolveCodexLaunchArgs } from "../provider/codexLaunchArgs.ts";
 
 const Defaults = Schema.Record(
   Schema.String,
@@ -95,11 +96,28 @@ export function gatewayRouting(text: string, environment: NodeJS.ProcessEnv = pr
     const route = resolve({ driver: instance.driver });
     const execution = decodeConfig(instance.config ?? {});
     const routing = decodeConfig(route.config ?? {});
-    const launchArgs =
-      typeof routing.launchArgs === "string" && typeof execution.launchArgs === "string"
-        ? [execution.launchArgs, routing.launchArgs].filter(Boolean).join(" ")
-        : routing.launchArgs;
     const variables = new Map((instance.environment ?? []).map((entry) => [entry.name, entry]));
+    const configuredArgs =
+      typeof execution.launchArgs === "string" ? execution.launchArgs : undefined;
+    const executionArgs =
+      instance.driver === "codex"
+        ? resolveCodexLaunchArgs(configuredArgs, {
+            ...environment,
+            ...Object.fromEntries(
+              (instance.environment ?? []).map((entry) => [entry.name, entry.value]),
+            ),
+          })
+        : configuredArgs;
+    const launchArgs =
+      typeof routing.launchArgs === "string"
+        ? [executionArgs, routing.launchArgs].filter(Boolean).join(" ")
+        : executionArgs;
+    if (instance.driver === "codex")
+      variables.set("T3CODE_CODEX_LAUNCH_ARGS", {
+        name: "T3CODE_CODEX_LAUNCH_ARGS",
+        value: "",
+        sensitive: false,
+      });
     if (instance.driver === "claudeAgent") {
       // Empty credentials override an inherited token in the process environment too.
       for (const name of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"])
