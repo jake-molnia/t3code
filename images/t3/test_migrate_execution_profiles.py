@@ -98,7 +98,7 @@ class MigrationTests(unittest.TestCase):
                 migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
         self.assertEqual(writes, ['observed'])
 
-    def test_lost_release_response_reconciles_observed_release(self):
+    def test_lost_release_response_fails_closed_when_already_completed(self):
         entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
         current = self.resource()
         writes = []
@@ -118,7 +118,10 @@ class MigrationTests(unittest.TestCase):
         with patch.object(migration, 'request', request):
             with self.assertRaises(migration.MigrationError):
                 migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
-            self.assertEqual(migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1),7)
+            with self.assertRaisesRegex(migration.MigrationError, 'release completion cannot be reconciled'):
+                migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
+            self.assertEqual(current['profile'],'v1')
+            self.assertNotIn('migration',entry)
         self.assertEqual(writes,[{'desiredState':'released'}])
 
     def test_lost_release_response_then_busy_worker_can_retry_after_restart(self):
@@ -284,6 +287,28 @@ class BindingGenerationTests(unittest.TestCase):
                 raise migration.MigrationError('response lost after profile commit')
             return 200, {}
         return 200, dict(self.current)
+
+    def test_unacknowledged_saved_release_does_not_adopt_unrelated_completed_release(self):
+        for accepted in (None, ''):
+            with self.subTest(acceptedVersion=accepted):
+                self.entry['release'] = {'version':'earlier-request','identity':{'incarnation':'earlier-worker'},'acceptedVersion':accepted}
+                with self.assertRaisesRegex(migration.MigrationError, 'release completion cannot be reconciled'):
+                    self.run_migration()
+                self.assertEqual(self.posts,[])
+                self.assertEqual(self.current['profile'],'v1')
+                self.assertNotIn('migration',self.entry)
+
+    def test_matching_accepted_release_version_allows_migration(self):
+        self.entry['release'] = {'version':'earlier-request','identity':{'incarnation':'worker'},'acceptedVersion':self.current['version']}
+        self.assertEqual(self.run_migration(),7)
+        self.assertEqual(self.current['profile'],'v2')
+        self.assertEqual(len(self.posts),1)
+
+    def test_fresh_already_released_workspace_requires_no_release_receipt(self):
+        self.assertEqual(self.run_migration(),7)
+        self.assertNotIn('release',self.entry)
+        self.assertEqual(self.current['profile'],'v2')
+        self.assertEqual(len(self.posts),1)
 
     def test_identity_persisted_before_submission_and_reused_after_rejection(self):
         self.reject_submission = True

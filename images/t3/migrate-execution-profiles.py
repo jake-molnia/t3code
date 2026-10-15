@@ -138,8 +138,11 @@ def migrate_controller(pool, entry, persist, source, target, timeout):
         else:
             raise MigrationError('workspace release timed out; retry the same ledger')
     receipt = entry.get('release')
-    if receipt and receipt.get('acceptedVersion') and current['version'] != receipt['acceptedVersion']:
-        raise MigrationError('workspace release superseded')
+    if receipt:
+        if not receipt.get('acceptedVersion'):
+            raise MigrationError('workspace release completion cannot be reconciled without its accepted version')
+        if current['version'] != receipt['acceptedVersion']:
+            raise MigrationError('workspace release superseded')
     info_code, info = request(pool, path + '/migration')
     if info_code != 200 or info['profile'] != source or info['state'] != 'released':
         raise MigrationError('released workspace migration metadata unavailable')
