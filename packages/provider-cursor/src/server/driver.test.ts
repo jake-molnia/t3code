@@ -124,7 +124,7 @@ it.layer(layerTest)("CursorDriver", (it) => {
             canLogout: true,
             email: "cursor@example.com",
           },
-          setup: { canAuthenticate: true, canInstall: false },
+          setup: { canAuthenticate: true },
         });
         const threadId = ThreadId.make("cursor-browser-thread");
         const modelSelection = { instanceId: input.instanceId, model: "auto" };
@@ -157,7 +157,7 @@ it.layer(layerTest)("CursorDriver", (it) => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect("keeps the bundled SDK manual-only without probing or updating cursor-agent", () =>
+  it.effect("uses the bundled SDK without probing or updating cursor-agent", () =>
     Effect.gen(function* () {
       const instance = yield* CursorDriver.create({
         instanceId: ProviderInstanceId.make("cursor-sdk"),
@@ -166,7 +166,7 @@ it.layer(layerTest)("CursorDriver", (it) => {
         environment: [],
         config: CursorDriver.defaultConfig(),
       });
-      expect((yield* instance.snapshot.resolveMaintenance()).update).toBeNull();
+      expect(yield* instance.snapshot.getVersionSource()).not.toHaveProperty("update");
       expect((yield* instance.snapshot.refresh).status).toBe("disabled");
     }).pipe(
       Effect.provideService(

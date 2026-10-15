@@ -168,7 +168,6 @@ import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.t
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as ModelManifest from "./provider/ModelManifest.ts";
-import * as ProviderMaintenance from "@t3tools/provider-core/server/maintenanceResolver";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -2205,11 +2204,11 @@ const layerWsRpc = (
                 (instance) =>
                   Effect.gen(function* () {
                     yield* instance.invalidateCaches ?? Effect.void;
-                    const maintenance = yield* instance.snapshot.resolveMaintenance({
+                    const versionSource = yield* instance.snapshot.getVersionSource({
                       fresh: true,
                     });
-                    if (maintenance.packageName)
-                      yield* providerLatestVersions.invalidate(maintenance.packageName);
+                    if (versionSource.packageName)
+                      yield* providerLatestVersions.invalidate(versionSource.packageName);
                   }),
                 { concurrency: "unbounded", discard: true },
               );

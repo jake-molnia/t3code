@@ -46,8 +46,8 @@ import {
 } from "@t3tools/provider-core/server/snapshotProbe";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
-  type ProviderMaintenanceCapabilities,
-} from "@t3tools/provider-core/server/maintenanceResolver";
+  type ProviderVersionSource,
+} from "@t3tools/provider-core/server/versionAdvisory";
 import {
   EMPTY_PI_MODEL_CAPABILITIES,
   thinkingCapabilitiesForPiModel,
@@ -462,7 +462,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
 
 export const enrichPiSnapshot = (input: {
   readonly snapshot: ServerProvider;
-  readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
+  readonly versionSource: ProviderVersionSource;
   readonly enableProviderUpdateChecks?: boolean;
   readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
 }): Effect.Effect<
@@ -471,7 +471,7 @@ export const enrichPiSnapshot = (input: {
   HttpClient.HttpClient | ProviderLatestVersions.ProviderLatestVersions
 > => {
   const { snapshot, publishSnapshot } = input;
-  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
+  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.versionSource, {
     enableProviderUpdateChecks: input.enableProviderUpdateChecks,
   }).pipe(
     Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),

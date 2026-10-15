@@ -65,14 +65,7 @@ import {
 } from "@t3tools/provider-core/server/driver";
 import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import {
-  enrichProviderSnapshotWithVersionAdvisory,
-  makeCachedProviderMaintenanceResolution,
-  makeManualOnlyProviderMaintenanceCapabilities,
-  makePackageManagedProviderMaintenanceResolver,
-  normalizeCommandPath,
-  resolveProviderMaintenanceCapabilitiesEffect,
-} from "@t3tools/provider-core/server/maintenanceResolver";
+import { enrichProviderSnapshotWithVersionAdvisory } from "@t3tools/provider-core/server/versionAdvisory";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -81,29 +74,6 @@ import {
 const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("opencode");
-
-function isOpenCodeNativeCommandPath(commandPath: string): boolean {
-  const normalized = normalizeCommandPath(commandPath);
-  return (
-    normalized.endsWith("/.opencode/bin/opencode") ||
-    normalized.endsWith("/.opencode/bin/opencode.exe")
-  );
-}
-
-/**
- * OpenCode 1.x ships as `opencode-ai` and 2.x as `@opencode/cli`. An install is
- * only ever updated within its own package: T3 never moves a 1.x install onto
- * 2.x or back, since 2.x converts the shared database in place.
- */
-export const openCodeUpdateFor = (generation: ProbedOpenCode["generation"]) =>
-  makePackageManagedProviderMaintenanceResolver({
-    provider: DRIVER_KIND,
-    npmPackageName: generation === "v2" ? "@opencode/cli" : "opencode-ai",
-    nativeUpdate: {
-      args: ["upgrade"],
-      isCommandPath: isOpenCodeNativeCommandPath,
-    },
-  });
 
 type OpenCodeRuntimeProbe = Effect.Success<
   ReturnType<typeof makeOpenCodeRuntimeProbe<OpenCodeRuntime.OpenCodeRuntimeError>>
@@ -205,7 +175,6 @@ export const OpenCodeDriver: ProviderDriver<
   usage: openCodeUsageReader,
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
       const openCodeRuntime = yield* OpenCodeRuntime.OpenCodeRuntime;
@@ -232,44 +201,15 @@ export const OpenCodeDriver: ProviderDriver<
           Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),
         ),
       );
-      // Updates follow the installed package, which the version probe names. An
-      // unknown version offers no package update, since a guess could move a
-      // 2.x install onto 1.x's package or the reverse. A disabled instance never
-      // runs its binary, so it has no version and offers no update.
-      const noUpdate = makeManualOnlyProviderMaintenanceCapabilities({
-        provider: DRIVER_KIND,
-        packageName: null,
-      });
-      const maintenanceFor = (probed: typeof runtimeProbe.get) =>
-        probed.pipe(
-          Effect.map((result) => result.generation),
-          Effect.option,
-          Effect.flatMap((generation) =>
-            Option.isNone(generation)
-              ? Effect.succeed(noUpdate)
-              : resolveProviderMaintenanceCapabilitiesEffect(openCodeUpdateFor(generation.value), {
-                  binaryPath: effectiveConfig.binaryPath,
-                  env: processEnv,
-                }),
-          ),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, pathService),
-        );
-      const cachedMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        maintenanceFor(runtimeProbe.get),
-      );
-      // A fresh read (an update about to run, or a manual refresh) re-probes, so
-      // a binary replaced by the other major version gets its own package.
-      const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
+      const getVersionSource = (options?: { readonly fresh?: boolean }) =>
         !effectiveConfig.enabled
-          ? Effect.succeed(noUpdate)
-          : options?.fresh === true
-            ? runtimeProbe.refresh.pipe(
-                Effect.ignore,
-                Effect.andThen(cachedMaintenance({ fresh: true })),
-              )
-            : cachedMaintenance();
+          ? Effect.succeed({ packageName: null })
+          : (options?.fresh ? runtimeProbe.refresh : runtimeProbe.get).pipe(
+              Effect.map((result) => ({
+                packageName: result.generation === "v2" ? "@opencode/cli" : "opencode-ai",
+              })),
+              Effect.orElseSucceed(() => ({ packageName: null })),
+            );
       const openCodeV1Adapter = yield* OpenCodeAdapterV2.OpenCodeAdapterV2Driver.create({
         instanceId,
         displayName,
@@ -313,14 +253,22 @@ export const OpenCodeDriver: ProviderDriver<
       });
       const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
         openCode2Server.withConnection(({ client }) =>
-          Effect.all({
-            models: loadOpenCode2Catalog(client, host.paths.cwd),
-            entries: client.config.get({ location: { directory: host.paths.cwd } }),
-          }, { concurrency: "unbounded" }).pipe(
+          Effect.all(
+            {
+              models: loadOpenCode2Catalog(client, host.paths.cwd),
+              entries: client.config.get({ location: { directory: host.paths.cwd } }),
+            },
+            { concurrency: "unbounded" },
+          ).pipe(
             Effect.map(({ models, entries }) => openCode2ModelsAfterConfiguration(models, entries)),
-            Effect.mapError((cause) => new OpenCodeRuntime.OpenCodeRuntimeError({
-              operation: "model.list", detail: "The OpenCode server could not list its configured models.", cause,
-            })),
+            Effect.mapError(
+              (cause) =>
+                new OpenCodeRuntime.OpenCodeRuntimeError({
+                  operation: "model.list",
+                  detail: "The OpenCode server could not list its configured models.",
+                  cause,
+                }),
+            ),
           ),
         ),
       );
@@ -462,7 +410,7 @@ export const OpenCodeDriver: ProviderDriver<
       const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<OpenCodeSettings>>(
         {
-          resolveMaintenance,
+          getVersionSource,
           getSettings: snapshotSettings.getSettings,
           streamSettings: snapshotSettings.streamSettings,
           haveSettingsChanged: haveProviderSnapshotSettingsChanged,
@@ -472,9 +420,9 @@ export const OpenCodeDriver: ProviderDriver<
             makePendingOpenCodeProvider(settings.provider).pipe(Effect.map(stampIdentity)),
           checkProvider,
           enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
-            resolveMaintenance().pipe(
-              Effect.flatMap((maintenanceCapabilities) =>
-                enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
+            getVersionSource().pipe(
+              Effect.flatMap((versionSource) =>
+                enrichProviderSnapshotWithVersionAdvisory(snapshot, versionSource, {
                   enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
                 }),
               ),

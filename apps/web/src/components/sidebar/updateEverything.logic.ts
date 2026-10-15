@@ -35,7 +35,7 @@ export interface RestartingMachine {
 
 /**
  * The servers a run restarts: each server it updates, and the servers this app
- * hosts when this app installs. Provider updates restart nothing.
+ * hosts when this app installs.
  */
 export function collectRestartingMachines(
   machines: ReadonlyArray<UpdateEverythingMachine>,
@@ -117,22 +117,20 @@ export function collectServerUpdateTargets(
 export interface UpdateEverythingSteps {
   /** Downloads this app's update. Resolves true when it is ready to install. */
   readonly downloadLocal?: () => Promise<boolean>;
-  readonly updateProviders: () => Promise<void>;
   readonly updateServers: () => Promise<void>;
   /** Installs this app's update. The relaunch ends the run. */
   readonly installLocal?: () => Promise<void>;
 }
 
 /**
- * Runs one "update everything" pass. Providers
- * finish before any server restarts, so no install is cut off. The local download runs alongside the
+ * Runs one "update everything" pass. The local download runs alongside the
  * remote work. This app installs last because its relaunch ends the run; a
  * failed download skips only that install. Steps report their own results.
  */
 export async function runUpdateEverything(steps: UpdateEverythingSteps): Promise<void> {
   const [localReady] = await Promise.all([
     steps.downloadLocal?.() ?? Promise.resolve(true),
-    steps.updateProviders().then(steps.updateServers),
+    steps.updateServers(),
   ]);
   if (localReady) await steps.installLocal?.();
 }
@@ -143,12 +141,6 @@ export interface UpdateEverythingPlan {
   readonly servers: ReadonlyArray<
     Pick<ServerUpdateTarget, "environmentId" | "serverLabel" | "selfUpdate" | "targetVersion">
   >;
-  readonly providerMachines: ReadonlyArray<{
-    readonly environmentId: EnvironmentId;
-    readonly label: string;
-    /** Display names of the outdated providers on that machine. */
-    readonly providers: ReadonlyArray<string>;
-  }>;
 }
 
 function countLabel(count: number, noun: string): string | null {
@@ -162,23 +154,17 @@ function joinList(parts: ReadonlyArray<string>): string {
 
 /**
  * Text for the sidebar tooltip and the confirmation. `summary` reads like
- * "Update this app, 2 servers, and 3 providers". `lines` has one entry per
- * machine, this app first, such as "alvin: server to 0.0.50, Codex, Claude".
+ * "Update this app and 2 servers". `lines` has one entry per
+ * machine, this app first, such as "alvin: server to 0.0.50".
  */
 export function describeUpdateEverything(plan: UpdateEverythingPlan): {
   readonly summary: string;
   readonly lines: ReadonlyArray<string>;
 } {
-  const providerCount = plan.providerMachines.reduce(
-    (count, machine) => count + machine.providers.length,
-    0,
-  );
   const summary = `Update ${joinList(
-    [
-      plan.localVersion ? "this app" : null,
-      countLabel(plan.servers.length, "server"),
-      countLabel(providerCount, "provider"),
-    ].filter((part) => part !== null),
+    [plan.localVersion ? "this app" : null, countLabel(plan.servers.length, "server")].filter(
+      (part) => part !== null,
+    ),
   )}`;
 
   const machines = new Map<EnvironmentId, { label: string; items: string[] }>();
@@ -197,9 +183,6 @@ export function describeUpdateEverything(plan: UpdateEverythingPlan): {
         ? "desktop app update"
         : `server to ${server.targetVersion}`,
     );
-  }
-  for (const machine of plan.providerMachines) {
-    itemsFor(machine.environmentId, machine.label).push(...machine.providers);
   }
 
   return {

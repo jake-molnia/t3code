@@ -86,11 +86,26 @@ describe("ACP Registry wizard", () => {
   it("only marks matching ACP Registry instances as already added", () => {
     const instances = {
       codex: { driver: "codex", config: { agentId: "gemini" } },
-      registry: { driver: "acpRegistry", config: { agentId: "gemini" } },
+      registry: {
+        driver: "acpRegistry",
+        config: { agentId: "gemini", commandPath: "/opt/agents/bin/gemini" },
+      },
     };
 
     expect(isConfiguredAcpRegistryAgent(instances, "gemini")).toBe(true);
     expect(isConfiguredAcpRegistryAgent(instances, "codex")).toBe(false);
+    expect(
+      isConfiguredAcpRegistryAgent(
+        { missing: { driver: "acpRegistry", config: { agentId: "gemini" } } },
+        "gemini",
+      ),
+    ).toBe(false);
+    expect(
+      isConfiguredAcpRegistryAgent(
+        { blank: { driver: "acpRegistry", config: { agentId: "gemini", commandPath: "  " } } },
+        "gemini",
+      ),
+    ).toBe(false);
   });
 
   it("keeps registry-prefilled identity separate from other drivers", () => {
