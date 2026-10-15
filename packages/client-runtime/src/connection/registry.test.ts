@@ -67,7 +67,6 @@ import * as ConnectionWakeups from "./wakeups.ts";
 import { watchDiscoveredCompatibility } from "./layer.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import type { RelayEnvironmentStatusResponse } from "@t3tools/contracts/relay";
-import { runDesktopCommitWithReconnectObserver } from "../state/server.ts";
 import { v2ShellSnapshot } from "../state/orchestrationV2TestFixtures.ts";
 
 const TARGET = new PrimaryConnectionTarget({
@@ -522,7 +521,7 @@ function awaitConnectionState(
 }
 
 describe("EnvironmentRegistry", () => {
-  it.effect("replays connected state when arming a desktop commit observer", () =>
+  it.effect("replays the current connected state to a new subscriber", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness([TARGET]);
 
@@ -535,16 +534,10 @@ describe("EnvironmentRegistry", () => {
           (state) => state.phase === "connected",
         );
 
-        const commits = yield* Ref.make(0);
-        const result = yield* runDesktopCommitWithReconnectObserver(
-          registry.stateChanges(TARGET.environmentId),
-          Ref.update(commits, (count) => count + 1).pipe(
-            Effect.andThen(Effect.fail("commit refused")),
-          ),
-        ).pipe(Effect.flip, Effect.timeout("1 second"));
-
-        expect(result).toBe("commit refused");
-        expect(yield* Ref.get(commits)).toBe(1);
+        const replayed = yield* registry
+          .stateChanges(TARGET.environmentId)
+          .pipe(Stream.runHead, Effect.map(Option.getOrThrow));
+        expect(replayed.phase).toBe("connected");
       }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
   );

@@ -1,3 +1,4 @@
+import { ServerReleaseNotice } from "./serverVersion.ts";
 import { ExecutionPoolsSnapshot } from "./executionPools.ts";
 import { SandboxIdeOpenInput, SandboxIdeOpenResult, SandboxIdeError } from "./sandboxIde.ts";
 import {
@@ -291,10 +292,6 @@ import {
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
   ServerProviderUpdatedPayload,
-  ServerSelfUpdateError,
-  ServerSelfUpdateInput,
-  ServerSelfUpdateProgressEvent,
-  ServerSelfUpdateResult,
   ServerTraceDiagnosticsResult,
   ServerProcessDiagnosticsResult,
   ServerProcessResourceHistoryInput,
@@ -464,10 +461,9 @@ export const WS_METHODS = {
   // Server meta
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
+  serverGetReleaseNotice: "server.getReleaseNotice",
   serverExecutionPools: "server.executionPools",
   serverRefreshProviders: "server.refreshProviders",
-  serverUpdateServer: "server.updateServer",
-  serverUpdateServerWithProgress: "server.updateServerWithProgress",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
@@ -597,6 +593,12 @@ const WsServerExecutionPoolsRpc = Rpc.make(WS_METHODS.serverExecutionPools, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsServerGetReleaseNoticeRpc = Rpc.make(WS_METHODS.serverGetReleaseNotice, {
+  payload: Schema.Struct({}),
+  success: ServerReleaseNotice,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
@@ -689,19 +691,6 @@ const WsProviderAuthSubscribeRpc = Rpc.make(WS_METHODS.providerAuthSubscribe, {
   payload: ProviderSetupInput,
   success: ProviderAuthState,
   error: ProviderSetupRpcError,
-  stream: true,
-});
-
-const WsServerUpdateServerRpc = Rpc.make(WS_METHODS.serverUpdateServer, {
-  payload: ServerSelfUpdateInput,
-  success: ServerSelfUpdateResult,
-  error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
-});
-
-const WsServerUpdateServerWithProgressRpc = Rpc.make(WS_METHODS.serverUpdateServerWithProgress, {
-  payload: ServerSelfUpdateInput,
-  success: ServerSelfUpdateProgressEvent,
-  error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
   stream: true,
 });
 
@@ -1826,6 +1815,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
+  WsServerGetReleaseNoticeRpc,
   WsServerExecutionPoolsRpc,
   WsServerRefreshProvidersRpc,
   WsProviderConsumeResetCreditRpc,
@@ -1839,8 +1829,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderAuthCancelRpc,
   WsProviderAuthLogoutRpc,
   WsProviderAuthSubscribeRpc,
-  WsServerUpdateServerRpc,
-  WsServerUpdateServerWithProgressRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,

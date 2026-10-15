@@ -1,4 +1,4 @@
-import { HOSTED_APP_CHANNEL } from "~/branding";
+import { HOSTED_APP_CHANNEL } from "../../branding";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 import { STATIC_KEYBINDING_COMMANDS, type KeybindingCommand } from "@t3tools/contracts";
@@ -51,13 +51,12 @@ export interface SettingsSearchItem {
   // Its row only renders in the desktop app, so a browser result would land on
   // an anchor that isn't there.
   readonly desktopOnly?: boolean;
+  /** Only builds with an explicit hosted web channel render this row. */
+  readonly hostedChannelOnly?: boolean;
   readonly macOnly?: boolean;
   // Its row only renders on Windows desktop, so other desktop platforms must
   // not expose a result that points to a missing anchor.
   readonly windowsOnly?: boolean;
-  // Its row renders only where the release channel can change: the desktop
-  // app, or a hosted web build deployed with a channel.
-  readonly releaseChannelOnly?: boolean;
   readonly cloudOnly?: boolean;
   readonly environmentOnly?: boolean;
   readonly providerSettingsOnly?: boolean;
@@ -536,14 +535,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "app-version",
     title: "Version",
     to: "/settings/general",
-    searchTerms: ["about check for updates download install upgrade release"],
+    searchTerms: ["about server version fork revision upstream baseline image builds deployment"],
   },
   {
     id: "update-track",
-    title: "Update track",
+    title: "Web app channel",
     to: "/settings/general",
-    searchTerms: ["release channel stable latest nightly prerelease"],
-    releaseChannelOnly: true,
+    searchTerms: ["update track release channel latest nightly hosted browser"],
+    hostedChannelOnly: true,
   },
   {
     id: "cli-command",
@@ -1078,7 +1077,7 @@ export function searchSettings(
   return items
     .flatMap((item, index) => {
       if (!isElectron && item.desktopOnly === true) return [];
-      if (item.releaseChannelOnly && !isElectron && HOSTED_APP_CHANNEL === null) return [];
+      if (item.hostedChannelOnly && HOSTED_APP_CHANNEL === null) return [];
       if (item.macOnly && !isMacPlatform(platform)) return [];
       if (item.windowsOnly && !isWindowsPlatform(platform)) return [];
 

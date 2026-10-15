@@ -323,19 +323,14 @@ export function createDevRunnerEnv({
         `http://${isDesktopMode ? DESKTOP_DEV_LOOPBACK_HOST : "localhost"}:${webPort}`,
     };
 
+    // Checkout processes do not run the enclosing image's source.
+    delete output.T3_SOURCE_REVISION;
+
     if (configuredBaseDir !== undefined) {
       output.T3CODE_HOME = resolvedBaseDir;
     } else {
       delete output.T3CODE_HOME;
     }
-
-    // A dev-runner server is never launcher-managed. When the shell that runs
-    // this script was itself spawned by the machine's managed t3 service (an
-    // agent working inside T3 Code), these leak through and the child server
-    // fails startup with "The service launcher started a different t3 version"
-    // (serviceLauncherClient.ts resolveStartup).
-    delete output.T3_SERVICE_LAUNCHER_CONTEXT;
-    delete output.T3_BOOT_SERVICE_UNIT;
 
     if (!isDesktopMode) {
       output.T3CODE_PORT = String(serverPort);

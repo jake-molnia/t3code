@@ -76,11 +76,11 @@ an idle resource, retaining the hostname reservation for the next startup.
 It also retains the allocation record so the environment remains "offline"
 rather than becoming "not authorized".
 
-Two cases must retain the tunnel across shutdown. A link installed through a
-client has no startup provisioning path and depends on its stored connector
-token. An update handoff immediately starts a replacement server, and replacing
-the tunnel would add routing propagation delay to every update. These exceptions
-belong to [shutdown handling](../../apps/server/src/cloud/CloudLink.ts).
+Client-installed links retain their tunnels at shutdown; the eager release path
+requires CLI authorization. The relay reaper reclaims inactive links after its
+grace period. Deployment-image replacement uses normal shutdown and does not
+produce a special tunnel-preservation signal. See
+[shutdown handling](../../apps/server/src/cloud/CloudLink.ts).
 
 Release and unlink claim the allocation generation before deleting external
 resources. A delayed cleanup must not delete a tunnel reused by a concurrent
@@ -116,7 +116,7 @@ A host registers recovery at startup by sending its tunnel ID and loopback
 origin with a short-lived signature from the environment key. Registration
 touches Cloudflare only when the local host or port changed, and once per
 existing allocation on the first registration after the upgrade because the
-stored origin is empty. First registrations are jittered so an auto-update wave
+stored origin is empty. First registrations are jittered so a restart wave
 does not hit the relay at once. The host stores a confirmed-origin marker with
 the connector config, and a later boot starts the connector before registration
 only when that marker matches the current config and port. If registration

@@ -1,13 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
@@ -15,17 +12,10 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse, HttpServer, type HttpClientRequest } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
 
-import { DESKTOP_UPDATE_RESTART_MARKER_FILE, EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@t3tools/contracts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfigModule from "../config.ts";
-import { writeServiceState } from "../serviceLauncher.ts";
-import {
-  SERVICE_LAUNCHER_PROTOCOL,
-  SERVICE_STATE_FILE,
-  SERVICE_STOP_MARKER_FILE,
-  type ServiceUpdateRecord,
-} from "./serviceProtocol.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as AgentAwarenessRelay from "../relay/AgentAwarenessRelay.ts";
 import { CLOUD_CLI_DESIRED_LINK_SECRET } from "./CliState.ts";
@@ -42,7 +32,6 @@ import {
 } from "./config.ts";
 import * as CloudLink from "./CloudLink.ts";
 import { consumeCloudReplayGuards } from "./CloudLink.ts";
-import { pendingServiceUpdateExists } from "./updateHandoff.ts";
 import {
   managedTunnelStartupAction,
   retryManagedTunnelRegistration,
@@ -242,37 +231,6 @@ describe("releaseManagedTunnelOnShutdown", () => {
     readonly respondEffect?: Effect.Effect<Response>;
   }
 
-  // Writes the launcher's durable state file into this test's baseDir with
-  // the launcher's own writer; the release reads it to detect an in-flight
-  // update handoff.
-  const writeLauncherState = (update: ServiceUpdateRecord) =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const config = yield* ServerConfigModule.ServerConfig;
-      const statePath = path.join(config.baseDir, "runtime", SERVICE_STATE_FILE);
-      yield* Effect.promise(() =>
-        writeServiceState(statePath, {
-          protocol: SERVICE_LAUNCHER_PROTOCOL,
-          activeVersion: "0.0.30",
-          update,
-        }),
-      );
-    });
-
-  // Writes the marker the desktop app leaves just before it stops its backend
-  // to install an update, and returns when it was written.
-  const writeDesktopUpdateRestartMarker = Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const config = yield* ServerConfigModule.ServerConfig;
-    const runtimeDir = path.join(config.baseDir, "runtime");
-    const markerPath = path.join(runtimeDir, DESKTOP_UPDATE_RESTART_MARKER_FILE);
-    yield* fs.makeDirectory(runtimeDir, { recursive: true });
-    yield* fs.writeFileString(markerPath, "");
-    const { mtime } = yield* fs.stat(markerPath);
-    return Option.getOrThrow(mtime).getTime();
-  });
-
   const provideReleaseHarness =
     (harness: ReleaseHarness) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -451,121 +409,6 @@ describe("releaseManagedTunnelOnShutdown", () => {
       expect(applyConfigCalls).toEqual([]);
       expect(requests).toEqual([]);
       expect(values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(true);
-    }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
-  });
-
-  it.effect("keeps the tunnel when shutdown hands off to a pending update", () => {
-    const { store, values } = makeMemorySecretStore(managedLinkSecrets);
-    const applyConfigCalls: Array<unknown> = [];
-    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-
-    return Effect.gen(function* () {
-      const link = yield* CloudLink.CloudLink;
-      yield* writeLauncherState({
-        id: "update-1",
-        fromVersion: "0.0.30",
-        targetVersion: "0.0.31",
-        dbPath: "/tmp/state.sqlite",
-        status: "pending",
-      });
-
-      const released = yield* link.releaseManagedTunnelOnShutdown();
-
-      // The launcher restarts a server immediately, so the tunnel is not
-      // orphaned; keeping it avoids the hostname route re-propagation that
-      // dominates update downtime. The stored config must survive so the
-      // next boot respawns the connector against the same tunnel.
-      expect(released).toBe(false);
-      expect(applyConfigCalls).toEqual([]);
-      expect(requests).toEqual([]);
-      expect(values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(true);
-    }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
-  });
-
-  it.effect("keeps the tunnel once when the desktop app restarts it for an update", () => {
-    const { store, values } = makeMemorySecretStore(managedLinkSecrets);
-    const applyConfigCalls: Array<unknown> = [];
-    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-
-    return Effect.gen(function* () {
-      const link = yield* CloudLink.CloudLink;
-      yield* TestClock.setTime(yield* writeDesktopUpdateRestartMarker);
-
-      expect(yield* link.releaseManagedTunnelOnShutdown()).toBe(false);
-      expect(requests).toEqual([]);
-      expect(values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(true);
-
-      // The shutdown consumed the marker, so a later quit releases the tunnel.
-      expect(yield* link.releaseManagedTunnelOnShutdown()).toBe(true);
-      expect(requests).toHaveLength(1);
-    }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
-  });
-
-  it.effect("releases the tunnel when the desktop update marker is stale", () => {
-    const { store } = makeMemorySecretStore(managedLinkSecrets);
-    const applyConfigCalls: Array<unknown> = [];
-    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-
-    return Effect.gen(function* () {
-      const link = yield* CloudLink.CloudLink;
-      const writtenAt = yield* writeDesktopUpdateRestartMarker;
-      yield* TestClock.setTime(writtenAt + Duration.toMillis(Duration.minutes(2)));
-
-      expect(yield* link.releaseManagedTunnelOnShutdown()).toBe(true);
-      expect(requests).toHaveLength(1);
-    }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
-  });
-
-  it.effect("still releases a pending update when the launcher is stopping", () => {
-    // `t3 service uninstall` or `systemctl stop` during the pending window:
-    // the launcher writes its stop marker before signalling the child, so no
-    // replacement server is coming and the tunnel must not be kept.
-    const { store, values } = makeMemorySecretStore(managedLinkSecrets);
-    const applyConfigCalls: Array<unknown> = [];
-    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-
-    return Effect.gen(function* () {
-      const link = yield* CloudLink.CloudLink;
-      yield* writeLauncherState({
-        id: "update-1",
-        fromVersion: "0.0.30",
-        targetVersion: "0.0.31",
-        dbPath: "/tmp/state.sqlite",
-        status: "pending",
-      });
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const config = yield* ServerConfigModule.ServerConfig;
-      yield* fs.writeFileString(path.join(config.baseDir, "runtime", SERVICE_STOP_MARKER_FILE), "");
-
-      expect(yield* pendingServiceUpdateExists).toBe(true);
-      const released = yield* link.releaseManagedTunnelOnShutdown();
-
-      expect(released).toBe(true);
-      expect(requests).toHaveLength(1);
-      expect(values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(false);
-    }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
-  });
-
-  it.effect("still releases when the recorded update already settled", () => {
-    const { store, values } = makeMemorySecretStore(managedLinkSecrets);
-    const applyConfigCalls: Array<unknown> = [];
-    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-
-    return Effect.gen(function* () {
-      const link = yield* CloudLink.CloudLink;
-      yield* writeLauncherState({
-        id: "update-1",
-        fromVersion: "0.0.30",
-        targetVersion: "0.0.31",
-        status: "committed",
-      });
-
-      const released = yield* link.releaseManagedTunnelOnShutdown();
-
-      expect(released).toBe(true);
-      expect(requests).toHaveLength(1);
-      expect(values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(false);
     }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
   });
 

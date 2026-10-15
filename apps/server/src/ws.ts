@@ -1,3 +1,4 @@
+import * as ServerVersion from "./environment/ServerVersion.ts";
 import * as ExecutionPools from "./agentRuntime/ExecutionPools.ts";
 import * as AgentRuntimeClient from "./agentRuntime/RuntimeClient.ts";
 import * as RuntimeContracts from "@t3tools/contracts";
@@ -79,7 +80,6 @@ import {
   ProviderSetupError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
-  ServerSelfUpdateError,
   type ServerConfig as ClientServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
@@ -1250,6 +1250,7 @@ const layerWsRpc = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+      const serverVersion = yield* ServerVersion.ServerVersion;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
@@ -2105,6 +2106,7 @@ const layerWsRpc = (
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
+        [WS_METHODS.serverGetReleaseNotice]: () => serverVersion.check,
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
@@ -2359,18 +2361,6 @@ const layerWsRpc = (
         [WS_METHODS.providerAuthLogout]: (input) => providerAuth.logout(input),
         [WS_METHODS.providerAuthSubscribe]: (input) =>
           providerAuth.subscribe(input, currentSessionId),
-        [WS_METHODS.serverUpdateServer]: () =>
-          Effect.fail(
-            new ServerSelfUpdateError({
-              reason: "Server updates are managed by the deployment image.",
-            }),
-          ),
-        [WS_METHODS.serverUpdateServerWithProgress]: () =>
-          Stream.fail(
-            new ServerSelfUpdateError({
-              reason: "Server updates are managed by the deployment image.",
-            }),
-          ),
         [WS_METHODS.serverUpsertKeybinding]: (rule) =>
           Effect.gen(function* () {
             const keybindingsConfig = yield* keybindings.upsertKeybindingRule(rule);
