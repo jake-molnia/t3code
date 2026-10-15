@@ -23,12 +23,9 @@ import type {
 } from "@t3tools/contracts";
 import { mergeGitStatusParts } from "@t3tools/shared/git";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import * as ServerSettings from "../serverSettings.ts";
 
 const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
@@ -149,25 +146,6 @@ export class VcsAutoPullPolicy extends Context.Reference<{
 }>("t3/vcs/VcsAutoPullPolicy", {
   defaultValue: () => ({ isEnabled: () => Effect.succeed(false) }),
 }) {}
-
-export const layerAutoPullPolicy = Layer.effect(
-  VcsAutoPullPolicy,
-  Effect.gen(function* () {
-    const projects = yield* ProjectStore.ProjectStoreV2;
-    const serverSettings = yield* ServerSettings.ServerSettingsService;
-    return {
-      isEnabled: Effect.fn("VcsAutoPullPolicy.isEnabled")(
-        function* (cwd: string) {
-          const project = yield* projects.findActiveByWorkspaceRoot(cwd);
-          if (project._tag === "None") return false;
-          const settings = yield* serverSettings.getSettings;
-          return resolveProjectSettings(settings, project.value.projectId).settings.defaultAutoPull;
-        },
-        Effect.orElseSucceed(() => false),
-      ),
-    };
-  }),
-);
 
 export function remoteRefreshFailureDelay(
   consecutiveFailures: number,

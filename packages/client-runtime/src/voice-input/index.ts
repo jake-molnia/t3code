@@ -1,8 +1,4 @@
 export {
-  VoiceInputController,
-  VOICE_RECORDING_LIMIT_SECONDS,
-  voiceInputBlocksSubmission,
-  voiceInputFreezesEditor,
   type VoiceDraftSnapshot,
   type VoiceInputControllerDependencies,
   type VoiceInputPhase,
@@ -11,8 +7,6 @@ export {
   type VoiceRecorderStatus,
 } from "./controller.ts";
 export {
-  VoiceTranscriptionError,
-  throwIfVoiceTranscriptionAborted,
   type PreparedVoiceTranscription,
   type VoiceTranscriber,
   type VoiceTranscriptionErrorCode,

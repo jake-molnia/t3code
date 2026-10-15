@@ -45,10 +45,6 @@ class DesktopSshDiscoveryError extends Schema.TaggedError<DesktopSshDiscoveryErr
   }
 }
 
-function getDesktopSshDiscoveryBridge(): DesktopSshDiscoveryBridge | undefined {
-  return typeof window === "undefined" ? undefined : window.desktopBridge;
-}
-
 export function createDesktopSshHostsStateAtom(
   getBridge: () => DesktopSshDiscoveryBridge | undefined,
 ) {
@@ -69,7 +65,3 @@ export function createDesktopSshHostsStateAtom(
     Atom.withLabel("desktop:ssh-hosts"),
   );
 }
-
-export const desktopSshHostsStateAtom = createDesktopSshHostsStateAtom(
-  getDesktopSshDiscoveryBridge,
-);

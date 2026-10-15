@@ -7,8 +7,6 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
 
-import { appAtomRegistry } from "~/rpc/atomRegistry";
-
 const DESKTOP_NETWORK_ACCESS_STALE_TIME_MS = 30_000;
 
 type DesktopNetworkAccessBridge = Pick<
@@ -48,10 +46,6 @@ class DesktopAdvertisedEndpointsLoadError extends Schema.TaggedError<DesktopAdve
   }
 }
 
-function getDesktopNetworkAccessBridge(): DesktopNetworkAccessBridge | undefined {
-  return typeof window === "undefined" ? undefined : window.desktopBridge;
-}
-
 export function createDesktopNetworkAccessStateAtom(
   getBridge: () => DesktopNetworkAccessBridge | undefined,
 ) {
@@ -87,12 +81,4 @@ export function createDesktopNetworkAccessStateAtom(
     Atom.keepAlive,
     Atom.withLabel("desktop:network-access"),
   );
-}
-
-export const desktopNetworkAccessStateAtom = createDesktopNetworkAccessStateAtom(
-  getDesktopNetworkAccessBridge,
-);
-
-export function refreshDesktopNetworkAccessState(): void {
-  appAtomRegistry.refresh(desktopNetworkAccessStateAtom);
 }

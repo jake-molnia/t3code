@@ -34,7 +34,7 @@ const decodeProgress = Schema.decodeUnknownEffect(P.Progress);
 const decodePath = Schema.decodeUnknownEffect(Schema.String);
 const isGitError = Schema.is(C.GitCommandError);
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const routes = yield* Routing.WorkspaceRouting;
   const crypto = yield* Crypto.Crypto;
   const invoke = <A, I>(

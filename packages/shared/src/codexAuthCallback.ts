@@ -14,11 +14,6 @@ export class CodexAuthCallbackError extends Schema.TaggedError<CodexAuthCallback
 
 const listeners = new Map<string, AbortController>();
 
-export function cancelCodexAuthCallback(authorizationUrl: string) {
-  const { state } = codexAuthorizationRequest(authorizationUrl);
-  listeners.get(state)?.abort();
-}
-
 /** Receive an authorization code locally. Credentials and PKCE stay on the target environment. */
 export async function receiveCodexAuthCallback(
   authorizationUrl: string,

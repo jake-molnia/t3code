@@ -30,12 +30,6 @@ export class SshPairingError extends Data.TaggedError("SshPairingError")<{
   readonly cause?: unknown;
 }> {}
 
-export class SshHttpBridgeError extends Data.TaggedError("SshHttpBridgeError")<{
-  readonly message: string;
-  readonly status?: number;
-  readonly cause?: unknown;
-}> {}
-
 export class SshReadinessError extends Data.TaggedError("SshReadinessError")<{
   readonly message: string;
   readonly cause?: unknown;

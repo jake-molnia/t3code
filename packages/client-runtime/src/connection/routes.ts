@@ -203,15 +203,6 @@ export function connectionRouteLabel(route: ConnectionRoute): string {
   }
 }
 
-/** The address shown under a route, or null for T3 Connect. */
-export function connectionRouteAddress(route: ConnectionRoute): string | null {
-  if (route.target._tag === "SshConnectionTarget") {
-    const profile = Option.getOrNull(route.profile);
-    return profile?._tag === "SshConnectionProfile" ? profile.target.alias : null;
-  }
-  return routeHttpBaseUrl(route);
-}
-
 /** Whether the environment can be reached through T3 Connect. */
 export function hasRelayRoute(
   entry: Pick<ConnectionCatalogEntry, "target" | "alternateRoutes">,

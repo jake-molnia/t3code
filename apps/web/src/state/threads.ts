@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { enabledEnvironmentIds } from "@t3tools/client-runtime/state/connections";
+
 import { arrayElementsEqual } from "@t3tools/client-runtime/state/entities";
 import {
   createEnvironmentThreadDetailAtoms,
@@ -123,12 +123,3 @@ export function createRunningThreadKeepAliveAtom<E>(input: {
     return kept;
   }).pipe(Atom.withLabel("web-running-thread-keep-alive"));
 }
-
-/** Mounted by `RunningThreadKeepAlive` on desktop, for every enabled environment. */
-export const runningThreadKeepAliveAtom = createRunningThreadKeepAliveAtom({
-  environmentIdsAtom: Atom.map(environmentCatalog.catalogValueAtom, (catalog) => [
-    ...enabledEnvironmentIds(catalog),
-  ]),
-  threadsAtom: environmentThreadShells.environmentThreadsAtom,
-  stateAtom: environmentThreads.stateAtom,
-});

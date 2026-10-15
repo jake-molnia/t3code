@@ -55,10 +55,6 @@ const activeEnvironmentIdAtom = Atom.make<EnvironmentId | null>(null).pipe(
   Atom.withLabel("web-active-environment-id"),
 );
 
-export function useActiveEnvironmentId(): EnvironmentId | null {
-  return useAtomValue(activeEnvironmentIdAtom);
-}
-
 export function setActiveEnvironmentId(environmentId: EnvironmentId | null): void {
   appAtomRegistry.set(activeEnvironmentIdAtom, environmentId);
 }
