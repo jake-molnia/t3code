@@ -307,7 +307,6 @@ import {
   projectScriptIdFromCommand,
   releaseClaimedRoles,
 } from "~/projectScripts";
-import { useRemoteOpenState } from "~/remoteOpen";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { useEnvironmentScope } from "~/state/session";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
@@ -519,7 +518,6 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { expandedImageKey, type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { MessagesTimeline, type MessagesTimelineHistoryControls } from "./chat/MessagesTimeline";
 import { resolveTimelineIsAtEnd, worktreeSetupAgentStarted } from "./chat/MessagesTimeline.logic";
-import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
 import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
 import {
   PanelLayoutControls,
@@ -2630,7 +2628,6 @@ export default function ChatView(props: ChatViewProps) {
   // Compute the list of environments this logical project spans, used to
   // drive the environment picker in BranchToolbar.
   const allProjects = useProjects();
-  const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   useEffect(() => {
     if (!activeThreadRef || !activeProjectRef) return;
     registerFaviconProjectForThread(activeThreadRef, activeProjectRef);
@@ -3951,17 +3948,10 @@ export default function ChatView(props: ChatViewProps) {
     useAtomValue(serverEnvironment.configValueAtom(environmentId))?.keybindings ??
     DEFAULT_RESOLVED_KEYBINDINGS;
   const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
-  const remoteOpenState = useRemoteOpenState(activeThread?.environmentId ?? environmentId);
   const showOpenInPicker =
-    poolCatalog.snapshot?.sandboxIdeAvailable === true &&
-    shouldShowOpenInPicker({
-      activeProjectName: activeProject?.title,
-      activeThreadEnvironmentId: activeThread?.environmentId ?? environmentId,
-      primaryEnvironmentId,
-      remoteOpenMode: remoteOpenState.mode,
-    });
+    poolCatalog.snapshot?.sandboxIdeAvailable === true && Boolean(activeProject);
   useOpenFavoriteEditorShortcut({
-    threadId,
+    target: isServerThread ? { threadId } : activeProject ? { projectId: activeProject.id } : null,
     enabled: showOpenInPicker,
     environmentId: activeThread?.environmentId ?? environmentId,
     keybindings,
@@ -10893,6 +10883,11 @@ export default function ChatView(props: ChatViewProps) {
     keybindings,
     availableEditors,
     showOpenInPicker,
+    editorTarget: isServerThread
+      ? { threadId }
+      : activeProject
+        ? { projectId: activeProject.id }
+        : null,
     gitCwd,
     isGitRepo,
     envLocked,

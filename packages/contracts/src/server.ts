@@ -18,7 +18,7 @@ import {
   KeybindingWhen,
   ResolvedKeybindingsConfig,
 } from "./keybindings.ts";
-import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
+import { EditorId } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
@@ -655,12 +655,6 @@ export const ServerConfig = Schema.Struct({
   // failing the whole config decode.
   availableEditors: ForwardCompatibleArray(EditorId),
   /**
-   * SSH hosts this environment advertises for remote open-in-editor links.
-   * Absent on servers that predate the feature; empty when the machine has no
-   * sshd or no advertisable name.
-   */
-  remoteOpenTargets: Schema.optionalKey(ForwardCompatibleArray(RemoteOpenTarget)),
-  /**
    * Direct addresses this server listens on right now (LAN and tailnet), so a
    * client connected one way can learn the others. Hints only: the client
    * checks each address answers as this environment before using it. Absent on
@@ -671,11 +665,6 @@ export const ServerConfig = Schema.Struct({
   settings: ServerSettings,
   /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
-  /** Whether shell.openInEditor honors `LaunchEditorInput.reveal` for the
-      file-manager editor. */
-  shellRevealInFileManager: Schema.optionalKey(Schema.Boolean),
-  /** File-manager wording clients should use for reveal actions. */
-  shellRevealInFileManagerKind: Schema.optionalKey(FileManagerRevealKind),
   /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
   threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**

@@ -63,6 +63,7 @@ describe("ThreadDetailsPanel", () => {
       preferredScriptId: null,
       keybindings: [],
       availableEditors: [],
+      editorTarget: null,
       showOpenInPicker: false,
       gitCwd,
       isGitRepo: false,

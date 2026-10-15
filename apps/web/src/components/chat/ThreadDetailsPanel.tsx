@@ -4,6 +4,7 @@ import type {
   ProjectScript,
   ResolvedKeybindingsConfig,
   ThreadId,
+  SandboxIdeTarget,
 } from "@t3tools/contracts";
 
 import type { DraftId } from "../../composerDraftStore";
@@ -38,6 +39,7 @@ export interface ThreadDetailsPanelProps extends Pick<
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   showOpenInPicker: boolean;
+  editorTarget: SandboxIdeTarget | null;
   gitCwd: string | null;
   isGitRepo: boolean;
   envLocked: boolean;
@@ -133,7 +135,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
               {density !== "essential" && props.showOpenInPicker ? (
                 <OpenInPicker
-                  threadId={props.threadId}
+                  target={props.editorTarget}
                   enableShortcut={false}
                   keybindings={props.keybindings}
                   environmentId={props.environmentId}

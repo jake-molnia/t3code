@@ -1,5 +1,4 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { useAtomValue } from "@effect/atom-react";
 import type { FileDiffContentsLoader, FileDiffMetadata } from "@pierre/diffs";
 import { useParams } from "@tanstack/react-router";
 import {
@@ -24,7 +23,7 @@ import * as DateTime from "effect/DateTime";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useFilesystemReadAccess } from "~/state/filesystem";
-import { useOpenInPreferredEditor } from "../editorPreferences";
+import { useOpenSandboxFile } from "../useOpenSandboxFile";
 import { useFileContextMenuHandler } from "../fileContextMenu";
 import { type DraftId } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
@@ -82,7 +81,6 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
-import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
 import { vcsEnvironment } from "../state/vcs";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
@@ -239,13 +237,16 @@ export default function DiffPanel({
   const activeRepositoryRoot = activeThread?.worktreePath
     ? undefined
     : activeProject?.repositoryIdentity?.rootPath;
-  const serverConfig = useAtomValue(
-    serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
-  );
-  const onFileContextMenu = useFileContextMenuHandler(activeThread?.environmentId ?? null);
-  const openInPreferredEditor = useOpenInPreferredEditor(
+  const onFileContextMenu = useFileContextMenuHandler(
     activeThread?.environmentId ?? null,
-    serverConfig?.availableEditors ?? [],
+    activeThread ? { threadId: activeThread.id } : null,
+    activeCwd ?? null,
+  );
+  const openInPreferredEditor = useOpenSandboxFile(
+    activeThread?.environmentId ?? null,
+    activeThread && activeCwd
+      ? { target: { threadId: activeThread.id }, cwd: activeCwd }
+      : undefined,
   );
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
   const gitStatusQuery = useEnvironmentQuery(

@@ -18,7 +18,7 @@ import { useComposerHandleContext } from "~/composerHandleContext";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useTheme } from "~/hooks/useTheme";
 import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
-import { useFileContextMenu, type FileContextMenuAction } from "~/fileContextMenu";
+import { useFileContextMenu } from "~/fileContextMenu";
 import { readLocalApi } from "~/localApi";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
@@ -30,6 +30,7 @@ import { useDirectoryEntries } from "./useDirectoryEntries";
 import { useProjectPathSearch } from "~/state/queries";
 
 interface FileBrowserPanelProps {
+  threadId: import("@t3tools/contracts").ThreadId;
   environmentId: EnvironmentId;
   cwd: string;
   projectName: string;
@@ -97,6 +98,7 @@ function FileSearchField(props: {
 
 export default function FileBrowserPanel({
   environmentId,
+  threadId,
   cwd,
   projectName,
   selectedPath,
@@ -107,7 +109,7 @@ export default function FileBrowserPanel({
 }: FileBrowserPanelProps) {
   const { resolvedTheme } = useTheme();
   const composerRef = useComposerHandleContext();
-  const fileContextMenu = useFileContextMenu(environmentId);
+  const fileContextMenu = useFileContextMenu(environmentId, { threadId }, cwd);
   const {
     entries: directoryEntries,
     load,
@@ -191,12 +193,8 @@ export default function FileBrowserPanel({
         position,
       );
       if (clicked === null) return;
-      // "Open with" submenu selections report the child id ("editor:<id>"),
-      // which is not present in the top-level item list.
-      const isFileMenuAction =
-        fileMenuItems.some((entry) => entry.id === clicked) || clicked.startsWith("editor:");
-      if (isFileMenuAction) {
-        await fileContextMenu.activate(clicked as FileContextMenuAction, fileTarget);
+      if (clicked === "open") {
+        await fileContextMenu.activate(clicked, fileTarget);
         return;
       }
       if (clicked === "copy-mention") {

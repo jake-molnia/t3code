@@ -72,7 +72,6 @@ import {
   AcpRegistrySetProviderInput,
   AcpRegistrySetProviderResult,
 } from "./acpRegistry.ts";
-import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
@@ -363,7 +362,6 @@ export const WS_METHODS = {
   projectsCreateNew: "projects.createNew",
 
   // Shell methods
-  shellOpenInEditor: "shell.openInEditor",
   sandboxIdeOpen: "sandbox.ide.open",
 
   // Filesystem methods
@@ -1167,11 +1165,6 @@ const WsSandboxIdeOpenRpc = Rpc.make(WS_METHODS.sandboxIdeOpen, {
   error: Schema.Union([SandboxIdeError, EnvironmentAuthorizationError]),
 });
 
-const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
-  payload: LaunchEditorInput,
-  error: Schema.Union([ExternalLauncherError, EnvironmentAuthorizationError]),
-});
-
 const WsFilesystemGetMetadataRpc = Rpc.make(WS_METHODS.filesystemGetMetadata, {
   payload: FilesystemGetMetadataInput,
   success: FilesystemGetMetadataResult,
@@ -1878,7 +1871,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsCreateNewRpc,
   WsProjectsWriteFileRpc,
   WsProjectsMutateRpc,
-  WsShellOpenInEditorRpc,
   WsSandboxIdeOpenRpc,
   WsFilesystemBrowseRpc,
   WsFilesystemGetMetadataRpc,

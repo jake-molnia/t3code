@@ -1,69 +1,36 @@
 import type {
   EditorId,
   EnvironmentId,
+  SandboxIdeTarget,
   ResolvedKeybindingsConfig,
-  ThreadId,
 } from "@t3tools/contracts";
-import { useEffect, useMemo } from "react";
-
+import { useEffect } from "react";
 import { useSandboxIde } from "../../useSandboxIde";
-import { usePreferredEditor } from "../../editorPreferences";
 import { isOpenFavoriteEditorShortcut } from "../../keybindings";
-import { shellEnvironment } from "../../state/shell";
-import { useAtomCommand } from "../../state/use-atom-command";
 
 export function useOpenFavoriteEditorShortcut({
   enabled,
   environmentId,
-  threadId,
+  target,
   keybindings,
-  availableEditors,
   openInCwd,
 }: {
   enabled: boolean;
   environmentId: EnvironmentId;
-  threadId: ThreadId;
+  target: SandboxIdeTarget | null;
   keybindings: ResolvedKeybindingsConfig;
-  availableEditors: ReadonlyArray<EditorId>;
+  availableEditors: readonly EditorId[];
   openInCwd: string | null;
 }) {
-  const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
-  const editors = useMemo<readonly EditorId[]>(
-    () =>
-      availableEditors.includes("vscode") ? availableEditors : ["vscode", ...availableEditors],
-    [availableEditors],
-  );
-  const [preferredEditor] = usePreferredEditor(editors);
-  const openSandboxIde = useSandboxIde(environmentId, threadId, openInCwd);
-
+  const open = useSandboxIde(environmentId, target, openInCwd);
   useEffect(() => {
     if (!enabled) return;
-    const handler = (event: globalThis.KeyboardEvent) => {
-      if (!isOpenFavoriteEditorShortcut(event, keybindings)) return;
-      if (!openInCwd || !preferredEditor) return;
-
+    const handler = (event: KeyboardEvent) => {
+      if (!openInCwd || !isOpenFavoriteEditorShortcut(event, keybindings)) return;
       event.preventDefault();
-      if (preferredEditor === "vscode") {
-        openSandboxIde();
-        return;
-      }
-      void openInEditorMutation({
-        environmentId,
-        input: {
-          cwd: openInCwd,
-          editor: preferredEditor,
-        },
-      });
+      void open();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [
-    enabled,
-    environmentId,
-    keybindings,
-    openInCwd,
-    openInEditorMutation,
-    openSandboxIde,
-    preferredEditor,
-  ]);
+  }, [enabled, keybindings, open, openInCwd]);
 }

@@ -310,7 +310,10 @@ On web and desktop, right-click media to save it or copy its path or URL. On mob
 touch and hold an image or video thumbnail and choose **Save or share**. On iOS,
 return to the thumbnail to open this menu after watching a full-screen video.
 
-File links refer to the environment's machine, including when you connect remotely.
+File links refer to the thread's sandbox, including when you connect remotely.
+Choose **Open in VS Code** to edit a file in that sandbox's browser IDE. File links
+keep their line and column when provided. The thread's **Open in VS Code** action
+opens its workspace; before starting a thread, it opens the project's workspace.
 Previews use the original file, even outside the workspace. Moving or deleting it
 can break the preview, so save a copy if you need to keep it.
 

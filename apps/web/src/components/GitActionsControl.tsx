@@ -89,7 +89,7 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { Textarea } from "~/components/ui/textarea";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { useOpenInPreferredEditor } from "~/editorPreferences";
+import { useOpenSandboxFile } from "~/useOpenSandboxFile";
 import {
   useGitStackedAction,
   useSourceControlActionRunning,
@@ -100,7 +100,6 @@ import {
 import { useThreadProjection, useThreadShell } from "~/state/entities";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
-import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -1014,11 +1013,6 @@ export default function GitActionsControl({
     AuthSourceControlWriteScope,
   );
   const canOperateThread = useEnvironmentScope(activeEnvironmentId, AuthOrchestrationOperateScope);
-  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(activeEnvironmentId));
-  const openInPreferredEditor = useOpenInPreferredEditor(
-    activeEnvironmentId,
-    serverConfig?.availableEditors ?? [],
-  );
   const threadToastData = useMemo(
     () => (activeThreadRef ? { threadRef: activeThreadRef } : undefined),
     [activeThreadRef],
@@ -1037,6 +1031,16 @@ export default function GitActionsControl({
   );
   const activeServerThread =
     activeServerThreadShell ?? activeServerThreadProjection?.projection.thread ?? null;
+  const editorTarget =
+    activeServerThread && activeThreadRef
+      ? { threadId: activeThreadRef.threadId }
+      : activeDraftThread
+        ? { projectId: activeDraftThread.projectId }
+        : null;
+  const openInPreferredEditor = useOpenSandboxFile(
+    activeEnvironmentId,
+    editorTarget && gitCwd ? { target: editorTarget, cwd: gitCwd } : undefined,
+  );
   const isLocalDraftThread = activeDraftThread !== null && activeServerThread === null;
   const canChangeThreadBranch = canWriteSourceControl && (isLocalDraftThread || canOperateThread);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);

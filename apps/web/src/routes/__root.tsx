@@ -57,7 +57,6 @@ import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 
 import { useAtomValue } from "@effect/atom-react";
-import { usePrimaryEnvironment } from "../state/environments";
 import {
   primaryServerConfigAtom,
   primaryServerConfigEventAtom,
@@ -415,7 +414,6 @@ function EventRouter({
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const primaryEnvironment = usePrimaryEnvironment();
   const serverConfig = useAtomValue(primaryServerConfigAtom);
   const serverConfigEvent = useAtomValue(primaryServerConfigEventAtom);
   const serverWelcome = useAtomValue(primaryServerWelcomeAtom);
@@ -492,14 +490,7 @@ function EventRouter({
       stackedThreadToast({
         type: "warning",
         title: "Invalid keybindings configuration",
-        description: (
-          <KeybindingsConfigWarning
-            message={decision.message}
-            environmentId={primaryEnvironment?.environmentId ?? null}
-            configPath={serverConfig?.keybindingsConfigPath ?? null}
-            availableEditors={serverConfig?.availableEditors ?? []}
-          />
-        ),
+        description: <KeybindingsConfigWarning message={decision.message} />,
       }),
     );
   });
