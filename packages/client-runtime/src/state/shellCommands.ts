@@ -12,9 +12,5 @@ export function createShellEnvironmentAtoms<R, E>(
       label: "environment-data:shell:open-sandbox-ide",
       tag: WS_METHODS.sandboxIdeOpen,
     }),
-    openInEditor: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:shell:open-in-editor",
-      tag: WS_METHODS.shellOpenInEditor,
-    }),
   };
 }

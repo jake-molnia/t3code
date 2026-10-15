@@ -1,9 +1,16 @@
 import * as Schema from "effect/Schema";
-import { ThreadId } from "./baseSchemas.ts";
+import { ProjectId, ThreadId } from "./baseSchemas.ts";
+
+export const SandboxIdeTarget = Schema.Union([
+  Schema.Struct({ threadId: ThreadId }),
+  Schema.Struct({ projectId: ProjectId }),
+]);
+export type SandboxIdeTarget = typeof SandboxIdeTarget.Type;
 
 export const SandboxIdeOpenInput = Schema.Struct({
-  threadId: ThreadId,
+  target: SandboxIdeTarget,
   cwd: Schema.String.check(Schema.isPattern(/^\//)),
+  file: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^\//))),
 });
 export type SandboxIdeOpenInput = typeof SandboxIdeOpenInput.Type;
 export const SandboxIdeOpenResult = Schema.Struct({ url: Schema.String });

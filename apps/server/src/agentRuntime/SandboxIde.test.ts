@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Scope from "effect/Scope";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -36,7 +36,7 @@ const setup = Effect.gen(function* () {
     ["root-two", client("two")],
   ]);
   const current = (id: string) => clients.get(id) ?? client("one");
-  let provisioning: Effect.Effect<void> = Effect.void;
+  let provisioning: Effect.Effect<void, RuntimeClient.RuntimeClientError> = Effect.void;
   const runtime = RuntimeClient.RuntimeClient.of({
     enabled: true,
     forThread: (id, _driver, scope) =>
@@ -50,7 +50,7 @@ const setup = Effect.gen(function* () {
         return found;
       }),
     observeThread: (id) => Effect.sync(() => ({ kind: "running", client: current(id) })),
-    forWorkspace: (id) => Effect.succeed(client(id)),
+    forWorkspace: (id) => provisioning.pipe(Effect.as(client(id))),
     forUtility: (id) => Effect.succeed(client(id)),
     observeWorkspace: (id) => Effect.succeed({ kind: "running", client: client(id) }),
     sessionResidency: () => Effect.succeed(null),
@@ -69,7 +69,7 @@ const setup = Effect.gen(function* () {
   const open = (id: string) =>
     Effect.gen(function* () {
       const result = yield* ide.open({
-        threadId: ThreadId.make(id),
+        target: { threadId: ThreadId.make(id) },
         cwd: "/workspace/same/repo",
       });
       const url = new URL(result.url, "https://t3.example");
@@ -87,7 +87,7 @@ const setup = Effect.gen(function* () {
     clients,
     make,
     open,
-    setProvisioning: (effect: Effect.Effect<void>) => {
+    setProvisioning: (effect: Effect.Effect<void, RuntimeClient.RuntimeClientError>) => {
       provisioning = effect;
     },
   };
@@ -134,7 +134,7 @@ it.effect("consumes tickets once, rejects cross-origin requests, and expires the
     ).toBe("Failure");
     const pending = new URL(
       (yield* ide.open({
-        threadId: ThreadId.make("root-one"),
+        target: { threadId: ThreadId.make("root-one") },
         cwd: "/workspace/same/repo",
       })).url,
       "https://t3.example",
@@ -151,22 +151,37 @@ it.effect("consumes tickets once, rejects cross-origin requests, and expires the
     ).toBe("Failure");
   }),
 );
-it.effect(
-  "rejects replaced workers and central-restart sessions while reopening the live worker",
-  () =>
-    Effect.gen(function* () {
-      const { ide, open, clients, make } = yield* setup;
-      const session = yield* open("root-one");
-      clients.set("root-one", client("one", "replacement"));
-      expect((yield* Effect.exit(ide.authorize(session)))._tag).toBe("Failure");
-      const restarted = yield* make();
-      expect((yield* Effect.exit(restarted.authorize(session)))._tag).toBe("Failure");
-      const reopened = yield* restarted.open({
-        threadId: ThreadId.make("root-one"),
-        cwd: "/workspace/same/repo",
-      });
-      expect(reopened.url).not.toBe(session.url.toString());
-    }),
+it.effect("rejects sessions when their worker is replaced", () =>
+  Effect.gen(function* () {
+    const { ide, open, clients } = yield* setup;
+    const session = yield* open("root-one");
+    clients.set("root-one", client("one", "replacement"));
+    expect((yield* ide.authorize(session).pipe(Effect.flip)).reason).toBe("identity_changed");
+    const replacement = yield* open("root-one");
+    const proxy = yield* ide.authorize(replacement);
+    expect(proxy.kind === "proxy" && proxy.access.identity.incarnation).toBe("replacement");
+  }),
+);
+it.effect("reopens a live worker after central restart with a fresh IDE session", () =>
+  Effect.gen(function* () {
+    const { open, make } = yield* setup;
+    const session = yield* open("root-one");
+    const restarted = yield* make();
+    expect((yield* restarted.authorize(session).pipe(Effect.flip)).reason).toBe("expired");
+    const result = yield* restarted.open({
+      target: { threadId: ThreadId.make("root-one") },
+      cwd: "/workspace/same/repo",
+    });
+    const url = new URL(result.url, session.requestOrigin);
+    const request = { sessionId: url.pathname.split("/")[3]!, requestOrigin: url.origin };
+    const boot = yield* restarted.authorize({
+      ...request,
+      ticket: url.searchParams.get("ticket")!,
+    });
+    if (boot.kind !== "bootstrap") throw new Error("Expected bootstrap");
+    const proxy = yield* restarted.authorize({ ...request, cookie: boot.cookie });
+    expect(proxy.kind === "proxy" && proxy.access.identity).toEqual(client("one").identity);
+  }),
 );
 
 it.effect("pins idle compute through startup and hands it to the worker lease", () =>
@@ -202,7 +217,7 @@ it.effect("pins idle compute through startup and hands it to the worker lease", 
       stop: () => Effect.die("Idle policy must not stop while IDE owns compute"),
     });
     const opening = yield* ide
-      .open({ threadId: root, cwd: "/workspace/repo" })
+      .open({ target: { threadId: root }, cwd: "/workspace/repo" })
       .pipe(Effect.forkChild);
     yield* Deferred.await(started);
     expect(yield* policy.reconcileThread(root)).toBe("busy");
@@ -217,7 +232,7 @@ it.effect("pins idle compute through startup and hands it to the worker lease", 
     if (proxy.kind !== "proxy") throw new Error("Expected proxy");
     yield* proxy.connected;
     expect((yield* WorkspaceActivity).has("one")).toBe(false);
-    yield* ide.open({ threadId: root, cwd: "/workspace/repo" });
+    yield* ide.open({ target: { threadId: root }, cwd: "/workspace/repo" });
     expect((yield* WorkspaceActivity).has("one")).toBe(true);
     yield* TestClock.adjust("61 seconds");
     expect((yield* WorkspaceActivity).has("one")).toBe(false);
@@ -229,7 +244,7 @@ it.effect("returns a relative path and binds the one-use ticket to the opening h
     const { ide } = yield* setup;
     for (const origin of ["https://t3.example", "http://t3.internal:3773"]) {
       const result = yield* ide.open({
-        threadId: ThreadId.make("root-one"),
+        target: { threadId: ThreadId.make("root-one") },
         cwd: "/workspace/a b",
       });
       expect(result.url.startsWith(SandboxIde.routePrefix)).toBe(true);
@@ -252,5 +267,82 @@ it.effect("returns a relative path and binds the one-use ticket to the opening h
         ))._tag,
       ).toBe("Failure");
     }
+  }),
+);
+
+it.effect("opens project workspaces before a thread exists and isolates identical file paths", () =>
+  Effect.gen(function* () {
+    const { ide } = yield* setup;
+    const sessions = [];
+    for (const projectId of [ProjectId.make("first"), ProjectId.make("second")]) {
+      const result = yield* ide.open({ target: { projectId }, cwd: "/workspace/repo" });
+      const url = new URL(result.url, "https://t3.example");
+      const request = { sessionId: url.pathname.split("/")[3]!, requestOrigin: url.origin };
+      const bootstrap = yield* ide.authorize({
+        ...request,
+        ticket: url.searchParams.get("ticket")!,
+      });
+      if (bootstrap.kind !== "bootstrap") throw new Error("Expected bootstrap");
+      const proxy = yield* ide.authorize({ ...request, cookie: bootstrap.cookie });
+      expect(proxy.kind === "proxy" && proxy.access.identity.workspaceId).toBe(
+        `t3:utility:project:${projectId}`,
+      );
+      sessions.push({ ...request, cookie: bootstrap.cookie });
+    }
+    expect(
+      (yield* Effect.exit(ide.authorize({ ...sessions[0]!, cookie: sessions[1]!.cookie })))._tag,
+    ).toBe("Failure");
+  }),
+);
+
+it.effect("preserves file paths, line and column in the VS Code workspace payload", () =>
+  Effect.gen(function* () {
+    const { ide } = yield* setup;
+    for (const origin of ["https://remote.example", "http://t3.internal:3773"]) {
+      const file = "/workspace/a b/src/odd #?&%.ts:12:4";
+      const result = yield* ide.open({
+        target: { threadId: ThreadId.make("root-one") },
+        cwd: "/workspace/a b",
+        file,
+      });
+      const url = new URL(result.url, origin);
+      const bootstrap = yield* ide.authorize({
+        sessionId: url.pathname.split("/")[3]!,
+        requestOrigin: origin,
+        ticket: url.searchParams.get("ticket")!,
+      });
+      if (bootstrap.kind !== "bootstrap") throw new Error("Expected bootstrap");
+      const redirected = new URL(bootstrap.url, origin);
+      expect(redirected.searchParams.get("folder")).toBe("/workspace/a b");
+      const expectedFile = `vscode-remote://${new URL(origin).host}/workspace/a%20b/src/odd%20%23%3F%26%25.ts%3A12%3A4`;
+      expect(JSON.parse(redirected.searchParams.get("payload")!)).toEqual([
+        ["openFile", expectedFile],
+        ["gotoLineMode", "true"],
+      ]);
+      expect(bootstrap.url).not.toContain("ticket");
+      expect(bootstrap.url).not.toContain("private-worker");
+    }
+  }),
+);
+
+it.effect("fails closed when either a thread or project worker is unavailable", () =>
+  Effect.gen(function* () {
+    const { ide, setProvisioning } = yield* setup;
+    setProvisioning(
+      Effect.fail(
+        new RuntimeClient.RuntimeClientError({ operation: "ensure-running", cause: "offline" }),
+      ),
+    );
+    for (const target of [
+      { threadId: ThreadId.make("root-one") },
+      { projectId: ProjectId.make("project") },
+    ]) {
+      const error = yield* ide
+        .open({ target, cwd: "/workspace/repo", file: "/workspace/repo/file.ts:2" })
+        .pipe(Effect.flip);
+      expect(error.reason).toBe("unavailable");
+    }
+    expect((yield* WorkspaceActivity).has("one")).toBe(false);
+    expect((yield* WorkspaceActivity).has("t3:utility:project:project")).toBe(false);
   }),
 );

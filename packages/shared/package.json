@@ -79,10 +79,6 @@
       "types": "./src/httpObservability.ts",
       "import": "./src/httpObservability.ts"
     },
-    "./editor": {
-      "types": "./src/editor.ts",
-      "import": "./src/editor.ts"
-    },
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"

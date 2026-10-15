@@ -189,10 +189,10 @@ function offeredActions() {
   return state.choose.mock.lastCall![0].map((item: { id: string }) => item.id);
 }
 
-it("removes host actions after revocation while keeping file preview and copying", async () => {
+it("removes sandbox editor actions after revocation while keeping file preview and copying", async () => {
   await renderMarkdown("[Readme](docs/readme.md)");
   await openContextMenu();
-  expect(offeredActions()).toEqual(["open", "reveal", "copy-relative", "copy-full"]);
+  expect(offeredActions()).toEqual(["open", "copy-relative", "copy-full"]);
   await act(async () => {
     state.allowed = false;
     for (const listener of state.listeners) listener();
@@ -222,27 +222,6 @@ it("does not launch an editor after revocation during a native context menu", as
   await act(async () => {
     state.allowed = false;
     choose("open");
-  });
-  expect(state.openEditor).not.toHaveBeenCalled();
-});
-
-it("does not reveal a file after revocation during its workspace lookup", async () => {
-  let finishLookup: () => void = () => {
-    throw new Error("Lookup not started");
-  };
-  state.search.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        finishLookup = () => resolve(AsyncResult.success({ entries: [] }));
-      }),
-  );
-  state.choose.mockResolvedValue("reveal");
-  await renderMarkdown("[Readme](readme.md)");
-  await openContextMenu();
-  expect(state.search).toHaveBeenCalledOnce();
-  await act(async () => {
-    state.allowed = false;
-    finishLookup();
   });
   expect(state.openEditor).not.toHaveBeenCalled();
 });

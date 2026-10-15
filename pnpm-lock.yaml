@@ -290,9 +290,6 @@ importers:
       '@t3tools/source-control-testing':
         specifier: workspace:*
         version: link:../../packages/source-control-testing
-      '@t3tools/tailscale':
-        specifier: workspace:*
-        version: link:../../packages/tailscale
       '@t3tools/web':
         specifier: workspace:*
         version: link:../web

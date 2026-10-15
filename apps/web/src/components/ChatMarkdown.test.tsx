@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { EnvironmentId, type AuthEnvironmentScope } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, type AuthEnvironmentScope } from "@t3tools/contracts";
 import { createRoot } from "react-dom/client";
 import { useThreadFindHighlights } from "./chat/threadFindHighlights";
 import { searchableMessageSegments } from "@t3tools/shared/threadFindText";
@@ -63,6 +63,7 @@ vi.mock("../state/session", async (importOriginal) => {
   };
 });
 vi.mock("../state/entities", () => ({
+  readEnvironmentSupportsServerBrowser: () => false,
   readThreadShell: () => null,
   useProjects: () => [],
   useServerConfigs: () => new Map(),
@@ -82,7 +83,6 @@ vi.mock("~/lib/openPullRequestLink", () => ({
 }));
 
 import ChatMarkdown, {
-  canUseMarkdownFileShellActions,
   hasMarkdownFilePrimaryAction,
   shouldUseMarkdownFileBrowserPrimaryAction,
 } from "./ChatMarkdown";
@@ -545,27 +545,6 @@ describe("ChatMarkdown streaming", () => {
   });
 });
 
-describe("canUseMarkdownFileShellActions", () => {
-  const environmentId = EnvironmentId.make("environment-1");
-
-  it("allows editor and file manager actions for local environments", () => {
-    expect(canUseMarkdownFileShellActions(environmentId, "local-exec", true)).toBe(true);
-  });
-
-  it("hides shell actions until the environment mode is resolved", () => {
-    expect(canUseMarkdownFileShellActions(environmentId, "local-exec", false)).toBe(false);
-  });
-
-  it("hides editor and file manager actions for remote environments", () => {
-    expect(canUseMarkdownFileShellActions(environmentId, "remote-links", true)).toBe(false);
-    expect(canUseMarkdownFileShellActions(environmentId, "remote-unavailable", true)).toBe(false);
-  });
-
-  it("hides shell actions when no environment owns the markdown", () => {
-    expect(canUseMarkdownFileShellActions(null, "local-exec", true)).toBe(false);
-  });
-});
-
 describe("hasMarkdownFilePrimaryAction", () => {
   it("keeps the chip interactive when an editor, browser, or panel can open it", () => {
     expect(
@@ -934,7 +913,7 @@ describe("ChatMarkdown Windows file links", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown
         cwd="C:/Users/shawn/project"
-        environmentId={environmentId}
+        threadRef={{ environmentId, threadId: ThreadId.make("windows") }}
         text="[Open](C:/Users/shawn/project/src/main.ts)"
         lineBreaks={!parseRawHtml}
         parseRawHtml={parseRawHtml}
@@ -949,7 +928,7 @@ describe("ChatMarkdown Windows file links", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown
         cwd="C:/Users/shawn/project"
-        environmentId={environmentId}
+        threadRef={{ environmentId, threadId: ThreadId.make("windows") }}
         text={String.raw`[Open](C:\Users\shawn\project\src\main.ts)`}
         lineBreaks={!parseRawHtml}
         parseRawHtml={parseRawHtml}
@@ -966,7 +945,7 @@ describe("ChatMarkdown Windows file links", () => {
       const html = renderToStaticMarkup(
         <ChatMarkdown
           cwd="C:/Users/shawn/project"
-          environmentId={environmentId}
+          threadRef={{ environmentId, threadId: ThreadId.make("windows") }}
           text={String.raw`[settings](C:\Users\shawn\.claude\settings.json)`}
           lineBreaks={!parseRawHtml}
           parseRawHtml={parseRawHtml}
@@ -983,7 +962,7 @@ describe("ChatMarkdown Windows file links", () => {
       const html = renderToStaticMarkup(
         <ChatMarkdown
           cwd="C:/Users/shawn/project"
-          environmentId={environmentId}
+          threadRef={{ environmentId, threadId: ThreadId.make("windows") }}
           text={String.raw`[Source](C:\Users\shawn\project\src\index.ts) and [Test](C:\Users\shawn\project\test\index.ts)`}
           lineBreaks={!parseRawHtml}
           parseRawHtml={parseRawHtml}
@@ -1002,7 +981,7 @@ describe("ChatMarkdown Windows file links", () => {
       const html = renderToStaticMarkup(
         <ChatMarkdown
           cwd="C:/Users/shawn/project"
-          environmentId={environmentId}
+          threadRef={{ environmentId, threadId: ThreadId.make("windows") }}
           text={`[Source](${path}) and \`${path}\``}
           lineBreaks={!parseRawHtml}
           parseRawHtml={parseRawHtml}
@@ -1018,7 +997,7 @@ describe("ChatMarkdown Windows file links", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown
         cwd="C:/Users/shawn/project"
-        environmentId={environmentId}
+        threadRef={{ environmentId, threadId: ThreadId.make("windows") }}
         text={"[Open][source]\n\n[source]: C:/Users/shawn/project/src/main.ts"}
         lineBreaks={!parseRawHtml}
         parseRawHtml={parseRawHtml}
@@ -1033,7 +1012,7 @@ describe("ChatMarkdown Windows file links", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown
         cwd="C:/Users/shawn/project"
-        environmentId={environmentId}
+        threadRef={{ environmentId, threadId: ThreadId.make("windows") }}
         text="[unsafe](javascript:alert(1)) and [unknown](d:alert(1))"
         lineBreaks={!parseRawHtml}
         parseRawHtml={parseRawHtml}

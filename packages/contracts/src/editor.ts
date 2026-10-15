@@ -25,7 +25,7 @@ type EditorDefinition = {
   readonly jetbrainsProductCode?: string;
 };
 
-export const EDITORS = [
+const EDITORS = [
   {
     id: "cursor",
     label: "Cursor",
@@ -167,64 +167,6 @@ export const LaunchEditorInput = Schema.Struct({
   reveal: Schema.optional(Schema.Boolean),
 });
 export type LaunchEditorInput = typeof LaunchEditorInput.Type;
-
-const remoteSchemeOf = (editor: EditorDefinition): string | undefined =>
-  editor.remoteScheme ?? (editor.jetbrainsProductCode === undefined ? undefined : "jetbrains");
-
-/** Editors that can open a remote workspace via an SSH deep link. */
-export const REMOTE_CAPABLE_EDITOR_IDS: ReadonlyArray<EditorId> = EDITORS.flatMap((editor) =>
-  remoteSchemeOf(editor) !== undefined ? [editor.id] : [],
-);
-
-const remoteSchemeForEditor = (id: EditorId): string | undefined => {
-  const editor = EDITORS.find((candidate) => candidate.id === id);
-  return editor === undefined ? undefined : remoteSchemeOf(editor);
-};
-
-/**
- * Builds a `<scheme>://vscode-remote/ssh-remote+<host><path>` deep link (Zed
- * takes `zed://ssh/<host><path>`, JetBrains IDEs a Toolbox App
- * `jetbrains://gateway/ssh/environment?...` link) that opens `absolutePath` on
- * `host` in the local editor over SSH. Returns undefined for editors without
- * remote deep-link support.
- */
-export const buildRemoteOpenUrl = (input: {
-  readonly editor: EditorId;
-  readonly host: string;
-  readonly absolutePath: string;
-}): string | undefined => {
-  const scheme = remoteSchemeForEditor(input.editor);
-  if (scheme === undefined) {
-    return undefined;
-  }
-  const editor = EDITORS.find((candidate) => candidate.id === input.editor);
-  if (editor !== undefined && "jetbrainsProductCode" in editor) {
-    // Like the VS Code link, no user or port: the SSH config entry for `host`
-    // supplies them. A bare product code lets Toolbox pick the backend build.
-    const params = new URLSearchParams({
-      h: input.host,
-      launchIde: "true",
-      ideHint: editor.jetbrainsProductCode,
-      projectHint: input.absolutePath.replaceAll("\\", "/"),
-    });
-    return `${scheme}://gateway/ssh/environment?${params.toString()}`;
-  }
-  // Windows server paths (`C:\...`) appear as `/C:/...` in vscode-remote URIs.
-  const posixPath = input.absolutePath.replaceAll("\\", "/");
-  const rootedPath = posixPath.startsWith("/") ? posixPath : `/${posixPath}`;
-  const encodedHost = encodeURIComponent(input.host);
-  if (input.editor === "zed") {
-    // Zed's remote server resolves a rooted path on the system drive, so a
-    // Windows `C:\Users\x` must become `/Users/x` (verified in #8938). Other
-    // drives are untested and kept as is rather than silently remapped, and a
-    // POSIX path that happens to start with `/C:` is left alone.
-    const zedPath = /^[Cc]:[\\/]/.test(input.absolutePath) ? rootedPath.slice(3) : rootedPath;
-    const encodedZedPath = zedPath.split("/").map(encodeURIComponent).join("/");
-    return `${scheme}://ssh/${encodedHost}${encodedZedPath}`;
-  }
-  const encodedPath = rootedPath.split("/").map(encodeURIComponent).join("/");
-  return `${scheme}://vscode-remote/ssh-remote+${encodedHost}${encodedPath}`;
-};
 
 /**
  * SSH hostnames an environment advertises for remote open links. Reachability

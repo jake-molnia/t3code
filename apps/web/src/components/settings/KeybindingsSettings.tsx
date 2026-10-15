@@ -1,10 +1,8 @@
-import { useEnvironmentScope } from "../../state/session";
 import { useEnvironmentsWithScope, readEnvironmentScope } from "../../state/session";
 import {
   ChevronDownIcon,
   CircleXIcon,
   EllipsisIcon,
-  FileJsonIcon,
   MinusIcon,
   PlusIcon,
   SearchIcon,
@@ -23,7 +21,6 @@ import {
   useState,
 } from "react";
 import {
-  AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
   type KeybindingCommand,
   type KeybindingWhenNode,
@@ -37,7 +34,6 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 
 import { isElectron } from "../../env";
-import { useOpenInPreferredEditor } from "../../editorPreferences";
 import { formatShortcutLabel } from "../../keybindings";
 import { cn } from "../../lib/utils";
 import { serverEnvironment } from "../../state/server";
@@ -1284,10 +1280,7 @@ export function KeybindingsSettingsPanel() {
   // fan out to every connected environment in the selection, so one
   // shortcut change reaches each machine the user runs T3 Code on.
   const { environment: primaryEnvironment, connectedEnvironments } = useSettingsScope();
-  const canOpenKeybindingsFile = useEnvironmentScope(
-    primaryEnvironment?.environmentId ?? null,
-    AuthOrchestrationOperateScope,
-  );
+
   const writableIds = useEnvironmentsWithScope(connectedEnvironments, AuthSettingsWriteScope);
   const canWriteSettings =
     connectedEnvironments.length > 0 &&
@@ -1297,18 +1290,12 @@ export function KeybindingsSettingsPanel() {
     () => mergeWithDefaultKeybindings(serverKeybindings ?? []),
     [serverKeybindings],
   );
-  const keybindingsConfigPath = primaryEnvironment?.serverConfig?.keybindingsConfigPath ?? null;
-  const availableEditors = primaryEnvironment?.serverConfig?.availableEditors ?? [];
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
   });
   const removeKeybindingMutation = useAtomCommand(serverEnvironment.removeKeybinding, {
     reportFailure: false,
   });
-  const openInPreferredEditor = useOpenInPreferredEditor(
-    primaryEnvironment?.environmentId ?? null,
-    availableEditors,
-  );
   const [query, setQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [savingCommand, setSavingCommand] = useState<KeybindingCommand | null>(null);
@@ -1338,28 +1325,6 @@ export function KeybindingsSettingsPanel() {
   }
   const commandOptions = useMemo(() => buildKeybindingCommandOptions(keybindings), [keybindings]);
   const whenVariables = useMemo(() => buildWhenVariableOptions(), []);
-
-  const openKeybindingsFile = useCallback(() => {
-    if (
-      !keybindingsConfigPath ||
-      !primaryEnvironment ||
-      !readEnvironmentScope(primaryEnvironment.environmentId, AuthOrchestrationOperateScope)
-    )
-      return;
-    void (async () => {
-      const result = await openInPreferredEditor(keybindingsConfigPath);
-      if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
-        return;
-      }
-      const error = squashAtomCommandFailure(result);
-      toastManager.add({
-        title: "Unable to open keybindings file",
-        description:
-          error instanceof Error ? error.message : "The keybindings file was not opened.",
-        type: "error",
-      });
-    })();
-  }, [keybindingsConfigPath, openInPreferredEditor, primaryEnvironment]);
 
   const saveKeybinding = useCallback(
     (input: ServerUpsertKeybindingInput) => {
@@ -1480,23 +1445,6 @@ export function KeybindingsSettingsPanel() {
             <PlusIcon aria-hidden className="size-4" />
             Add keybinding
           </Button>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  disabled={!keybindingsConfigPath || !canOpenKeybindingsFile}
-                  onClick={openKeybindingsFile}
-                  aria-label="Open keybindings.json"
-                >
-                  <FileJsonIcon aria-hidden className="size-4" />
-                </Button>
-              }
-            />
-            <TooltipPopup side="top">Open keybindings.json</TooltipPopup>
-          </Tooltip>
         </div>
       </SettingsSection>
 
