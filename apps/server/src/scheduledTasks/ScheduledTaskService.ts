@@ -40,6 +40,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as PublicAddress from "../environment/PublicAddress.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -66,40 +67,6 @@ const WEBHOOK_DELIVERY_LOG_PROMPT_LIMIT = 64 * 1024;
 const WEBHOOK_MAX_QUEUED_PER_TASK = 20;
 /** Accepted deliveries per task per minute, enforced here as well as on the relay because the tunnel hostname is public too. */
 const WEBHOOK_RATE_LIMIT_PER_MINUTE = 60;
-
-/**
- * Where a webhook task's public URL points: `${relayHookBaseUrl}/${taskId}/${token}`.
- * Null when the environment has no managed tunnel on T3 Connect; clients then show the path.
- */
-interface WebhookOrigin {
-  readonly relayHookBaseUrl: string | null;
-}
-
-const ENDPOINT_KEY = /^[0-9a-f]{16}$/;
-
-/**
- * The relay's hook URL prefix for this environment. The relay finds the
- * environment by its managed tunnel's key (the tunnel name's last segment),
- * so the URL never reveals the environment id.
- */
-export function relayHookBaseUrl(input: {
-  readonly relayUrl: string;
-  readonly tunnelName: string | undefined;
-}): string | null {
-  const endpointKey = input.tunnelName?.split("-").at(-1);
-  const relayUrl = input.relayUrl.replace(/\/+$/, "");
-  if (relayUrl === "" || endpointKey === undefined || !ENDPOINT_KEY.test(endpointKey)) {
-    return null;
-  }
-  return `${relayUrl}/v1/hooks/${endpointKey}`;
-}
-
-export class ScheduledTaskWebhookOrigin extends Context.Reference<Effect.Effect<WebhookOrigin>>(
-  "t3/scheduledTasks/ScheduledTaskWebhookOrigin",
-  {
-    defaultValue: () => Effect.succeed({ relayHookBaseUrl: null }),
-  },
-) {}
 
 /** A queued webhook delivery that no longer applies to its task; `reason` is shown in the delivery log. */
 class WebhookDeliverySkipped extends Data.TaggedError("WebhookDeliverySkipped")<{
@@ -297,21 +264,21 @@ function webhookPath(taskId: string, token: string): string {
 
 function webhookEndpoint(
   row: Pick<ScheduledTaskRow, "task_id" | "webhook_token" | "webhook_secret">,
-  origin: WebhookOrigin | null,
+  publicUrl: URL | null,
 ): ScheduledTask["webhook"] {
   if (row.webhook_token === null) return undefined;
-  const base = origin?.relayHookBaseUrl ?? null;
+  const path = webhookPath(row.task_id, row.webhook_token);
   return {
-    path: webhookPath(row.task_id, row.webhook_token),
-    url: base === null ? null : `${base}/${encodeURIComponent(row.task_id)}/${row.webhook_token}`,
+    path,
+    url: publicUrl === null ? null : new URL(path.slice(1), publicUrl).href,
     hasSecret: row.webhook_secret !== null,
   };
 }
 
-const decodeRow = (row: ScheduledTaskRow, origin: WebhookOrigin | null = null) =>
+const decodeRow = (row: ScheduledTaskRow, publicUrl: URL | null = null) =>
   Effect.gen(function* () {
     const schedule = yield* decodeScheduleJson(row.schedule_json);
-    const webhook = schedule.type === "webhook" ? webhookEndpoint(row, origin) : undefined;
+    const webhook = schedule.type === "webhook" ? webhookEndpoint(row, publicUrl) : undefined;
     const workspaceStrategy = yield* decodeWorkspaceStrategyJson(row.workspace_strategy_json);
     const modelSelection = yield* decodeModelSelectionJson(row.model_selection_json);
     return yield* decodeTask({
@@ -396,7 +363,7 @@ export const layer = Layer.effect(
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const secretRequests = yield* SecretRequests.SecretRequests;
     const scheduler = yield* Scheduler.Scheduler;
-    const readWebhookOrigin = yield* ScheduledTaskWebhookOrigin;
+    const publicUrl = yield* PublicAddress.PublicAddress;
     // Webhook deliveries for one task dispatch in arrival order rather than
     // being dropped while an earlier delivery is still dispatching.
     const webhookPermits = yield* Ref.make<ReadonlyMap<ScheduledTaskId, Semaphore.Semaphore>>(
@@ -444,8 +411,7 @@ export const layer = Layer.effect(
     // Strict decode for the API surface: a corrupt row is a visible error.
     const listRows = Effect.fn("ScheduledTaskService.listRows")(function* () {
       const rows = yield* selectAllRows();
-      const origin = yield* readWebhookOrigin;
-      return yield* Effect.forEach(rows, (row) => decodeRow(row, origin), { concurrency: 1 });
+      return yield* Effect.forEach(rows, (row) => decodeRow(row, publicUrl), { concurrency: 1 });
     });
 
     const getRows = (id: ScheduledTaskId) => sql<ScheduledTaskRow>`
@@ -485,7 +451,7 @@ export const layer = Layer.effect(
       );
       const row = rows[0];
       if (row === undefined) return null;
-      return yield* decodeRow(row, yield* readWebhookOrigin);
+      return yield* decodeRow(row, publicUrl);
     });
 
     const findWebhookCredentials = (id: ScheduledTaskId) =>

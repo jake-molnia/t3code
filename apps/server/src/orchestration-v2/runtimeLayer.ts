@@ -1,3 +1,4 @@
+import * as PublicAddress from "../environment/PublicAddress.ts";
 import * as ForkWorkspace from "../execution/ForkWorkspaceService.ts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import { SessionPlacement } from "../execution/SessionPlacement.ts";
@@ -282,6 +283,7 @@ const layerSecretRequestsProvided = SecretRequests.layer.pipe(
   Layer.provide(layerThreadManagementProvided),
 );
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
+  Layer.provide(PublicAddress.layer),
   Layer.provide(
     Layer.mergeAll(
       layerThreadLaunchProvided,
