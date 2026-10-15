@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  SERVER_SOURCE_REPOSITORY,
   ORCHESTRATION_PROTOCOL_VERSION,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
@@ -14,6 +15,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { getBuildSourceRevision } from "../buildMetadata.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
@@ -198,6 +200,12 @@ export const make = Effect.gen(function* () {
       ...(machine === null ? {} : { machine }),
     },
     serverVersion: packageJson.version,
+    build: {
+      sourceRepository: SERVER_SOURCE_REPOSITORY,
+      revision: getBuildSourceRevision(),
+      packageVersion: packageJson.version,
+      upstreamVersion: packageJson.version.replace(/\.sandbox\.\d+$/, ""),
+    },
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
       repositoryIdentity: true,

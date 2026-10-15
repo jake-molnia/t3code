@@ -147,7 +147,7 @@ const decodeFrame = Schema.decodeUnknownSync(
 );
 const decodeConfigure = Schema.decodeUnknownSync(Schema.toCodecJson(ConfigureProvider));
 
-it.live.each(["grok", "opencode", "pi"])(
+it.live.each(["codex", "claudeAgent", "cursor", "grok", "opencode", "pi", "muse"])(
   "preserves resolved %s enablement across central and worker registry hydration",
   (kind) =>
     Effect.gen(function* () {

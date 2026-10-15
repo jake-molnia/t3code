@@ -158,6 +158,8 @@ export interface ProviderDriverCreateInput<Config> {
   readonly environment: ProviderInstanceEnvironment;
   readonly enabled: boolean;
   readonly config: Config;
+  /** Original encoded configuration before schema defaults, for execution transports. */
+  readonly configInput?: unknown;
 }
 
 /**

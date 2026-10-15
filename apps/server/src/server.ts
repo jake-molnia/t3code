@@ -1,3 +1,5 @@
+import * as ServerVersion from "./environment/ServerVersion.ts";
+import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import * as RemoteUsageHistory from "./agentRuntime/UsageHistory.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as RemoteProjectMetadata from "./agentRuntime/RemoteProjectMetadata.ts";
@@ -114,7 +116,6 @@ import * as McpOAuth from "./auth/McpOAuth.ts";
 import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
 
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -250,6 +251,7 @@ const layerUsageHistory = RemoteUsageHistory.layer.pipe(Layer.provide(layerPersi
 const layerUsage = UsageService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      AntigravityUsage.layer,
       CursorUsageAccounts.layer.pipe(
         Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
       ),
@@ -519,6 +521,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(layerRepositoryIdentityResolver),
+  Layer.provideMerge(ServerVersion.layer.pipe(Layer.provide(layerServerEnvironment))),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
   Layer.provideMerge(ServerSecretStore.layer),
@@ -613,7 +616,6 @@ const layerMakeServer = Layer.unwrap(
     const runtimeStateParked = yield* Deferred.make<void>();
     const tailscaleParked = yield* Deferred.make<void>();
     const routesReady = yield* Deferred.make<void>();
-    const layerLauncher = ServiceLauncherClient.layer;
 
     yield* fixPath({ shellEnvironmentPrepared: config.shellEnvironmentPrepared });
 
@@ -635,11 +637,9 @@ const layerMakeServer = Layer.unwrap(
             return;
           }
 
-          const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
           const state = yield* makePersistedServerRuntimeState({
             config,
             port: address.port,
-            serviceManaged: launcher.managed,
           });
           yield* persistServerRuntimeState({
             path: config.serverRuntimeStatePath,
@@ -722,9 +722,9 @@ const layerMakeServer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
+    }).pipe(Layer.provideMerge(layerRuntimeDependencies));
 
-    const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
+    const layerRoutes = HttpRouter.serve(layerMakeRoutes, {
       disableLogger: !config.logWebSocketEvents,
       routerConfig: HTTP_ROUTER_CONFIG,
     }).pipe(
@@ -734,7 +734,7 @@ const layerMakeServer = Layer.unwrap(
     const layerServerApplication = Layer.mergeAll(
       layerRoutes,
       layerHttpListening,
-      layerRuntimeState.pipe(Layer.provide(layerLauncher)),
+      layerRuntimeState,
       layerTailscaleServe,
       HeapSnapshot.layer,
     );

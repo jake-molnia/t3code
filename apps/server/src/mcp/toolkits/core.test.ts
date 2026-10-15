@@ -386,13 +386,6 @@ it.effect("resolves reused attachment references from stored metadata", () =>
       name: "original.png",
       mimeType: "image/png",
       sizeBytes: 12,
-      source: {
-        kind: "snap-shot",
-        capturedAt: "2026-09-10T00:00:00.000Z",
-        appName: "Terminal",
-        windowTitle: "Test",
-        accessibility: { format: "flat-text", text: "Stored context", truncated: false },
-      },
     });
     const forged = yield* decodeMcpAttachmentInput({
       type: "image",

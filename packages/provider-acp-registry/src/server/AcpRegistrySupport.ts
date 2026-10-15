@@ -9,33 +9,21 @@ import {
 import type { AcpRegistryDistributionPreference } from "../settings.ts";
 import type { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import {
-  mergePathEntries,
-  resolveSpawnCommand,
-  SpawnExecutableResolution,
-} from "@t3tools/shared/shell";
-import * as Clock from "effect/Clock";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as Context from "effect/Context";
-import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
-import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import * as Stream from "effect/Stream";
-import { sha256 } from "@noble/hashes/sha2";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import * as ChildProcess from "effect/process/ChildProcess";
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
@@ -44,20 +32,15 @@ import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSession
 const ACP_REGISTRY_URL = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
 
 const MAX_REGISTRY_BYTES = 1024 * 1024;
-const MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024;
-const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SEARCH_RESULTS = 20;
 const REGISTRY_REQUEST_TIMEOUT = "30 seconds";
-const ARCHIVE_REQUEST_TIMEOUT = "20 minutes";
-const PACKAGE_INSTALL_TIMEOUT = "20 minutes";
-const PACKAGE_QUERY_TIMEOUT = "30 seconds";
 
 const BoundedAgentId = Schema.String.check(
   Schema.isMaxLength(128),
   Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/u),
 );
 const BoundedName = TrimmedNonEmptyString.check(Schema.isMaxLength(160));
-// Versions become install directory names, so "." and ".." must not decode.
+// Registry versions are bounded identifiers.
 const BoundedVersion = TrimmedNonEmptyString.check(
   Schema.isMaxLength(128),
   Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._+-]*$/u),
@@ -65,11 +48,6 @@ const BoundedVersion = TrimmedNonEmptyString.check(
 const BoundedDescription = Schema.String.check(Schema.isMaxLength(1_024));
 const BoundedMetadata = Schema.String.check(Schema.isMaxLength(256));
 const BoundedArgument = Schema.String.check(Schema.isMaxLength(1_024));
-const PackageCommandName = Schema.String.check(
-  Schema.isMaxLength(128),
-  Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/iu),
-);
-const isPackageCommandName = Schema.is(PackageCommandName);
 const EXACT_RUNNER_VERSION = "v?[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?";
 const EXACT_NPX_PACKAGE = new RegExp(
   `^(?:@[^/@\\s]+/[^@\\s]+|[a-z0-9][a-z0-9._-]*)@${EXACT_RUNNER_VERSION}$`,
@@ -144,25 +122,6 @@ const AcpRegistryAgent = Schema.Struct({
 });
 export type AcpRegistryAgent = typeof AcpRegistryAgent.Type;
 
-const NpmPackageManifest = Schema.Struct({
-  name: Schema.String,
-  version: Schema.String,
-  bin: Schema.Union([BoundedArgument, Schema.Record(PackageCommandName, BoundedArgument)]),
-});
-
-const AcpRegistryPackageInstallReceipt = Schema.Struct({
-  agentId: BoundedAgentId,
-  agentVersion: BoundedVersion,
-  distribution: Schema.Literals(["npx", "uvx"]),
-  packageSpec: Schema.String,
-  managerPath: Schema.String,
-  binDirectory: Schema.String,
-  executablePath: Schema.String,
-  packageRoot: Schema.optional(Schema.String),
-  packageVersion: Schema.optional(Schema.String),
-});
-type AcpRegistryPackageInstallReceipt = typeof AcpRegistryPackageInstallReceipt.Type;
-
 const AcpRegistryIndexEnvelope = Schema.Struct({
   version: BoundedVersion,
   agents: Schema.Array(Schema.Unknown).check(Schema.isMaxLength(512)),
@@ -175,17 +134,7 @@ export interface AcpRegistryIndex {
 const decodeRegistryIndexEnvelope = Schema.decodeUnknownEffect(AcpRegistryIndexEnvelope);
 const decodeRegistryAgent = Schema.decodeUnknownOption(AcpRegistryAgent);
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
-const decodeNpmPackageManifest = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(NpmPackageManifest),
-);
-const decodePackageInstallReceipt = Schema.decodeUnknownOption(
-  Schema.fromJsonString(AcpRegistryPackageInstallReceipt),
-);
-const encodePackageInstallReceipt = Schema.encodeSync(
-  Schema.fromJsonString(AcpRegistryPackageInstallReceipt),
-);
 const decodeHttpsUrl = Schema.decodeUnknownEffect(HttpsUrl);
-const decodeBoundedAgentId = Schema.decodeUnknownEffect(BoundedAgentId);
 
 export const AcpRegistryErrorReason = AcpRegistryOperationErrorReason;
 export type AcpRegistryErrorReason = typeof AcpRegistryErrorReason.Type;
@@ -207,8 +156,6 @@ export function toAcpRegistryOperationError(error: AcpRegistryError): AcpRegistr
     cause: error,
   });
 }
-
-const isAcpRegistryError = Schema.is(AcpRegistryError);
 
 export type AcpRegistryPlatformTarget =
   | "darwin-aarch64"
@@ -233,163 +180,6 @@ export function resolveAcpRegistryPlatformTarget(
   const arch = architecture === "arm64" ? "aarch64" : architecture === "x64" ? "x86_64" : undefined;
   return os && arch ? (`${os}-${arch}` as AcpRegistryPlatformTarget) : undefined;
 }
-
-interface ExactPackageSpec {
-  readonly name: string;
-  readonly version: string;
-}
-
-function parseNpxPackageSpec(packageSpec: string): ExactPackageSpec {
-  const separator = packageSpec.lastIndexOf("@");
-  return {
-    name: packageSpec.slice(0, separator),
-    version: packageSpec.slice(separator + 1).replace(/^v/iu, ""),
-  };
-}
-
-function parseUvxPackageSpec(packageSpec: string): ExactPackageSpec {
-  const equalsSeparator = packageSpec.lastIndexOf("==");
-  const separator = equalsSeparator >= 0 ? equalsSeparator : packageSpec.lastIndexOf("@");
-  const separatorLength = equalsSeparator >= 0 ? 2 : 1;
-  return {
-    name: packageSpec.slice(0, separator),
-    version: packageSpec.slice(separator + separatorLength).replace(/^v/iu, ""),
-  };
-}
-
-function packageManagerFor(distribution: AcpRegistryDistributionKind): "npm" | "uv" | undefined {
-  return distribution === "npx" ? "npm" : distribution === "uvx" ? "uv" : undefined;
-}
-
-function packageCommandCandidates(
-  agent: AcpRegistryAgent,
-  packageName: string,
-): ReadonlyArray<string> {
-  const unscopedPackageName = packageName.split("/").pop() ?? packageName;
-  return Array.from(
-    new Set(
-      [agent.id, unscopedPackageName, unscopedPackageName.replace(/-acp$/u, "")].filter(
-        isPackageCommandName,
-      ),
-    ),
-  );
-}
-
-function readEnvironmentPath(
-  environment: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-): string | undefined {
-  if (platform !== "win32") return environment.PATH;
-  return (
-    environment.PATH ??
-    Object.entries(environment).find(([key]) => key.toLowerCase() === "path")?.[1]
-  );
-}
-
-function withPreferredPath(
-  environment: NodeJS.ProcessEnv,
-  directory: string,
-  platform: NodeJS.Platform,
-): NodeJS.ProcessEnv {
-  return {
-    ...environment,
-    PATH: mergePathEntries(directory, readEnvironmentPath(environment, platform), platform),
-  };
-}
-
-/**
- * Directories exposing installed ACP Registry commands. The integrated
- * terminal appends them to PATH so managed package commands and
- * managed binary agents are both available by name. Best effort: unreadable
- * directories resolve to no entries.
- */
-export const acpRegistryManagedBinaryDirectories = Effect.fn("acpRegistryManagedBinaryDirectories")(
-  function* (input: {
-    readonly cacheDir: string;
-    readonly toolsDir: string;
-    readonly platform: NodeJS.Platform;
-    readonly architecture: NodeJS.Architecture;
-  }): Effect.fn.Return<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const target = resolveAcpRegistryPlatformTarget(input.platform, input.architecture);
-    const registryDirectory = path.join(input.cacheDir, "acp-registry");
-    const installsDirectory = input.toolsDir;
-    const packageReceiptsDirectory = path.join(registryDirectory, "package-installs");
-    const listDirectories = (directory: string) =>
-      fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): Array<string> => []));
-    const directories: Array<string> = [];
-
-    for (const receiptFile of (yield* listDirectories(packageReceiptsDirectory)).toSorted()) {
-      const receipt = yield* fileSystem
-        .readFileString(path.join(packageReceiptsDirectory, receiptFile))
-        .pipe(
-          Effect.map(decodePackageInstallReceipt),
-          Effect.orElseSucceed(() => Option.none()),
-        );
-      if (
-        Option.isSome(receipt) &&
-        receipt.value.binDirectory ===
-          path.join(
-            installsDirectory,
-            receipt.value.agentId,
-            encodeURIComponent(receipt.value.agentVersion),
-            receipt.value.distribution === "npx" ? "npm" : "python",
-            ...(receipt.value.distribution === "npx" && input.platform === "win32" ? [] : ["bin"]),
-          ) &&
-        path.dirname(receipt.value.executablePath) === receipt.value.binDirectory &&
-        (yield* fileSystem
-          .exists(receipt.value.executablePath)
-          .pipe(Effect.orElseSucceed(() => false)))
-      ) {
-        directories.push(receipt.value.binDirectory);
-      }
-    }
-
-    if (target === undefined) return Array.from(new Set(directories));
-    const cachedAgents = yield* fileSystem
-      .readFileString(path.join(registryDirectory, "registry.json"))
-      .pipe(
-        Effect.flatMap(decodeJson),
-        Effect.flatMap(decodeRegistryIndexEnvelope),
-        Effect.map((envelope) =>
-          envelope.agents.flatMap((candidate) => {
-            const decoded = decodeRegistryAgent(candidate);
-            return Option.isSome(decoded) ? [decoded.value] : [];
-          }),
-        ),
-        Effect.orElseSucceed((): ReadonlyArray<AcpRegistryAgent> => []),
-      );
-    const cachedAgentByInstall = new Map(
-      // Install directories are named by the URI-encoded version.
-      cachedAgents.map(
-        (agent) => [`${agent.id}\0${encodeURIComponent(agent.version)}`, agent] as const,
-      ),
-    );
-    for (const agent of (yield* listDirectories(installsDirectory)).toSorted()) {
-      const versions = (yield* listDirectories(path.join(installsDirectory, agent))).toSorted(
-        (left, right) => right.localeCompare(left, undefined, { numeric: true }),
-      );
-      for (const version of versions) {
-        const installRoot = path.join(installsDirectory, agent, version, target);
-        if (yield* fileSystem.exists(installRoot).pipe(Effect.orElseSucceed(() => false))) {
-          const binaryTarget = cachedAgentByInstall.get(`${agent}\0${version}`)?.distribution
-            .binary?.[target];
-          const commandSegments =
-            binaryTarget === undefined ? undefined : normalizeRegistryCommandPath(binaryTarget.cmd);
-          const directory =
-            commandSegments === undefined
-              ? installRoot
-              : path.join(installRoot, ...commandSegments.slice(0, -1));
-          if (yield* fileSystem.exists(directory).pipe(Effect.orElseSucceed(() => false))) {
-            directories.push(directory);
-          }
-        }
-      }
-    }
-    return Array.from(new Set(directories));
-  },
-);
 
 export interface ResolvedAcpRegistryDistribution {
   readonly kind: AcpRegistryDistributionKind;
@@ -468,7 +258,7 @@ export type AcpRegistryInspection =
       readonly status: "unprepared";
       readonly agentId: string;
       readonly version: string;
-      readonly distribution: "binary";
+      readonly distribution: AcpRegistryDistributionKind;
     }
   | {
       readonly status: "ready";
@@ -502,17 +292,14 @@ const layer = (options: AcpRegistryCatalogOptions) =>
 /**
  * The server-lifetime catalog, with the runtime coordinator built alongside
  * it so setup, snapshots, and turn launch share one of each. Its cache lives
- * in the host's provider status cache and installed agents under the T3
- * home's `tools` directory.
+ * in the host's provider status cache. Executables come from the sandbox image.
  */
 export const layerFromHost = Layer.merge(
   Layer.unwrap(
     Effect.gen(function* () {
       const { paths } = yield* ProviderHost.ProviderHost;
-      const path = yield* Path.Path;
       return layer({
         cacheDir: paths.providerStatusCacheDir,
-        toolsDir: path.join(paths.baseDir, "tools"),
       });
     }),
   ),
@@ -521,62 +308,7 @@ export const layerFromHost = Layer.merge(
 
 export interface AcpRegistryCatalogOptions {
   readonly cacheDir: string;
-  readonly toolsDir: string;
   readonly registryUrl?: string;
-}
-
-const INSTALL_LOCK_RETRY_COUNT = 300;
-const INSTALL_LOCK_RETRY_DELAY = "100 millis";
-const INSTALL_LOCK_STALE_MS = 5 * 60 * 1_000;
-const PREPARED_BINARY_RESERVATION_MS = 30 * 1_000;
-
-function isAlreadyExists(error: PlatformError.PlatformError): boolean {
-  return error.reason._tag === "AlreadyExists";
-}
-
-function normalizeRegistryCommandPath(command: string): ReadonlyArray<string> | undefined {
-  const normalized = command.trim().replaceAll("\\", "/").replace(/^\.\//u, "");
-  const segments = normalized.split("/").filter((segment) => segment.length > 0);
-  if (
-    segments.length === 0 ||
-    normalized.startsWith("/") ||
-    /^[a-zA-Z]:/u.test(normalized) ||
-    segments.some((segment) => segment === "." || segment === "..")
-  ) {
-    return undefined;
-  }
-  return segments;
-}
-
-function validateArchiveEntries(output: string): boolean {
-  return output
-    .split(/\r?\n/u)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-    .every((entry) => entry === "./" || normalizeRegistryCommandPath(entry) !== undefined);
-}
-
-type ArchiveKind = "raw" | "tar_bz2" | "tar_gz" | "zip";
-
-function archiveKind(url: string): ArchiveKind {
-  const pathname = new URL(url).pathname.toLowerCase();
-  if (pathname.endsWith(".tar.gz") || pathname.endsWith(".tgz")) return "tar_gz";
-  if (pathname.endsWith(".tar.bz2") || pathname.endsWith(".tbz2")) return "tar_bz2";
-  if (pathname.endsWith(".zip")) return "zip";
-  return "raw";
-}
-
-function archiveFileName(kind: ArchiveKind): string {
-  switch (kind) {
-    case "tar_gz":
-      return "agent.tar.gz";
-    case "tar_bz2":
-      return "agent.tar.bz2";
-    case "zip":
-      return "agent.zip";
-    case "raw":
-      return "agent.bin";
-  }
 }
 
 function compareText(left: string, right: string): number {
@@ -840,12 +572,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           platformTarget,
         });
         const rank = searchRank(agent, input.query);
-        const packageManager =
-          distribution === undefined ? undefined : packageManagerFor(distribution.kind);
-        const packageManagerAvailable =
-          packageManager === undefined ||
-          resolveExecutable(packageManager, platform, hostEnvironment) !== undefined;
-        return distribution === undefined || rank === undefined || !packageManagerAvailable
+        return distribution === undefined || rank === undefined
           ? []
           : [{ agent, distribution, rank }];
       });
@@ -943,7 +670,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         status: "unprepared",
         agentId,
         version: agent.version,
-        distribution: "binary",
+        distribution: distribution.kind,
       } as const;
     });
 
@@ -984,7 +711,6 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
 
       let command: string;
       let args: ReadonlyArray<string>;
-      let commandBinDirectory: string | undefined;
       const effectiveEnvironment = environment ?? hostEnvironment;
       const commandOverride = settings.commandPath.trim();
       if (commandOverride.length > 0) {
@@ -996,22 +722,14 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           });
         }
         command = resolvedOverride;
+        yield* validateLocalExecutable(command);
         args = distribution.args;
       } else {
         return yield* new AcpRegistryError({
           reason: "runner_unavailable",
-          detail: `ACP agent ${agent.id} requires an executable supplied by the execution image. Configure its command path and pinned arguments.`,
+          detail: `ACP agent ${agent.id} requires an executable supplied by the execution image. Configure its image executable path.`,
         });
       }
-
-      const baseSpawnEnvironment = {
-        ...effectiveEnvironment,
-        ...distribution.env,
-      };
-      const spawnEnvironment =
-        commandBinDirectory === undefined
-          ? baseSpawnEnvironment
-          : withPreferredPath(baseSpawnEnvironment, commandBinDirectory, platform);
 
       return {
         agent,
@@ -1020,7 +738,8 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           command,
           args,
           cwd,
-          env: spawnEnvironment,
+          env: { ...effectiveEnvironment, ...distribution.env },
+          shell: false,
         },
       } satisfies ResolvedAcpRegistryAgent;
     });

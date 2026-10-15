@@ -464,33 +464,6 @@ function buildAssistantTimelineEntry(text: string) {
   };
 }
 
-function buildSnapShotTimelineEntry(previewUrl?: string) {
-  const entry = buildUserTimelineEntry("First prompt.");
-  return {
-    ...entry,
-    message: {
-      ...entry.message,
-      attachments: [
-        {
-          type: "image" as const,
-          id: "attachment-1",
-          name: "screenshot.png",
-          mimeType: "image/png",
-          sizeBytes: 1,
-          ...(previewUrl ? { previewUrl } : {}),
-          source: {
-            kind: "snap-shot" as const,
-            capturedAt: "2026-03-17T19:12:28.000Z",
-            appName: "Terminal",
-            windowTitle: "t3code — Tests",
-            appIconDataUrl: "data:image/png;base64,aWNvbg==",
-          },
-        },
-      ],
-    },
-  };
-}
-
 describe("MessagesTimeline", () => {
   it("shows dynamic tool input without cached output when the row is expanded", async () => {
     activityTestState.expanded = true;
@@ -1289,38 +1262,6 @@ describe("MessagesTimeline", () => {
     expect(onAnchorReady).toHaveBeenCalledOnce();
     expect(onAnchorReady).toHaveBeenCalledWith(secondEntry.message.id, 1);
     expect(onAnchorSizeChanged).toHaveBeenCalledWith(secondEntry.message.id, 240);
-  });
-
-  it("renders SnapShot window details after the preview resolves", () => {
-    const onAnchorReady = vi.fn();
-    const firstEntry = buildSnapShotTimelineEntry("data:image/png;base64,iVBORw0KGgo=");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        anchorMessageId={firstEntry.message.id}
-        onAnchorReady={onAnchorReady}
-        contentInsetEndAdjustment={144}
-        timelineEntries={[firstEntry]}
-      />,
-    );
-
-    expect(markup).toContain("Terminal");
-    expect(markup).toContain("t3code — Tests");
-    expect(markup).toContain('src="data:image/png;base64,aWNvbg=="');
-    expect(onAnchorReady).toHaveBeenCalledOnce();
-    expect(onAnchorReady).toHaveBeenCalledWith(firstEntry.message.id, 0);
-  });
-
-  it("does not render SnapShot window details before the preview resolves", () => {
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[buildSnapShotTimelineEntry()]} />,
-    );
-
-    expect(markup).toContain("screenshot.png");
-    expect(markup).not.toContain("Terminal");
-    expect(markup).not.toContain("t3code — Tests");
-    expect(markup).not.toContain('src="data:image/png;base64,aWNvbg=="');
-    expect(markup).not.toContain("h-28 w-52 max-w-full");
   });
 
   it("does not reserve end space for a follow-up user message", () => {

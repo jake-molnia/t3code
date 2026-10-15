@@ -230,10 +230,10 @@ describe("connection onboarding", () => {
     }),
   );
 
-  it.effect("pairs an outdated server so it can be updated from this client", () =>
+  it.effect("refuses an outdated server even if it advertises legacy self-update", () =>
     Effect.gen(function* () {
       const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
-      const registration = yield* preparePairingRegistration({
+      const error = yield* preparePairingRegistration({
         host: "remote.example.test",
         pairingCode: "pairing-token",
       }).pipe(
@@ -246,9 +246,12 @@ describe("connection onboarding", () => {
             }),
           ),
         ),
+        Effect.flip,
       );
-      expect(registration.target.environmentId).toBe("environment-paired");
-      expect(calls.map((call) => call.url)).toContain("https://remote.example.test/oauth/token");
+      expect(error).toMatchObject({ reason: "unsupported" });
+      expect(calls.map((call) => call.url)).not.toContain(
+        "https://remote.example.test/oauth/token",
+      );
     }),
   );
 

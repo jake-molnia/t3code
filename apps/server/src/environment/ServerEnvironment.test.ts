@@ -79,23 +79,18 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
 });
 
 it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
-  it.effect("does not advertise host installation or self-update ownership", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const baseDir = yield* fs.makeTempDirectoryScoped();
-      const prefix = `${baseDir}/node`;
-      const entry = `${prefix}/lib/node_modules/t3/dist/bin.mjs`;
-      yield* fs.makeDirectory(`${prefix}/lib/node_modules/t3/dist`, { recursive: true });
-      yield* fs.makeDirectory(`${prefix}/bin`, { recursive: true });
-      yield* fs.writeFileString(entry, "");
-      yield* fs.writeFileString(
-        `${prefix}/lib/node_modules/t3/package.json`,
-        '{"name":"t3","version":"0.0.45","bin":{"t3":"./dist/bin.mjs"}}',
-      );
-      yield* fs.symlink(entry, `${prefix}/bin/t3`);
-      const config = yield* makeServerConfig(baseDir);
-      yield* fs.makeDirectory(config.stateDir, { recursive: true });
-      for (const mode of ["web", "desktop"] as const) {
+  it.effect.each([
+    { revision: undefined, expected: null },
+    { revision: "not-a-commit", expected: null },
+    { revision: "a".repeat(40), expected: null },
+  ])(
+    "does not attribute ambient image provenance to source execution: $revision",
+    ({ revision, expected }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped();
+        const config = yield* makeServerConfig(baseDir);
+        yield* fs.makeDirectory(config.stateDir, { recursive: true });
         const descriptor = yield* Effect.gen(function* () {
           const environment = yield* ServerEnvironment.ServerEnvironment;
           return yield* environment.getDescriptor;
@@ -103,18 +98,22 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
           Effect.provide(
             ServerEnvironment.layer.pipe(
               Layer.provide(layerEmptySecretStore),
-              Layer.provide(ServerConfig.layer({ ...config, mode })),
+              Layer.provide(ServerConfig.layer({ ...config, mode: "web" })),
             ),
           ),
-          Effect.provideService(HostProcess.Arguments, ["node", entry]),
-          Effect.provideService(HostProcess.IsExecutable, false),
-          Effect.provideService(HostProcess.Platform, "linux"),
-          Effect.provideService(HostProcess.Environment, {}),
+          Effect.provideService(
+            HostProcess.Environment,
+            revision ? { T3_SOURCE_REVISION: revision } : {},
+          ),
         );
-        expect(descriptor.capabilities.serverInstallation).toBeUndefined();
-        expect(descriptor.capabilities.serverSelfUpdate).toBeUndefined();
-      }
-    }),
+        expect(descriptor.build?.revision).toBe(expected);
+        expect(descriptor.build?.sourceRepository).toBe("jake-molnia/t3code");
+        expect(descriptor.build?.packageVersion).toBe(descriptor.serverVersion);
+        expect(descriptor.build?.upstreamVersion).toBe(
+          descriptor.serverVersion.replace(/\.sandbox\.\d+$/, ""),
+        );
+        expect(descriptor.capabilities).not.toHaveProperty("serverSelfUpdate");
+      }),
   );
   it.effect.each([
     { name: "missing", content: undefined },
@@ -291,21 +290,14 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         );
 
       const withFd = yield* describeWith({ mode: "desktop", desktopTelemetryControlFd: 5 });
-      expect(withFd.capabilities.serverSelfUpdate).toBeUndefined();
-      expect(withFd.capabilities.desktopAppUpdate).toBeUndefined();
-      expect(withFd.capabilities.serverSelfUpdateProgress).toBeUndefined();
-      // v2 recovery terminalizes running runs on restart, so continuation
-      // stays unadvertised until the v2 runtime carries the markers.
-      expect(withFd.capabilities.serverUpdateThreadContinuation).toBeUndefined();
 
       const withoutFd = yield* describeWith({ mode: "desktop" });
-      expect(withoutFd.capabilities.serverSelfUpdate).toBeUndefined();
-      expect(withoutFd.capabilities.desktopAppUpdate).toBeUndefined();
-      expect(withoutFd.capabilities.serverSelfUpdateProgress).toBeUndefined();
-      expect(withoutFd.capabilities.serverUpdateThreadContinuation).toBeUndefined();
 
       const web = yield* describeWith({ mode: "web", desktopTelemetryControlFd: 5 });
-      expect(web.capabilities.desktopAppUpdate).toBeUndefined();
+      for (const descriptor of [withFd, withoutFd, web]) {
+        expect(descriptor.capabilities).not.toHaveProperty("serverSelfUpdate");
+        expect(descriptor.capabilities).not.toHaveProperty("desktopAppUpdate");
+      }
     }),
   );
 

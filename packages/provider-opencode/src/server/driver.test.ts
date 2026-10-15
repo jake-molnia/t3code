@@ -13,20 +13,18 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
-import * as ProviderMaintenance from "@t3tools/provider-core/server/maintenanceResolver";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import {
   OPENCODE_2_RESPONSES,
   OPENCODE_2_WORKSPACE_RESPONSES,
   replayOpenCodeServer,
 } from "./probeResponses.fixture.ts";
-import { OpenCodeDriver, openCodeUpdateFor } from "./driver.ts";
+import { OpenCodeDriver } from "./driver.ts";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 
 const serverStarts: Array<string> = [];
@@ -144,55 +142,7 @@ const npmGlobalInstall = (prefix: string, packagePath: ReadonlyArray<string>, bi
   NodeFS.symlinkSync(target, link);
   return link;
 };
-const resolveUpdate = (generation: "v1" | "v2", binaryPath: string) =>
-  ProviderMaintenance.resolveProviderMaintenanceCapabilitiesEffect(openCodeUpdateFor(generation), {
-    binaryPath,
-    env: { PATH: "" },
-  }).pipe(
-    Effect.provideService(
-      ChildProcessSpawner.ChildProcessSpawner,
-      ChildProcessSpawner.make(() => Effect.die("resolving an update must not spawn")),
-    ),
-    Effect.provide(NodeServices.layer),
-  );
-
-it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-  "updates an npm-global OpenCode 2 install as @opencode/cli and a 1.x one as opencode-ai",
-  () =>
-    Effect.gen(function* () {
-      const root = NodeFS.realpathSync(
-        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-opencode-update-")),
-      );
-      const v2Prefix = NodePath.join(root, "v2");
-      const v1Prefix = NodePath.join(root, "v1");
-      const v2 = yield* resolveUpdate(
-        "v2",
-        npmGlobalInstall(v2Prefix, ["@opencode", "cli"], "opencode.exe"),
-      );
-      assert.deepStrictEqual(v2.update?.args, [
-        "install",
-        "-g",
-        "--prefix",
-        v2Prefix,
-        "--allow-scripts=@opencode/cli",
-        "@opencode/cli@latest",
-      ]);
-      const v1 = yield* resolveUpdate(
-        "v1",
-        npmGlobalInstall(v1Prefix, ["opencode-ai"], "opencode"),
-      );
-      assert.strictEqual(v1.update?.args.at(-1), "opencode-ai@latest");
-      // A 1.x install is never offered 2.x's package, or the reverse.
-      assert.isNull(
-        (yield* resolveUpdate("v2", NodePath.join(v1Prefix, "bin", "opencode"))).update,
-      );
-      assert.isNull(
-        (yield* resolveUpdate("v1", NodePath.join(v2Prefix, "bin", "opencode"))).update,
-      );
-    }),
-);
-
-// The update the driver offers follows the version the binary reports now.
+// The release metadata the driver offers follows the version the binary reports now.
 const versionOutput: { current: string | undefined } = { current: undefined };
 const versionProbes: Array<string> = [];
 const changingRuntime = {
@@ -224,7 +174,7 @@ const layerUpdate = Layer.mergeAll(
   Layer.succeed(OpenCodeRuntime.OpenCodeRuntime, changingRuntime),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
-it.layer(layerUpdate)("OpenCodeDriver updates", (it) => {
+it.layer(layerUpdate)("OpenCodeDriver release metadata", (it) => {
   it.effect("never runs the binary for a disabled instance's update check", () =>
     Effect.gen(function* () {
       versionProbes.length = 0;
@@ -236,15 +186,14 @@ it.layer(layerUpdate)("OpenCodeDriver updates", (it) => {
         enabled: false,
         config: { ...OpenCodeDriver.defaultConfig(), binaryPath: "opencode" },
       }).pipe(Effect.provideService(HttpClient.HttpClient, noHttp));
-      const maintenance = yield* instance.snapshot.resolveMaintenance();
-      yield* instance.snapshot.resolveMaintenance({ fresh: true });
-      assert.isNull(maintenance.update);
+      assert.deepStrictEqual(yield* instance.snapshot.getVersionSource(), { packageName: null });
+      yield* instance.snapshot.getVersionSource({ fresh: true });
       assert.deepStrictEqual(versionProbes, []);
     }).pipe(Effect.scoped),
   );
 
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-    "offers no package update for an unknown version and follows a changed one on a fresh read",
+    "offers no release metadata for an unknown version and follows a changed one on a fresh read",
     () =>
       Effect.gen(function* () {
         const root = NodeFS.realpathSync(
@@ -261,20 +210,18 @@ it.layer(layerUpdate)("OpenCodeDriver updates", (it) => {
 
         // The version could not be read: which package owns the binary is unknown.
         versionOutput.current = undefined;
-        const unknown = yield* instance.snapshot.resolveMaintenance({ fresh: true });
-        assert.isNull(unknown.update);
+        const unknown = yield* instance.snapshot.getVersionSource({ fresh: true });
         assert.isNull(unknown.packageName);
 
         versionOutput.current = "1.18.32\n";
-        const v1 = yield* instance.snapshot.resolveMaintenance({ fresh: true });
+        const v1 = yield* instance.snapshot.getVersionSource({ fresh: true });
         assert.strictEqual(v1.packageName, "opencode-ai");
 
         // The same path now reports 2.x (reinstalled in place): a fresh read re-probes
         // and never offers 1.x's package for it.
         versionOutput.current = "opencode v2.0.18\n";
-        const v2 = yield* instance.snapshot.resolveMaintenance({ fresh: true });
+        const v2 = yield* instance.snapshot.getVersionSource({ fresh: true });
         assert.strictEqual(v2.packageName, "@opencode/cli");
-        assert.isNull(v2.update);
       }).pipe(Effect.scoped),
   );
 });

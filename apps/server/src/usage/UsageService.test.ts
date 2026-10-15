@@ -1,3 +1,4 @@
+import * as AntigravityUsage from "../provider/Drivers/AntigravityUsage.ts";
 import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
 import { harnessDefaults } from "../execution/HarnessDefaults.ts";
 import * as HistorySources from "./UsageHistorySources.ts";
@@ -130,6 +131,7 @@ const layerService = (input: {
   layerCursorUsageAccounts(
     CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer)),
   ).pipe(
+    Layer.provideMerge(AntigravityUsage.layer),
     Layer.provideMerge(ProviderHostLive.layer),
     Layer.provideMerge(Layer.mock(BackgroundPolicy.BackgroundPolicy)({})),
     Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
@@ -524,7 +526,7 @@ describe("UsageService", () => {
   );
 
   it.live(
-    "scans deployed Pi homes with the same overrides as launch without authorizing implicit providers",
+    "scans Pi usage with instance settings ahead of operator defaults without authorizing implicit providers",
     () =>
       Effect.gen(function* () {
         const { home, settings } = yield* setup;
@@ -533,12 +535,12 @@ describe("UsageService", () => {
         for (const scenario of [
           "deployed-default",
           "explicit-instance",
-          "explicit-operator",
+          "instance-over-operator",
         ] as const) {
           const expectedAgentDir =
             scenario === "deployed-default"
               ? NodePath.join(stateDir, "harnesses/pi")
-              : NodePath.join(home, scenario);
+              : NodePath.join(home, "explicit-instance");
           const instances =
             scenario === "deployed-default"
               ? settings.providerInstances
@@ -567,7 +569,7 @@ describe("UsageService", () => {
                           value:
                             scenario === "deployed-default"
                               ? "${T3_HARNESS_STATE_DIR}/pi"
-                              : expectedAgentDir,
+                              : NodePath.join(home, "operator-default"),
                           sensitive: false,
                         },
                       ],

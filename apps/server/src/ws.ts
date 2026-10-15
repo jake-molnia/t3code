@@ -1,3 +1,4 @@
+import * as ServerVersion from "./environment/ServerVersion.ts";
 import * as ExecutionPools from "./agentRuntime/ExecutionPools.ts";
 import * as AgentRuntimeClient from "./agentRuntime/RuntimeClient.ts";
 import * as RuntimeContracts from "@t3tools/contracts";
@@ -77,7 +78,6 @@ import {
   ProjectMutationError,
   ProviderUploadFeedbackError,
   ProviderSetupError,
-  ServerSelfUpdateError,
   type ServerConfig as ClientServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
@@ -166,7 +166,6 @@ import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.t
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as ModelManifest from "./provider/ModelManifest.ts";
-import * as ProviderMaintenance from "@t3tools/provider-core/server/maintenanceResolver";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -245,6 +244,31 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
+
+export const refreshProviderWorkspaceSnapshot = Effect.fn("ws.refreshProviderWorkspaceSnapshot")(
+  function* (
+    input: Parameters<ProviderRegistry.ProviderRegistry["Service"]["refreshWorkspaceSnapshot"]>[0],
+  ) {
+    const registry = yield* ProviderRegistry.ProviderRegistry;
+    const routes = yield* WorkspaceRouting.WorkspaceRouting;
+    const refresh = registry.refreshWorkspaceSnapshot(input);
+    if (input.fresh === true || !routes.enabled) return yield* refresh;
+    const observed = yield* routes.observe(input.cwd, refresh).pipe(
+      Effect.catchTags({
+        WorkspaceRoutingError: (cause) =>
+          Effect.fail(
+            new ProviderSetupError({
+              instanceId: input.instanceId,
+              operation: "refresh-workspace",
+              detail: "Could not observe provider workspace metadata.",
+              cause,
+            }),
+          ),
+      }),
+    );
+    return observed ?? (yield* registry.getProviders);
+  },
+);
 
 const resolveDiscoveryForConfig = <A, E, R>(
   discovery: Effect.Effect<A, E, R>,
@@ -1223,6 +1247,7 @@ const layerWsRpc = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+      const serverVersion = yield* ServerVersion.ServerVersion;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
@@ -2077,6 +2102,7 @@ const layerWsRpc = (
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
+        [WS_METHODS.serverGetReleaseNotice]: () => serverVersion.check,
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
@@ -2176,11 +2202,11 @@ const layerWsRpc = (
                 (instance) =>
                   Effect.gen(function* () {
                     yield* instance.invalidateCaches ?? Effect.void;
-                    const maintenance = yield* instance.snapshot.resolveMaintenance({
+                    const versionSource = yield* instance.snapshot.getVersionSource({
                       fresh: true,
                     });
-                    if (maintenance.packageName)
-                      yield* providerLatestVersions.invalidate(maintenance.packageName);
+                    if (versionSource.packageName)
+                      yield* providerLatestVersions.invalidate(versionSource.packageName);
                   }),
                 { concurrency: "unbounded", discard: true },
               );
@@ -2193,7 +2219,7 @@ const layerWsRpc = (
               yield* usageLimitSources.refresh;
             }
             let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
-              ? providerRegistry.refreshWorkspaceSnapshot({
+              ? refreshProviderWorkspaceSnapshot({
                   instanceId: input.instanceId,
                   cwd: input.cwd,
                   fresh: input.fresh === true,
@@ -2331,18 +2357,6 @@ const layerWsRpc = (
         [WS_METHODS.providerAuthLogout]: (input) => providerAuth.logout(input),
         [WS_METHODS.providerAuthSubscribe]: (input) =>
           providerAuth.subscribe(input, currentSessionId),
-        [WS_METHODS.serverUpdateServer]: () =>
-          Effect.fail(
-            new ServerSelfUpdateError({
-              reason: "Server updates are managed by the deployment image.",
-            }),
-          ),
-        [WS_METHODS.serverUpdateServerWithProgress]: () =>
-          Stream.fail(
-            new ServerSelfUpdateError({
-              reason: "Server updates are managed by the deployment image.",
-            }),
-          ),
         [WS_METHODS.serverUpsertKeybinding]: (rule) =>
           Effect.gen(function* () {
             const keybindingsConfig = yield* keybindings.upsertKeybindingRule(rule);

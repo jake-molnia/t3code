@@ -44,8 +44,6 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "./Manager.ts";
 import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 
-const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
-
 class WaitForConditionError extends Data.TaggedError("WaitForConditionError")<{
   readonly message: string;
 }> {}
@@ -241,8 +239,6 @@ interface CreateManagerOptions {
   resolveProviderInstanceEnvironment?: Parameters<
     typeof TerminalManager.makeWithOptions
   >[0]["resolveProviderInstanceEnvironment"];
-  managedBinaryCacheDir?: string;
-  managedBinaryToolsDir?: string;
 }
 
 interface ManagerFixture {
@@ -291,12 +287,6 @@ const createManager = (
         ...(options.resolveProviderInstanceEnvironment !== undefined
           ? { resolveProviderInstanceEnvironment: options.resolveProviderInstanceEnvironment }
           : {}),
-        ...(options.managedBinaryCacheDir === undefined
-          ? {}
-          : {
-              managedBinaryCacheDir: options.managedBinaryCacheDir,
-              managedBinaryToolsDir: options.managedBinaryToolsDir,
-            }),
       });
       const eventsRef = yield* Ref.make<ReadonlyArray<TerminalEvent>>([]);
       const unsubscribe = yield* manager.subscribe((event) =>
@@ -1941,70 +1931,6 @@ it.layer(
           args: ["-NoLogo"],
         }),
       );
-    }),
-  );
-
-  it.effect("preserves Windows Path casing when appending managed ACP binaries", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-terminal-acp-path-",
-      });
-      const installBin = path.join(
-        cacheDir,
-        "tools",
-        "example-agent",
-        "1.2.3",
-        "windows-x86_64",
-        "bin",
-      );
-      yield* fileSystem.makeDirectory(installBin, { recursive: true });
-      yield* fileSystem.makeDirectory(path.join(cacheDir, "acp-registry"), { recursive: true });
-      yield* fileSystem.writeFileString(
-        path.join(cacheDir, "acp-registry", "registry.json"),
-        encodeUnknownJson({
-          version: "1.0.0",
-          agents: [
-            {
-              id: "example-agent",
-              name: "Example Agent",
-              version: "1.2.3",
-              description: "ACP Registry test agent",
-              distribution: {
-                binary: {
-                  "windows-x86_64": {
-                    archive: "https://registry.test/example-agent.zip",
-                    cmd: "bin/example-agent.exe",
-                  },
-                },
-              },
-            },
-          ],
-        }),
-      );
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        managedBinaryCacheDir: cacheDir,
-        managedBinaryToolsDir: path.join(cacheDir, "tools"),
-        env: {
-          ComSpec: "C:\\Windows\\System32\\cmd.exe",
-          Path: "C:\\Windows\\System32",
-          SystemRoot: "C:\\Windows",
-        },
-      }).pipe(
-        Effect.provide(
-          Layer.merge(
-            layerWithHostPlatform("win32"),
-            Layer.succeed(HostProcess.Architecture, "x64"),
-          ),
-        ),
-      );
-
-      yield* manager.open(openInput());
-
-      const spawnEnv = ptyAdapter.spawnInputs[0]?.env;
-      expect(spawnEnv?.PATH).toBeUndefined();
-      expect(spawnEnv?.Path).toBe(`C:\\Windows\\System32;${installBin}`);
     }),
   );
 

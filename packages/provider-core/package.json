@@ -51,14 +51,6 @@
       "types": "./src/server/instanceIdentity.ts",
       "import": "./src/server/instanceIdentity.ts"
     },
-    "./server/maintenance": {
-      "types": "./src/server/maintenance.ts",
-      "import": "./src/server/maintenance.ts"
-    },
-    "./server/maintenanceResolver": {
-      "types": "./src/server/maintenanceResolver.ts",
-      "import": "./src/server/maintenanceResolver.ts"
-    },
     "./server/managedProvider": {
       "types": "./src/server/managedProvider.ts",
       "import": "./src/server/managedProvider.ts"
@@ -182,6 +174,10 @@
     "./server/usageLimits": {
       "types": "./src/server/usageLimits.ts",
       "import": "./src/server/usageLimits.ts"
+    },
+    "./server/versionAdvisory": {
+      "types": "./src/server/versionAdvisory.ts",
+      "import": "./src/server/versionAdvisory.ts"
     }
   },
   "scripts": {
