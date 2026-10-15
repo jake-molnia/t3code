@@ -3,14 +3,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-
-export const RELAY_LINK_PROOF_TYP = "t3-env-link+jwt";
-export const RELAY_MINT_REQUEST_TYP = "t3-cloud-mint+jwt";
-export const RELAY_HEALTH_REQUEST_TYP = "t3-cloud-health+jwt";
-export const RELAY_MINT_RESPONSE_TYP = "t3-env-mint+jwt";
-export const RELAY_HEALTH_RESPONSE_TYP = "t3-env-health+jwt";
 export const RELAY_ACTIVITY_PUBLISH_TYP = "t3-env-activity+jwt";
-export const RELAY_MANAGED_TUNNEL_RECOVERY_TYP = "t3-env-managed-tunnel-recovery+jwt";
 export const RELAY_HOOK_DELIVERY_TYP = "t3-relay-hook-delivery+jwt";
 /** Header carrying the signed proof that a webhook request came from the relay. */
 export const RELAY_HOOK_DELIVERY_HEADER = "x-t3-relay-delivery";

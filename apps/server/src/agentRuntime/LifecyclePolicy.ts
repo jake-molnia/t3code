@@ -81,7 +81,7 @@ export type LifecycleDecision =
   | "suspend-submitted"
   | "release-submitted";
 
-export function memberIsBusy(member: LifecycleMember): boolean {
+function memberIsBusy(member: LifecycleMember): boolean {
   const thread = member.thread;
   if (thread.activeRunId !== null || thread.activityRunStatus != null) return true;
   if (["preparing", "starting", "running", "waiting"].includes(thread.status)) return true;
@@ -110,7 +110,7 @@ export function memberIsBusy(member: LifecycleMember): boolean {
 
 const millis = (value: DateTime.Utc | null | undefined): number =>
   value ? DateTime.toEpochMillis(value) : 0;
-export function lastActivity(snapshot: LifecycleSnapshot): number {
+function lastActivity(snapshot: LifecycleSnapshot): number {
   return Math.max(
     0,
     ...snapshot.members.flatMap(({ thread }) => [
@@ -454,7 +454,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
   return LifecyclePolicy.of({ enabled: ports.enabled, reconcileThread, requestSettlement, start });
 });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const runtime = yield* RuntimeClient.RuntimeClient;
   const history = yield* UsageHistory.UsageHistory;

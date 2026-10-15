@@ -94,8 +94,8 @@ export const AuthFilesystemWriteScope = "filesystem:write" as const;
 const AuthReviewWriteScope = "review:write" as const;
 export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
-export const AuthRelayReadScope = "relay:read" as const;
-export const AuthRelayWriteScope = "relay:write" as const;
+const AuthRelayReadScope = "relay:read" as const;
+const AuthRelayWriteScope = "relay:write" as const;
 export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,

@@ -26,5 +26,3 @@ export const runtimeModeConfig: Record<
     icon: LockOpenIcon,
   },
 };
-
-export const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];

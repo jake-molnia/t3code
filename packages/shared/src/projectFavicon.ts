@@ -2,7 +2,7 @@ import { WORKSPACE_IMAGE_PREVIEW_EXTENSIONS } from "./filePreview.ts";
 
 export const PROJECT_FAVICON_FALLBACK_MARKER = "project-favicon-missing";
 
-export const PROJECT_FAVICON_EXTENSIONS = [...WORKSPACE_IMAGE_PREVIEW_EXTENSIONS, ".icns"] as const;
+const PROJECT_FAVICON_EXTENSIONS = [...WORKSPACE_IMAGE_PREVIEW_EXTENSIONS, ".icns"] as const;
 
 export function isProjectFaviconPath(path: string): boolean {
   const literalPath = path.toLowerCase();
