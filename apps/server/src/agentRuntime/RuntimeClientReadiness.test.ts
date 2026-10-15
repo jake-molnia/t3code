@@ -64,6 +64,7 @@ it.live.each([
     const allowAdmission = yield* Deferred.make<void>();
     let posts = 0;
     let reads = 0;
+    let admitted = false;
     const controller = yield* Effect.acquireRelease(
       Effect.promise(() =>
         listenWorker({
@@ -71,43 +72,53 @@ it.live.each([
           port: 0,
           handle: async (request) => {
             expect(activity.has("readiness-workspace")).toBe(true);
-            if (request.method === "POST") {
+            const identity = {
+              workspaceId: "readiness-workspace",
+              allocationId: "one",
+              generation: 1,
+              incarnation: "worker",
+              podUid: "pod",
+              protocolVersion: 1,
+            };
+            const response = (running: boolean, superseded = false) =>
+              Response.json(
+                {
+                  id: "readiness-workspace",
+                  pool: "local",
+                  profile: "t3",
+                  desiredState: superseded ? "released" : running ? "running" : "released",
+                  state: running ? "running" : "released",
+                  version: running ? "active" : "registered",
+                  progress: null,
+                  error: null,
+                  identity: running ? identity : null,
+                  execution: running
+                    ? { identity, endpoint: "http://worker.test", token: "test-worker-token" }
+                    : null,
+                },
+                { headers: { etag: running ? '"active"' : '"registered"' } },
+              );
+            if (request.method === "PUT" && !new URL(request.url).pathname.endsWith("/state")) {
+              expect(await request.json()).toEqual({ pool: "local", profile: "t3" });
+              admitted = false;
+              return response(false);
+            }
+            if (request.method === "PUT") {
               posts += 1;
               await run(Deferred.succeed(admissionEntered, undefined));
               await run(Deferred.await(allowAdmission));
-              expect(await request.json()).toMatchObject({
-                workspaceId: "readiness-workspace",
-                revision: 1,
-                action: "ensure_running",
-              });
-              return Response.json({}, { status: testCase.postStatus });
+              expect(await request.json()).toEqual({ desiredState: "running" });
+              expect(request.headers.get("if-match")).toBe('"registered"');
+              if (testCase.postStatus !== 202)
+                return Response.json({}, { status: testCase.postStatus });
+              admitted = true;
+              return response(true);
             }
+            if (!admitted) return response(false);
             reads += 1;
             if (reads === 1 && testCase.firstReadStatus !== 200)
               return new Response(null, { status: testCase.firstReadStatus });
-            const operationId = "ensure:readiness-workspace:1";
-            return Response.json({
-              state: {
-                request: {
-                  operationId,
-                  revision: testCase.superseded ? 2 : 1,
-                  action: testCase.superseded ? "release_compute" : "ensure_running",
-                },
-                epoch: 1,
-                phase: "running",
-                completedOperation: operationId,
-                identity: {
-                  workspaceId: "readiness-workspace",
-                  allocationId: "one",
-                  generation: 1,
-                  incarnation: "worker",
-                  podUid: "pod",
-                  protocolVersion: 1,
-                },
-                endpoint: "http://worker.test",
-              },
-              token: "test-worker-token",
-            });
+            return response(true, testCase.superseded);
           },
         }),
       ),

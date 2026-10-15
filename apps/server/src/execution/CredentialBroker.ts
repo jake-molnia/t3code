@@ -22,7 +22,7 @@ const decodeAccess = Schema.decodeUnknownEffect(CodexAccess);
 const rejected = (status: number) => ({ status, body: { error: "Provider access unavailable" } });
 
 /** Resolves the owner for every access so retained credentials survive utility worker replacement. */
-export const access = Effect.fn("CredentialBroker.access")(function* (
+const access = Effect.fn("CredentialBroker.access")(function* (
   authorization: string | undefined,
   body: unknown,
 ) {

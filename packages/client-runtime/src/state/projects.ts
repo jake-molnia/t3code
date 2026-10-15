@@ -9,7 +9,7 @@ import {
 
 export { normalizeProjectPathForComparison, normalizeProjectPathForDispatch };
 
-export const isWindowsPlatform = (platform: string): boolean => {
+const isWindowsPlatform = (platform: string): boolean => {
   return /^win(dows)?/i.test(platform);
 };
 

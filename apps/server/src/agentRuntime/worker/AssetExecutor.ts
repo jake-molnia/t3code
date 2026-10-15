@@ -8,7 +8,7 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeStream from "node:stream";
-import { pipeline } from "node:stream/promises";
+import * as NodeStreamPromises from "node:stream/promises";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -260,7 +260,7 @@ export const makeAssetExecutor = Effect.gen(function* () {
                 },
               });
               try {
-                await pipeline(
+                await NodeStreamPromises.pipeline(
                   source.handle.createReadStream({ autoClose: false }),
                   hashing,
                   NodeFS.createWriteStream(temporary, { flags: "wx", mode: 0o600 }),

@@ -36,15 +36,16 @@ const services = EventSink.layer.pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(FetchHttpClient.layer),
 );
-const operationSchema = Schema.Struct({
-  workspaceId: Schema.String,
-  operationId: Schema.String,
-  revision: Schema.Number,
-  action: Schema.String,
-  profile: Schema.String,
+const registrationSchema = Schema.Struct({ pool: Schema.String, profile: Schema.String });
+const stateSchema = Schema.Struct({
+  desiredState: Schema.Literals(["running", "suspended", "released"]),
 });
-const decodeOperation = Schema.decodeUnknownSync(operationSchema);
-type Operation = typeof operationSchema.Type;
+type Operation = {
+  workspaceId: string;
+  profile: string;
+  desiredState: typeof stateSchema.Type.desiredState;
+  version: string;
+};
 const identity = (workspaceId: string, controller: string) => ({
   workspaceId,
   allocationId: `${controller}-allocation`,
@@ -97,36 +98,75 @@ const controller = (name: string) =>
               },
               { status: health.metricsStatus },
             );
-          if (url.pathname === "/control/v1/operations" && request.method === "POST") {
-            const operation = decodeOperation(await request.json());
-            operations.push(operation);
-            if (health.failNextStop && operation.action !== "ensure_running") {
-              health.failNextStop = false;
-              return Response.json({}, { status: 503 });
-            }
-            states.set(operation.workspaceId, operation);
-            return Response.json({});
-          }
           if (url.pathname.startsWith("/control/v1/workspaces/")) {
             if (health.workspaceStatus !== 200)
               return Response.json({}, { status: health.workspaceStatus });
+            const stateRequest = url.pathname.endsWith("/state");
             const workspaceId = decodeURIComponent(
-              url.pathname.slice("/control/v1/workspaces/".length),
+              url.pathname.slice("/control/v1/workspaces/".length).replace(/\/state$/, ""),
             );
-            reads.push({ workspaceId, profile: url.searchParams.get("profile") });
-            const state = states.get(workspaceId);
+            if (request.method === "PUT" && !stateRequest) {
+              const registration = Schema.decodeUnknownSync(registrationSchema)(
+                await request.json(),
+              );
+              expect(registration.pool).toBe(name);
+              if (!states.has(workspaceId))
+                states.set(workspaceId, {
+                  workspaceId,
+                  profile: registration.profile,
+                  desiredState: "released",
+                  version: "0",
+                });
+            }
+            let state = states.get(workspaceId);
             if (!state) return Response.json({}, { status: 404 });
-            return Response.json({
-              state: {
-                request: state,
-                epoch: 1,
-                phase: health.workspacePhase,
-                completedOperation: state.operationId,
-                identity: identity(workspaceId, name),
-                endpoint: `http://worker.invalid/${name}/${encodeURIComponent(workspaceId)}`,
+            if (stateRequest && request.method === "PUT") {
+              const update = Schema.decodeUnknownSync(stateSchema)(await request.json());
+              const operation = {
+                ...state,
+                desiredState: update.desiredState,
+                version: request.headers.get("if-match") ?? "",
+              };
+              operations.push(operation);
+              if (health.failNextStop && update.desiredState !== "running") {
+                health.failNextStop = false;
+                return Response.json({}, { status: 503 });
+              }
+              if (request.headers.get("if-match") !== `"${state.version}"`)
+                return Response.json({}, { status: 412 });
+              state = {
+                ...state,
+                desiredState: update.desiredState,
+                version: String(Number(state.version) + 1),
+              };
+              states.set(workspaceId, state);
+            }
+            if (request.method === "GET") reads.push({ workspaceId, profile: state.profile });
+            const workerIdentity = identity(workspaceId, name);
+            const phase =
+              state.desiredState === "running" ? health.workspacePhase : state.desiredState;
+            return Response.json(
+              {
+                id: workspaceId,
+                pool: name,
+                profile: state.profile,
+                desiredState: state.desiredState,
+                state: phase,
+                version: state.version,
+                progress: null,
+                error: null,
+                identity: workerIdentity,
+                execution:
+                  phase === "running"
+                    ? {
+                        identity: workerIdentity,
+                        endpoint: `http://worker.invalid/${name}/${encodeURIComponent(workspaceId)}`,
+                        token: "worker-private-token",
+                      }
+                    : null,
               },
-              token: "worker-private-token",
-            });
+              { headers: { etag: `"${state.version}"` } },
+            );
           }
           return new Response(null, { status: 404 });
         },

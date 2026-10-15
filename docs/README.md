@@ -46,7 +46,6 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Environment auth](./internals/environment-auth.md)
 - [Assistant citations](./internals/assistant-citations.md)
 - [Terminal runtime](./internals/terminal-runtime.md)
-- [Voice input](./internals/voice-input.md)
 
 ### Runbooks
 

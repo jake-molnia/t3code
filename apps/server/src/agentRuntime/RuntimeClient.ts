@@ -26,21 +26,33 @@ class ReadinessKey extends Data.Class<{
   readonly revision: number;
 }> {}
 
-const RuntimeState = Schema.Struct({
-  request: Schema.Struct({
-    operationId: Schema.String,
-    revision: Schema.Number,
-    action: Schema.String,
-  }),
-  epoch: Schema.Number,
-  phase: Schema.String,
-  completedOperation: Schema.optionalKey(Schema.String),
-  identity: Schema.optionalKey(ExecutionIdentity),
-  endpoint: Schema.optionalKey(Schema.String),
+const RuntimeFailure = Schema.Struct({
+  code: Schema.String,
+  message: Schema.String,
+  retryable: Schema.Boolean,
 });
-const Access = Schema.Struct({
-  state: RuntimeState,
-  token: Schema.optionalKey(Schema.String),
+export const WorkspaceResource = Schema.Struct({
+  id: Schema.String,
+  pool: Schema.String,
+  profile: Schema.String,
+  desiredState: Schema.Literals(["running", "suspended", "released"]),
+  state: Schema.Literals([
+    "running",
+    "suspended",
+    "released",
+    "starting",
+    "suspending",
+    "releasing",
+    "failed",
+    "unavailable",
+  ]),
+  version: Schema.NonEmptyString,
+  progress: Schema.NullOr(Schema.Struct({ step: Schema.String, startedAt: Schema.String })),
+  error: Schema.NullOr(RuntimeFailure),
+  identity: Schema.NullOr(ExecutionIdentity),
+  execution: Schema.NullOr(
+    Schema.Struct({ identity: ExecutionIdentity, endpoint: Schema.String, token: Schema.String }),
+  ),
 });
 
 export class RuntimeClientError extends Schema.TaggedError<RuntimeClientError>()(
@@ -75,7 +87,7 @@ export function isWorkerObservationPending(error: RuntimeClientError): boolean {
 }
 
 export type CompletedStop = Pick<
-  typeof LifecycleStopRequest.Type,
+  typeof LifecycleStopReceipt.Type,
   "operationId" | "revision" | "action"
 >;
 
@@ -88,16 +100,41 @@ export type RuntimeObservation =
       readonly completedStop?: CompletedStop;
     };
 
-export const LifecycleStopRequest = Schema.Struct({
-  workspaceId: Schema.String,
+/** Local policy receipt. Only desiredState and the opaque version cross the runtime boundary. */
+const SubmittedStopReceipt = Schema.Struct({
   operationId: Schema.String,
   revision: Schema.Number,
   action: Schema.Literals(["suspend", "release_compute"]),
-  profile: Schema.String,
-  expectedAllocationId: Schema.String,
-  expectedGeneration: Schema.Number,
-  expectedIncarnation: Schema.String,
+  expectedIdentity: ExecutionIdentity,
+  version: Schema.String,
+  acceptedVersion: Schema.NullOr(Schema.String),
 });
+const LegacyStopReceipt = Schema.Struct({
+  legacy: Schema.Literal(true),
+  operationId: Schema.String,
+  revision: Schema.Number,
+  action: Schema.Literals(["suspend", "release_compute"]),
+});
+export const LifecycleStopReceipt = Schema.Union([SubmittedStopReceipt, LegacyStopReceipt]);
+const decodeStopReceipt = Schema.decodeUnknownEffect(Schema.fromJsonString(LifecycleStopReceipt));
+const encodeStopReceipt = Schema.encodeEffect(Schema.fromJsonString(LifecycleStopReceipt));
+const decodeWorkspace = Schema.decodeUnknownEffect(WorkspaceResource);
+const decodeRuntimeFailure = Schema.decodeUnknownEffect(Schema.Struct({ error: RuntimeFailure }));
+
+export class RuntimeStopRetry extends Schema.TaggedError<RuntimeStopRetry>()(
+  "AgentRuntimeStopRetry",
+  {
+    receipt: SubmittedStopReceipt,
+    error: Schema.NullOr(RuntimeFailure),
+  },
+) {}
+const isRuntimeStopRetry = Schema.is(RuntimeStopRetry);
+export function retryableStop(error: RuntimeClientError): RuntimeStopRetry | null {
+  let cause: unknown = error;
+  while (isRuntimeClientError(cause)) cause = cause.cause;
+  return isRuntimeStopRetry(cause) ? cause : null;
+}
+
 export type LifecycleStopOptions = {
   operationId: string;
   expectedRevision: number;
@@ -171,7 +208,8 @@ export const layer = Layer.effect(
       );
     const failure = (operation: string) => (cause: unknown) =>
       new RuntimeClientError({ operation, cause });
-    const request = (pool: Pools.PoolConnection, path: string, body?: unknown) =>
+    const pathFor = (workspaceId: string) => `/v1/workspaces/${encodeURIComponent(workspaceId)}`;
+    const request = (pool: Pools.PoolConnection, path: string, body?: unknown, version?: string) =>
       Effect.gen(function* () {
         if (!enabled)
           return yield* new RuntimeClientError({
@@ -179,100 +217,102 @@ export const layer = Layer.effect(
             cause: "Remote execution is not configured",
           });
         const target = new URL(path.replace(/^\//, ""), pool.url.replace(/\/?$/, "/")).toString();
-        const base = (
-          body === undefined ? HttpClientRequest.get(target) : HttpClientRequest.post(target)
+        let base = (
+          body === undefined ? HttpClientRequest.get(target) : HttpClientRequest.put(target)
         ).pipe(HttpClientRequest.setHeader("authorization", `Bearer ${pool.token}`));
+        if (version !== undefined)
+          base = base.pipe(HttpClientRequest.setHeader("if-match", `"${version}"`));
         const outgoing = body === undefined ? base : yield* HttpClientRequest.bodyJson(base, body);
         const result = yield* httpClient.execute(outgoing);
-        if (result.status < 200 || result.status >= 300)
+        if (result.status < 200 || result.status >= 300) {
+          const detail = yield* result.json.pipe(
+            Effect.flatMap(decodeRuntimeFailure),
+            Effect.map((body) => body.error),
+            Effect.catch(() => Effect.succeed(null)),
+          );
           return yield* new RuntimeClientError({
             operation: "request",
-            cause: `Runtime HTTP ${result.status}`,
+            cause: detail ?? `Runtime HTTP ${result.status}`,
             httpStatus: result.status,
           });
-        return yield* result.json;
+        }
+        const resource = yield* result.json.pipe(Effect.flatMap(decodeWorkspace));
+        if (result.headers.etag !== `"${resource.version}"`)
+          return yield* new RuntimeClientError({
+            operation: "request",
+            cause: "Runtime resource ETag mismatch",
+          });
+        return resource;
       });
+    const readWorkspace = (pool: Pools.PoolConnection, workspaceId: string) =>
+      request(pool, pathFor(workspaceId)).pipe(
+        Effect.flatMap((resource) =>
+          resource.id === workspaceId &&
+          resource.pool === pool.id &&
+          resource.profile === pool.profile
+            ? Effect.succeed(resource)
+            : Effect.fail(
+                new RuntimeClientError({
+                  operation: "identity",
+                  cause: "Runtime workspace binding mismatch",
+                }),
+              ),
+        ),
+      );
     const ensureUncached = (workspaceId: string, revision: number) =>
       Effect.gen(function* () {
         const pool = yield* placement(workspaceId);
-        const profile = pool.profile;
-        yield* sql`UPDATE agent_runtime_workspaces SET execution_requested = 1 WHERE workspace_id = ${workspaceId} AND execution_requested = 0`;
-        let admittedRevision = revision;
-        let admitted = false;
-        for (let attempt = 0; attempt < 4 && !admitted; attempt++) {
-          admitted = yield* request(pool, "/v1/operations", {
-            workspaceId,
-            operationId: `ensure:${workspaceId}:${admittedRevision}`,
-            revision: admittedRevision,
-            action: "ensure_running",
-            profile,
-          }).pipe(
+        const admitted = yield* sql<{ revision: number }>`UPDATE agent_runtime_workspaces
+          SET admission_revision=admission_revision+CASE WHEN lifecycle_request_json IS NULL THEN 0 ELSE 1 END, execution_requested=1, lifecycle_request_json=NULL
+          WHERE workspace_id=${workspaceId} AND admission_revision=${revision}
+          RETURNING admission_revision AS revision`;
+        const admittedRevision = admitted[0]?.revision;
+        if (admittedRevision === undefined)
+          return yield* new RuntimeClientError({
+            operation: "ensure-running",
+            cause: "Local admission superseded",
+          });
+        yield* request(pool, pathFor(workspaceId), { pool: pool.id, profile: pool.profile });
+        let accepted = false;
+        for (let attempt = 0; attempt < 4 && !accepted; attempt++) {
+          const current = yield* readWorkspace(pool, workspaceId);
+          accepted = yield* request(
+            pool,
+            `${pathFor(workspaceId)}/state`,
+            { desiredState: "running" },
+            current.version,
+          ).pipe(
             Effect.as(true),
             Effect.catchTags({
               AgentRuntimeClientError: (error) =>
-                error.httpStatus === 409 ? Effect.succeed(false) : Effect.fail(error),
+                error.httpStatus === 412 ? Effect.succeed(false) : Effect.fail(error),
             }),
           );
-          if (!admitted) {
-            const rows = yield* sql<{
-              revision: number;
-            }>`UPDATE agent_runtime_workspaces
-              SET admission_revision = admission_revision + 1, execution_requested = 1 WHERE workspace_id = ${workspaceId}
-              RETURNING admission_revision AS revision`;
-            const next = rows[0];
-            if (!next)
-              return yield* new RuntimeClientError({
-                operation: "ensure-running",
-                cause: "Workspace disappeared during admission",
-              });
-            admittedRevision = next.revision;
-          }
         }
-        if (!admitted)
+        if (!accepted)
           return yield* new RuntimeClientError({
             operation: "ensure-running",
             cause: "Concurrent runtime admission did not settle",
           });
         const access = yield* Effect.gen(function* () {
           for (;;) {
-            const current = yield* request(
-              pool,
-              `/v1/workspaces/${encodeURIComponent(workspaceId)}?profile=${encodeURIComponent(profile)}`,
-            ).pipe(
+            const current = yield* readWorkspace(pool, workspaceId).pipe(
               Effect.retry({
                 while: (error) =>
                   error._tag === "AgentRuntimeClientError" && error.httpStatus === 503,
                 schedule: Schedule.spaced("250 millis"),
               }),
-              Effect.flatMap(Schema.decodeUnknownEffect(Access)),
             );
-            if (
-              current.state.request.revision > admittedRevision &&
-              current.state.request.action !== "ensure_running"
-            )
+            if (current.desiredState !== "running")
               return yield* new RuntimeClientError({
                 operation: "ensure-running",
                 cause: "Runtime request superseded",
               });
-            if (
-              current.state.request.action === "ensure_running" &&
-              current.state.request.revision >= admittedRevision &&
-              current.state.completedOperation === current.state.request.operationId &&
-              current.state.phase === "running" &&
-              current.token &&
-              current.state.identity &&
-              current.state.endpoint
-            ) {
-              return {
-                identity: current.state.identity,
-                endpoint: current.state.endpoint,
-                token: current.token,
-              };
-            }
-            if (current.state.phase === "failed")
+            if (current.state === "running" && current.execution) return current.execution;
+            if (current.state === "failed")
               return yield* new RuntimeClientError({
                 operation: "ensure-running",
-                cause: "Runtime allocation failed",
+                cause: current.error ?? "Runtime allocation failed",
               });
             yield* Effect.sleep("250 millis");
           }
@@ -366,25 +406,9 @@ export const layer = Layer.effect(
             cause: "Workspace request is in progress",
           });
         const pool = yield* placement(workspaceId);
-        const profile = pool.profile;
-        const current = yield* request(
-          pool,
-          `/v1/workspaces/${encodeURIComponent(workspaceId)}?profile=${encodeURIComponent(profile)}`,
-        ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Access)));
-        if (
-          current.state.phase === "released" ||
-          (current.state.phase === "suspended" && action === "suspend")
-        )
-          return;
-        if (
-          !current.state.identity ||
-          !sameIdentity(current.state.identity, options.expectedIdentity)
-        )
-          return yield* new RuntimeClientError({
-            operation: "stop",
-            cause: "Execution identity changed",
-          });
-        const payload = yield* sql.withTransaction(
+        const current = yield* readWorkspace(pool, workspaceId);
+        const desiredState = action === "suspend" ? "suspended" : "released";
+        const receipt = yield* sql.withTransaction(
           Effect.gen(function* () {
             const rows = yield* sql<{
               owner: string;
@@ -398,70 +422,90 @@ export const layer = Layer.effect(
                 cause: "Not the workspace owner",
               });
             if (row.receipt !== null) {
-              const previous = yield* Schema.decodeUnknownEffect(
-                Schema.fromJsonString(LifecycleStopRequest),
-              )(row.receipt);
+              const previous = yield* decodeStopReceipt(row.receipt);
               if (
-                (previous.operationId === options.operationId ||
-                  previous.operationId ===
-                    `${options.operationId}:admission:${previous.revision}`) &&
-                previous.revision === row.revision
-              ) {
-                if (
-                  previous.action !== action ||
-                  previous.expectedAllocationId !== options.expectedIdentity.allocationId ||
-                  previous.expectedGeneration !== options.expectedIdentity.generation ||
-                  previous.expectedIncarnation !== options.expectedIdentity.incarnation
-                )
-                  return yield* new RuntimeClientError({
-                    operation: "stop",
-                    cause: "Stale lifecycle receipt",
-                  });
+                "version" in previous &&
+                previous.operationId === options.operationId &&
+                previous.revision === row.revision &&
+                previous.action === action &&
+                sameIdentity(previous.expectedIdentity, options.expectedIdentity)
+              )
                 return previous;
-              }
             }
             if (row.revision !== options.expectedRevision)
               return yield* new RuntimeClientError({
                 operation: "stop",
                 cause: "Admission revision changed",
               });
-            const next = {
-              workspaceId,
-              operationId: `${options.operationId}:admission:${row.revision + 1}`,
-              revision: row.revision + 1,
-              action,
-              profile,
-              expectedAllocationId: options.expectedIdentity.allocationId,
-              expectedGeneration: options.expectedIdentity.generation,
-              expectedIncarnation: options.expectedIdentity.incarnation,
-            };
-            const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(LifecycleStopRequest))(
-              next,
-            );
-            const updated =
-              yield* sql`UPDATE agent_runtime_workspaces SET admission_revision=${next.revision}, lifecycle_request_json=${encoded}, execution_requested=1 WHERE workspace_id=${workspaceId} AND admission_revision=${row.revision} RETURNING workspace_id`;
-            if (updated.length !== 1)
+            if (!current.identity || !sameIdentity(current.identity, options.expectedIdentity))
               return yield* new RuntimeClientError({
                 operation: "stop",
-                cause: "Admission revision changed",
+                cause: "Execution identity changed",
               });
+            const next = {
+              operationId: options.operationId,
+              revision: row.revision + 1,
+              action,
+              expectedIdentity: options.expectedIdentity,
+              version: current.version,
+              acceptedVersion: null,
+            };
+            const encoded = yield* encodeStopReceipt(next);
+            yield* sql`UPDATE agent_runtime_workspaces SET admission_revision=${next.revision}, lifecycle_request_json=${encoded}, execution_requested=1 WHERE workspace_id=${workspaceId}`;
             return next;
           }),
         );
+        if (
+          receipt.acceptedVersion !== null &&
+          current.version === receipt.acceptedVersion &&
+          current.desiredState === desiredState &&
+          current.state !== "failed" &&
+          current.progress?.step !== "queued"
+        )
+          return;
         const latest = yield* sql<{
           revision: number;
         }>`SELECT admission_revision AS revision FROM agent_runtime_workspaces WHERE workspace_id=${workspaceId}`;
-        if (latest[0]?.revision !== payload.revision)
+        if (latest[0]?.revision !== receipt.revision || activity.has(workspaceId))
           return yield* new RuntimeClientError({
             operation: "stop",
             cause: "Admission changed before submission",
           });
-        if (activity.has(workspaceId))
-          return yield* new RuntimeClientError({
-            operation: "stop",
-            cause: "Workspace request is in progress",
-          });
-        yield* request(pool, "/v1/operations", payload);
+        // A lost response may have accepted this intent. Observing the same stopped
+        // identity is sufficient; a running resource must pass the original ETag.
+        const accepted =
+          current.desiredState === desiredState &&
+          current.state !== "failed" &&
+          current.progress?.step !== "queued" &&
+          ((current.identity === null && current.state === "released") ||
+            (current.identity !== null && sameIdentity(current.identity, receipt.expectedIdentity)))
+            ? current
+            : yield* request(
+                pool,
+                `${pathFor(workspaceId)}/state`,
+                { desiredState },
+                (current.state === "failed" || current.progress?.step === "queued") &&
+                  current.desiredState === desiredState &&
+                  current.identity !== null &&
+                  sameIdentity(current.identity, receipt.expectedIdentity) &&
+                  (receipt.acceptedVersion === null || receipt.acceptedVersion === current.version)
+                  ? current.version
+                  : (receipt.acceptedVersion ?? receipt.version),
+              ).pipe(
+                Effect.catchTags({
+                  AgentRuntimeClientError: (error) =>
+                    Effect.gen(function* () {
+                      if (error.httpStatus === 412)
+                        yield* sql`UPDATE agent_runtime_workspaces SET lifecycle_request_json=NULL WHERE workspace_id=${workspaceId} AND admission_revision=${receipt.revision}`;
+                      return yield* error;
+                    }),
+                }),
+              );
+        const encoded = yield* encodeStopReceipt({
+          ...receipt,
+          acceptedVersion: accepted.version,
+        });
+        yield* sql`UPDATE agent_runtime_workspaces SET lifecycle_request_json=${encoded} WHERE workspace_id=${workspaceId} AND admission_revision=${receipt.revision}`;
       }).pipe(Effect.mapError(failure("stop")));
     const identityJson = Schema.fromJsonString(ExecutionIdentity);
     const sessionResidency = (providerSessionId: string) =>
@@ -487,23 +531,37 @@ export const layer = Layer.effect(
     const observeWorkspace = (workspaceId: string) =>
       Effect.gen(function* () {
         const pool = yield* placement(workspaceId);
-        const profile = pool.profile;
-        const access = yield* request(
-          pool,
-          `/v1/workspaces/${encodeURIComponent(workspaceId)}?profile=${encodeURIComponent(profile)}`,
-        ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Access)));
-        if (access.state.phase === "released" || access.state.phase === "suspended") {
-          const request = access.state.request;
-          const action = access.state.phase === "released" ? "release_compute" : "suspend";
+        const rows = yield* sql<{
+          receipt: string | null;
+          revision: number;
+        }>`SELECT lifecycle_request_json AS receipt, admission_revision AS revision FROM agent_runtime_workspaces WHERE workspace_id=${workspaceId}`;
+        const row = rows[0];
+        const receipt = row?.receipt ? yield* decodeStopReceipt(row.receipt) : null;
+        const access = yield* readWorkspace(pool, workspaceId);
+        if (
+          (access.state === "released" || access.state === "suspended") &&
+          access.desiredState === access.state
+        ) {
+          const action = access.state === "released" ? "release_compute" : "suspend";
           return {
             kind: "stopped",
-            phase: access.state.phase,
-            identity: access.state.identity ?? null,
-            ...(request.action === action && access.state.completedOperation === request.operationId
+            phase: access.state,
+            identity: access.identity,
+            ...(receipt !== null &&
+            receipt.action === action &&
+            row?.revision === receipt.revision &&
+            access.desiredState === access.state &&
+            ("legacy" in receipt ||
+              receipt.acceptedVersion === access.version ||
+              (receipt.acceptedVersion === null &&
+                access.version !== receipt.version &&
+                (access.state === "released" ||
+                  (access.identity !== null &&
+                    sameIdentity(access.identity, receipt.expectedIdentity)))))
               ? {
                   completedStop: {
-                    operationId: request.operationId,
-                    revision: request.revision,
+                    operationId: receipt.operationId,
+                    revision: receipt.revision,
                     action,
                   } satisfies CompletedStop,
                 }
@@ -511,30 +569,41 @@ export const layer = Layer.effect(
           } as const;
         }
         if (
-          access.state.phase !== "running" ||
-          !access.state.identity ||
-          !access.state.endpoint ||
-          !access.token
-        )
+          (access.progress?.step === "queued" ||
+            (access.state === "failed" && access.error?.retryable)) &&
+          access.desiredState !== "running" &&
+          access.identity
+        ) {
+          if (
+            receipt &&
+            "version" in receipt &&
+            row?.revision === receipt.revision &&
+            sameIdentity(receipt.expectedIdentity, access.identity) &&
+            (receipt.action === "suspend" ? "suspended" : "released") === access.desiredState &&
+            (receipt.acceptedVersion === access.version ||
+              (receipt.acceptedVersion === null && receipt.version !== access.version))
+          )
+            return yield* new RuntimeClientError({
+              operation: "observe",
+              cause: new RuntimeStopRetry({ receipt, error: access.error }),
+            });
+        }
+        if (access.state !== "running" || !access.execution)
           return yield* new RuntimeClientError({
             operation: "observe",
-            cause: ["starting", "suspending", "releasing"].includes(access.state.phase)
-              ? new WorkerNotReady({})
-              : "Worker status is not established",
+            cause:
+              ["starting", "suspending", "releasing", "unavailable"].includes(access.state) ||
+              ((access.state === "suspended" || access.state === "released") &&
+                access.state !== access.desiredState)
+                ? new WorkerNotReady({})
+                : (access.error ?? "Worker status is not established"),
           });
-        if (access.state.identity.workspaceId !== workspaceId)
+        if (access.execution.identity.workspaceId !== workspaceId)
           return yield* new RuntimeClientError({
             operation: "observe",
             cause: "Worker identity mismatch",
           });
-        return {
-          kind: "running",
-          client: createExecutionClient({
-            identity: access.state.identity,
-            endpoint: access.state.endpoint,
-            token: access.token,
-          }),
-        } as const;
+        return { kind: "running", client: createExecutionClient(access.execution) } as const;
       }).pipe(Effect.mapError(failure("observe")));
     const observeThread = (threadId: ThreadId) =>
       Bindings.read(threadId).pipe(

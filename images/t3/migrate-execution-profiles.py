@@ -31,11 +31,13 @@ def save(path, value):
         os.close(directory)
 
 
-def request(pool, path, body=None):
+def request(pool, path, body=None, *, method=None, version=None):
     token = Path(pool['tokenFile']).read_text().strip()
     data = None if body is None else json.dumps(body).encode()
-    outgoing = urllib.request.Request(pool['url'].rstrip('/') + path, data=data,
-        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+    headers = {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}
+    if version is not None:
+        headers['If-Match'] = json.dumps(version)
+    outgoing = urllib.request.Request(pool['url'].rstrip('/') + path, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(outgoing, timeout=30) as response:
             return response.status, json.load(response)
@@ -46,153 +48,127 @@ def request(pool, path, body=None):
         raise MigrationError('controller transport unavailable') from error
 
 
-def state(pool, workspace, profile):
-    path = '/v1/workspaces/' + urllib.parse.quote(workspace, safe='')
-    code, value = request(pool, path + '?profile=' + urllib.parse.quote(profile, safe=''))
-    return code, None if value is None else value['state']
+def state(pool, workspace):
+    return request(pool, '/v1/workspaces/' + urllib.parse.quote(workspace, safe=''))
 
 
-def released(s):
-    return (s['phase'] == 'released' and not s.get('handle') and not s.get('identity')
-        and not s.get('endpoint') and s.get('completedOperation') == s['request']['operationId'])
+def released(resource):
+    return (resource['state'] == 'released' and resource['desiredState'] == 'released'
+            and resource.get('identity') is None and resource.get('execution') is None)
 
 
-def validate_release_basis(entry, current):
-    release, basis = entry['release'], entry.get('releaseBasis')
-    if not basis or current['profileHash'] != basis['profileHash'] or current['epoch'] != release['expectedGeneration']:
-        raise MigrationError('failed release profile or allocation changed')
-    handle, identity = current.get('handle'), current.get('identity')
-    if handle:
-        if any(handle.get(key) != basis['handle'].get(key) for key in (
-                'namespace', 'workspaceId', 'allocationId', 'pvc', 'pvcUid', 'pvcSpecHash', 'sandbox', 'uid', 'specHash')):
-            raise MigrationError('failed release storage or allocation changed')
-        if not identity or identity != basis['identity']:
-            raise MigrationError('failed release worker identity changed')
-    elif current['phase'] != 'released' or identity or current.get('endpoint'):
-        raise MigrationError('failed release has an unknown allocation state')
-
-
-def retry_failed_release(pool, entry, current, persist, source):
-    release = entry['release']
-    replacement_pending = current['request'] != release
-    if replacement_pending:
-        attempts = entry.get('releaseAttempts', [])
-        if not attempts:
-            basis = entry.get('releaseBasis')
-            if not basis or current['request'] != basis['request'] or current.get('completedOperation') != current['request']['operationId']:
-                raise MigrationError('initial release was superseded')
-            validate_release_basis(entry, current)
-            return current
-        predecessor = attempts[-1]
-        if current['request'] != predecessor['request'] or current.get('taskId') != predecessor['taskId']:
-            raise MigrationError('replacement release predecessor changed')
-    if not current.get('taskId'):
-        return current
-    task_id = current['taskId']
-    code, task = request(pool, '/v1/operations/' + urllib.parse.quote(task_id, safe=''))
-    if code != 200:
-        raise MigrationError('release task status is unknown; retry the same ledger')
-    if task['status'] not in ('FAILED', 'CANCELLED'):
-        if replacement_pending:
-            raise MigrationError('replacement release predecessor is not terminal')
-        return current
-    code, confirmed = state(pool, release['workspaceId'], source)
-    if code != 200 or confirmed['request'] != current['request'] or confirmed.get('taskId') != task_id:
-        raise MigrationError('failed release was superseded')
-    if released(confirmed):
-        return confirmed
-    validate_release_basis(entry, confirmed)
-    if replacement_pending:
-        return confirmed
-    entry.setdefault('releaseAttempts', []).append({
-        'request': release, 'taskId': task_id, 'status': task['status'],
-    })
-    entry['release'] = {**release,
-        'operationId': 'profile-migration:' + str(uuid.uuid4()),
-        'revision': max(entry['before']['admission_revision'], confirmed['request']['revision']) + 1,
-    }
-    persist()
-    return confirmed
+def binding_generation(info):
+    generation = info.get('bindingGeneration')
+    if type(generation) is not int or generation < 0:
+        raise MigrationError('controller has no valid profile binding generation')
+    return generation
 
 
 def migrate_controller(pool, entry, persist, source, target, timeout):
+    saved = entry.get('migration')
+    if saved is not None and (type(saved.get('expectedBindingGeneration')) is not int
+            or saved['expectedBindingGeneration'] < 0
+            or not isinstance(saved.get('operationId'), str) or not saved['operationId'].strip()):
+        raise MigrationError('prepared legacy migration lacks binding generation or operation identity; complete it before upgrading the controller')
     workspace = entry['before']['workspace_id']
-    code, current = state(pool, workspace, source)
-    if code != 200:
-        target_code, current_target = state(pool, workspace, target)
-        if target_code == 200 and entry.get('migration') and released(current_target):
-            migration = entry['migration']
-            if (current_target['request']['revision'] != migration['expectedRevision']
-                    or current_target['epoch'] != migration['expectedEpoch']):
-                raise MigrationError('target controller revision changed')
-            return current_target['request']['revision']
-        if code == 404 and target_code == 404 and not entry.get('release') and not entry.get('migration'):
-            return entry['before']['admission_revision']
+    path = '/v1/workspaces/' + urllib.parse.quote(workspace, safe='')
+    code, current = state(pool, workspace)
+    if code == 404 and not entry.get('release') and not entry.get('migration'):
+        return entry['before']['admission_revision']
+    if code != 200 or current['id'] != workspace or current['pool'] != pool['id']:
         raise MigrationError('workspace controller state cannot be reconciled')
-    if current['request']['workspaceId'] != workspace:
-        raise MigrationError('controller returned another workspace')
+    if current['profile'] == target:
+        info_code, info = request(pool, path + '/migration')
+        if (not saved or not released(current) or info_code != 200
+                or info['profile'] != target or info['state'] != 'released'
+                or info['revision'] != saved['expectedRevision'] or info['epoch'] != saved['expectedEpoch']
+                or binding_generation(info) != saved['expectedBindingGeneration'] + 1):
+            raise MigrationError('target controller state changed')
+        code, _ = request(pool, '/v1/profile-migrations', saved)
+        if code != 200:
+            raise MigrationError('profile migration retry no longer owns the target binding (HTTP %s)' % code)
+        return entry['before']['admission_revision']
+    if current['profile'] != source:
+        raise MigrationError('controller profile does not match migration source')
+    if entry.get('release') and 'version' not in entry['release']:
+        raise MigrationError('legacy operation ledger must be completed before switching lifecycle APIs')
     if not released(current):
-        if 'release' not in entry:
-            if not current.get('identity') or not current.get('handle'):
+        receipt = entry.get('release')
+        if receipt is None:
+            if not current.get('identity'):
                 raise MigrationError('workspace has no stable allocation to release')
-            if current.get('completedOperation') != current['request']['operationId']:
-                task_id = current.get('taskId')
-                if not task_id:
-                    raise MigrationError('unfinished lifecycle operation has no authoritative task')
-                task_code, task = request(pool, '/v1/operations/' + urllib.parse.quote(task_id, safe=''))
-                if task_code != 200 or task['status'] not in ('FAILED', 'CANCELLED'):
-                    raise MigrationError('unfinished lifecycle operation is not authoritatively terminal')
-                code, confirmed = state(pool, workspace, source)
-                if code != 200 or confirmed != current:
-                    raise MigrationError('unfinished lifecycle operation changed during inspection')
-                entry['releaseAttempts'] = [{
-                    'request': json.loads(json.dumps(current['request'])),
-                    'taskId': task_id, 'status': task['status'], 'owned': False,
-                }]
-            entry['releaseBasis'] = json.loads(json.dumps(current))
-            revision = max(entry['before']['admission_revision'], current['request']['revision']) + 1
-            entry['release'] = {
-                'workspaceId': workspace, 'profile': source, 'action': 'release_compute',
-                'operationId': 'profile-migration:' + str(uuid.uuid4()), 'revision': revision,
-                'expectedAllocationId': current['handle']['allocationId'],
-                'expectedGeneration': current['epoch'],
-                'expectedIncarnation': current['identity']['incarnation'],
-            }
+            receipt = {'version': current['version'], 'identity': current['identity']}
+            entry['release'] = receipt
             persist()
-        current = retry_failed_release(pool, entry, current, persist, source)
-        if not released(current):
-            release = entry['release']
-            code, submission = request(pool, '/v1/operations', release)
-            if code != 202:
+        if current.get('identity') != receipt['identity']:
+            raise MigrationError('workspace allocation changed')
+        if (not receipt.get('acceptedVersion') and current['desiredState'] == 'released'
+                and current['version'] != receipt['version']):
+            receipt['acceptedVersion'] = current['version']
+            persist()
+        if current['version'] not in (receipt['version'], receipt.get('acceptedVersion')):
+            raise MigrationError('workspace release superseded')
+        if current['state'] == 'failed':
+            if not (current.get('error') or {}).get('retryable'):
+                raise MigrationError('workspace release failed and is not retryable')
+            receipt['version'] = current['version']
+            receipt.pop('acceptedVersion', None)
+            persist()
+        if (current['desiredState'] != 'released' or current['state'] == 'failed'
+                or (current.get('progress') or {}).get('step') == 'queued'):
+            code, accepted = request(pool, path + '/state', {'desiredState': 'released'}, method='PUT', version=current['version'])
+            if code not in (200, 202):
                 raise MigrationError('release admission rejected (HTTP %s)' % code)
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                code, current = state(pool, workspace, source)
-                if code == 200 and released(current):
-                    if current['request']['operationId'] != release['operationId']:
-                        raise MigrationError('workspace release superseded')
-                    break
-                status_code, task = request(pool, '/v1/operations/' + urllib.parse.quote(submission['taskId'], safe=''))
-                if status_code != 200 or task['status'] in ('FAILED', 'CANCELLED'):
-                    raise MigrationError('workspace release did not complete')
-                time.sleep(1)
-            else:
-                raise MigrationError('workspace release timed out; retry the same ledger')
-    if entry.get('release') and current['request']['operationId'] != entry['release']['operationId']:
-        raise MigrationError('workspace release superseded')
+            receipt['acceptedVersion'] = accepted['version']
+            persist()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            code, current = state(pool, workspace)
+            if code != 200:
+                raise MigrationError('workspace release observation unavailable; retry the same ledger')
+            if current['profile'] != source or current['desiredState'] != 'released':
+                raise MigrationError('workspace release superseded')
+            if receipt.get('acceptedVersion') and current['version'] != receipt['acceptedVersion']:
+                raise MigrationError('workspace release superseded')
+            if released(current):
+                break
+            if current['state'] == 'failed':
+                raise MigrationError('workspace release failed; retry the same ledger')
+            time.sleep(1)
+        else:
+            raise MigrationError('workspace release timed out; retry the same ledger')
+    receipt = entry.get('release')
+    if receipt:
+        if not receipt.get('acceptedVersion'):
+            raise MigrationError('workspace release completion cannot be reconciled without its accepted version')
+        if current['version'] != receipt['acceptedVersion']:
+            raise MigrationError('workspace release superseded')
+    info_code, info = request(pool, path + '/migration')
+    if info_code != 200 or info['profile'] != source or info['state'] != 'released':
+        raise MigrationError('released workspace migration metadata unavailable')
     migration = {
         'workspaceId': workspace, 'fromProfile': source, 'toProfile': target,
-        'expectedProfileHash': current['profileHash'],
-        'expectedRevision': current['request']['revision'], 'expectedEpoch': current['epoch'],
+        'expectedProfileHash': info['profileHash'],
+        'expectedRevision': info['revision'], 'expectedEpoch': info['epoch'],
+        'expectedBindingGeneration': binding_generation(info),
+        'operationId': saved['operationId'] if saved is not None else str(uuid.uuid4()),
     }
     if entry.get('migration') and entry['migration'] != migration:
         raise MigrationError('controller changed after migration was prepared')
     entry['migration'] = migration
     persist()
-    code, migrated = request(pool, '/v1/profile-migrations', entry['migration'])
-    if code != 200 or not released(migrated) or migrated['request']['profile'] != target:
+    code, _ = request(pool, '/v1/profile-migrations', migration)
+    if code != 200:
         raise MigrationError('profile migration rejected (HTTP %s)' % code)
-    return migrated['request']['revision']
+    code, migrated = state(pool, workspace)
+    if code != 200 or not released(migrated) or migrated['profile'] != target:
+        raise MigrationError('profile migration outcome is not established')
+    info_code, confirmed = request(pool, path + '/migration')
+    if (info_code != 200 or confirmed['profile'] != target or confirmed['state'] != 'released'
+            or binding_generation(confirmed) != migration['expectedBindingGeneration'] + 1):
+        raise MigrationError('profile migration binding changed after acceptance')
+    # T3's admission revision is a local activity fence, independent of the controller.
+    return entry['before']['admission_revision']
 
 
 def apply(db_path, pools_path, ledger_path, source, target, timeout=300, successors=()):

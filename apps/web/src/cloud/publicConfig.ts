@@ -19,7 +19,7 @@ export interface CloudPublicConfig {
   readonly relayUrl: string | null;
 }
 
-export function trimNonEmpty(value: string | undefined): string | null {
+function trimNonEmpty(value: string | undefined): string | null {
   return value?.trim() || null;
 }
 

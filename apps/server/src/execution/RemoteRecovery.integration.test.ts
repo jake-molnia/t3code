@@ -150,11 +150,8 @@ it.live(
           Effect.tryPromise(() => listenWorker({ host: "127.0.0.1", port: 0, handle })),
           (server) => Effect.promise(server.close),
         );
-        let lastOperation: { operationId: string; revision: number; action: string } = {
-          operationId: "initial",
-          revision: 1,
-          action: "ensure_running",
-        };
+        let registered = false;
+        let running = false;
         let allocations = 0;
         let controlAvailable = true;
         let observedIdentity = identity;
@@ -166,28 +163,41 @@ it.live(
               port: 0,
               handle: async (request) => {
                 if (!controlAvailable) return new Response(null, { status: 503 });
-                if (request.method === "POST") {
-                  lastOperation = Schema.decodeUnknownSync(
-                    Schema.Struct({
-                      operationId: Schema.String,
-                      revision: Schema.Number,
-                      action: Schema.String,
-                    }),
-                  )(await request.json());
+                const path = new URL(request.url).pathname;
+                const workspacePath = `/v1/workspaces/${encodeURIComponent(identity.workspaceId)}`;
+                const version = () => `${allocations}:${observedIdentity.incarnation}`;
+                let status = 200;
+                if (request.method === "PUT" && path === workspacePath) {
+                  assert.deepEqual(await request.json(), { pool: "local", profile: "t3" });
+                  status = registered ? 200 : 201;
+                  registered = true;
+                } else if (request.method === "PUT" && path === `${workspacePath}/state`) {
+                  assert.deepEqual(await request.json(), { desiredState: "running" });
+                  assert.equal(request.headers.get("if-match"), `"${version()}"`);
+                  if (!registered) return new Response(null, { status: 404 });
                   allocations++;
-                  return Response.json({ accepted: true });
+                  running = true;
+                  status = 202;
+                } else if (request.method !== "GET" || path !== workspacePath || !registered) {
+                  return new Response(null, { status: 404 });
                 }
-                return Response.json({
-                  state: {
-                    request: lastOperation,
-                    epoch: 1,
-                    phase: "running",
-                    completedOperation: lastOperation.operationId,
-                    identity: observedIdentity,
-                    endpoint: observedEndpoint,
+                return Response.json(
+                  {
+                    id: identity.workspaceId,
+                    pool: "local",
+                    profile: "t3",
+                    desiredState: running ? "running" : "released",
+                    state: running ? "running" : "released",
+                    version: version(),
+                    progress: null,
+                    error: null,
+                    identity: running ? observedIdentity : null,
+                    execution: running
+                      ? { identity: observedIdentity, endpoint: observedEndpoint, token }
+                      : null,
                   },
-                  token,
-                });
+                  { status, headers: { etag: `"${version()}"` } },
+                );
               },
             }),
           ),

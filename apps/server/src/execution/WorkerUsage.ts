@@ -19,7 +19,7 @@ export class WorkerUsageError extends Schema.TaggedError<WorkerUsageError>()("Wo
 }) {}
 
 export const CHUNK_BYTES = 1024 * 1024;
-export const MAX_EXPORT_BYTES = 128 * 1024 * 1024;
+const MAX_EXPORT_BYTES = 128 * 1024 * 1024;
 const ExportId = Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/));
 export const Export = Schema.Struct({
   exportId: ExportId,

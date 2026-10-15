@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { captureRunPromise } from "../execution/EffectHttpBoundary.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -24,6 +25,7 @@ it.layer(services, { excludeTestServices: true })("remote HTML publication", (it
     "inlines worker-only images before central publication and keeps the artifact after worker loss",
     () =>
       Effect.gen(function* () {
+        const run = yield* captureRunPromise;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const config = yield* ServerConfig.ServerConfig;
@@ -60,7 +62,7 @@ it.layer(services, { excludeTestServices: true })("remote HTML publication", (it
           call: async (method, input) => {
             if (method !== "html.prepare") throw new Error("unexpected operation");
             const decoded = Schema.decodeUnknownSync(Schema.Struct({ html: Schema.String }))(input);
-            return Effect.runPromise(workerHtml.prepare(decoded.html));
+            return run(workerHtml.prepare(decoded.html));
           },
           events: async () => [],
           ack: async () => {},
