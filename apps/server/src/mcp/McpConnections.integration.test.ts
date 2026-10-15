@@ -184,6 +184,7 @@ if (installedRuntime) {
     () =>
       Effect.gen(function* () {
         const fixture = yield* remoteMcp;
+        const transportFetch = yield* FetchHttpClient.Fetch;
         let failReplacement = false;
         const fetch: typeof globalThis.fetch = (input, init) => {
           const request = new Request(input, init);
@@ -195,7 +196,7 @@ if (installedRuntime) {
             failReplacement = false;
             return Promise.resolve(new Response(null, { status: 503 }));
           }
-          return globalThis.fetch(input, init);
+          return transportFetch(input, init);
         };
         yield* Effect.gen(function* () {
           const service = yield* McpConnections.McpConnections;
