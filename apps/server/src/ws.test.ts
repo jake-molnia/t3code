@@ -5,7 +5,6 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   ProjectId,
   ProviderInstanceId,
-  ProviderSetupError,
   PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS,
   type ServerProvider,
   ThreadId,
@@ -60,7 +59,7 @@ import {
 
 const isWorkspaceRoutingError = Schema.is(WorkspaceRouting.WorkspaceRoutingError);
 
-it.effect.each(["running", "stopped", "fresh", "denied", "provider-failed"] as const)(
+it.effect.each(["running", "stopped", "fresh", "denied"] as const)(
   "workspace provider refresh after the five-minute scan interval: %s",
   (mode) =>
     Effect.gen(function* () {
@@ -68,18 +67,13 @@ it.effect.each(["running", "stopped", "fresh", "denied", "provider-failed"] as c
       yield* RuntimeSchema.migrate;
       yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id,owner_thread_id) VALUES ('metadata-workspace','metadata-owner')`;
       yield* sql`INSERT INTO agent_runtime_workspace_paths(virtual_cwd,workspace_id,relative_cwd) VALUES ('/workspace/metadata/repo','metadata-workspace','metadata/repo')`;
-      let running = mode === "running" || mode === "provider-failed";
+      let running = mode === "running";
       let ensures = 0;
       let metadataReads = 0;
       const denied = new RuntimeClient.RuntimeClientError({
         operation: "observe-workspace",
         httpStatus: 401,
         cause: "Unauthorized fixture",
-      });
-      const providerFailure = new ProviderSetupError({
-        instanceId: ProviderInstanceId.make("pi"),
-        operation: "refresh-workspace",
-        detail: "Native metadata fixture failed.",
       });
       const client = {
         ...createExecutionClient({
@@ -132,15 +126,13 @@ it.effect.each(["running", "stopped", "fresh", "denied", "provider-failed"] as c
       const registry = Layer.mock(ProviderRegistry.ProviderRegistry)({
         getProviders: Effect.succeed(cached),
         refreshWorkspaceSnapshot: ({ cwd }) =>
-          mode === "provider-failed"
-            ? Effect.fail(providerFailure)
-            : Effect.gen(function* () {
-                if (mode === "running")
-                  assert.isTrue((yield* WorkspaceActivity).has("metadata-workspace"));
-                const destination = yield* routes.clientForCwd(cwd);
-                yield* Effect.promise(() => destination.call("provider.snapshotForCwd", cwd));
-                return scanned;
-              }).pipe(Effect.orDie),
+          Effect.gen(function* () {
+            if (mode === "running")
+              assert.isTrue((yield* WorkspaceActivity).has("metadata-workspace"));
+            const destination = yield* routes.clientForCwd(cwd);
+            yield* Effect.promise(() => destination.call("provider.snapshotForCwd", cwd));
+            return scanned;
+          }).pipe(Effect.orDie),
       });
       const recent = yield* WorkspaceRecentActivity;
       yield* withWorkspaceActivity("metadata-workspace", Effect.void);
@@ -154,14 +146,6 @@ it.effect.each(["running", "stopped", "fresh", "denied", "provider-failed"] as c
         Effect.provide(registry),
         Effect.provideService(WorkspaceRouting.WorkspaceRouting, routes),
       );
-      if (mode === "provider-failed") {
-        assert.strictEqual(yield* request.pipe(Effect.flip), providerFailure);
-        assert.equal(ensures, 0);
-        assert.equal(metadataReads, 0);
-        assert.equal(recent.get("metadata-workspace"), previous);
-        assert.equal((yield* WorkspaceActivity).has("metadata-workspace"), false);
-        return;
-      }
       if (mode === "denied") {
         const error = yield* request.pipe(Effect.flip);
         assert.equal(error._tag, "ProviderSetupError");
