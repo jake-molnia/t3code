@@ -199,7 +199,9 @@ describe("ConnectionResolver", () => {
       const error = yield* Effect.flip(broker.prepare(catalogEntry(target)));
 
       expect(error).toMatchObject({ reason: "unsupported" });
-      expect(error.message).toContain("Update T3 Code on Compatible environment");
+      expect(error.message).toBe(
+        "This client requires a newer server. Ask the deployment administrator to update Compatible environment.",
+      );
     }),
   );
 

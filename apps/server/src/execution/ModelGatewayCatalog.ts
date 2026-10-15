@@ -23,11 +23,11 @@ export type GatewayCatalogState =
   | { readonly kind: "ready"; readonly catalog: Catalog };
 
 const supported = new Set(["codex", "claudeAgent", "grok", "opencode", "pi"]);
-export function gatewayModelSlug(driver: string, id: string) {
+function gatewayModelSlug(driver: string, id: string) {
   return driver === "opencode" || driver === "pi" ? `gateway/${id}` : id;
 }
 
-export function gatewayUnavailableReason(state: GatewayCatalogState, driver: string) {
+function gatewayUnavailableReason(state: GatewayCatalogState, driver: string) {
   if (state.kind === "disabled") return undefined;
   if (!supported.has(driver)) return `${driver} does not support model gateway credentials.`;
   if (state.kind === "unavailable")
