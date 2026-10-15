@@ -69,6 +69,23 @@ describe("clearBrowserProfileData", () => {
 });
 
 describe("clearBrowserProfileData with server browsers", () => {
+  it("rejects runtime-owned default cleanup without touching any environment", async () => {
+    const clear = vi.fn();
+    await expect(
+      clearBrowserProfileData(null, [environmentId], "default", {
+        environmentIds: [environmentId],
+        defaultProfileClear: false,
+        clear,
+      }),
+    ).rejects.toThrow("managed by the sandbox");
+    expect(clear).not.toHaveBeenCalled();
+    await clearBrowserProfileData(null, [environmentId], "work", {
+      environmentIds: [environmentId],
+      defaultProfileClear: false,
+      clear,
+    });
+    expect(clear).toHaveBeenCalledWith(environmentId, "work");
+  });
   it("clears server-hosted profiles without a desktop bridge", async () => {
     const clear = vi.fn().mockResolvedValue(undefined);
     await clearBrowserProfileData(null, [environmentId, secondEnvironmentId], "profile-a", {
