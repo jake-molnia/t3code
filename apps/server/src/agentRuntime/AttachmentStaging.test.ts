@@ -1,3 +1,4 @@
+import * as ExecutionClientTestkit from "./ExecutionClient.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as C from "@t3tools/contracts";
@@ -46,20 +47,13 @@ it.layer(layer, { excludeTestServices: true })("attachment locality", (it) => {
         podUid: "pod",
         protocolVersion: 1,
       } satisfies ExecutionClient["identity"];
-      const client: ExecutionClient = {
-        credentialSource: () => {
-          throw new Error("Credential sharing is unused in this fixture");
-        },
+      const client = yield* ExecutionClientTestkit.makeClient(
         identity,
-        call: async () => {
-          throw new Error("Binary upload must not enter journal");
-        },
-        transient: (method, input) => Effect.runPromise(worker.execute(method, input)),
-        events: async () => [],
-        ack: async () => {},
-        operationStatus: async () => ({ state: "missing" }),
-        inspectIdentity: async () => identity,
-      };
+        (method, input, transport) =>
+          transport === "transient"
+            ? worker.execute(method, input)
+            : Effect.die("Binary upload must not enter journal"),
+      );
       const runtime = RuntimeClient.RuntimeClient.of({
         enabled: true,
         forThread: () => Effect.succeed(client),
