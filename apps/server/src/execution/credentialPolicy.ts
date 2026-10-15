@@ -20,7 +20,7 @@ export function applyCredentialPolicy(
   if (policy.kind === "controller") return snapshot;
   return {
     ...snapshot,
-    setup: { ...snapshot.setup, canInstall: false, canAuthenticate: false },
+    setup: { ...snapshot.setup, canAuthenticate: false },
     auth: {
       ...snapshot.auth,
       canLogout: false,

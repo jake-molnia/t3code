@@ -16,15 +16,11 @@ const atoms = vi.hoisted(() => ({
   providers: null as ReadonlyArray<ServerProvider> | null,
   providersAtom: Symbol("providers"),
   refreshProviders: Symbol("refreshProviders"),
-  updateProvider: Symbol("updateProvider"),
-  uninstallAcpRegistryManagedBinary: Symbol("uninstallAcpRegistryManagedBinary"),
   acceptAcpRegistryUrlAuth: Symbol("acceptAcpRegistryUrlAuth"),
 }));
 
 const commands = vi.hoisted(() => ({
   refresh: vi.fn(),
-  updateProvider: vi.fn(),
-  uninstall: vi.fn(),
   acceptUrlAuth: vi.fn(),
   canManageProviders: true,
   canWriteSettings: true,
@@ -81,8 +77,6 @@ vi.mock("../../state/server", () => ({
   serverEnvironment: {
     providersValueAtom: () => atoms.providersAtom,
     refreshProviders: atoms.refreshProviders,
-    updateProvider: atoms.updateProvider,
-    uninstallAcpRegistryManagedBinary: atoms.uninstallAcpRegistryManagedBinary,
     acceptAcpRegistryUrlAuth: atoms.acceptAcpRegistryUrlAuth,
   },
 }));
@@ -91,11 +85,11 @@ vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (atom: symbol) =>
     atom === atoms.refreshProviders
       ? commands.refresh
-      : atom === atoms.uninstallAcpRegistryManagedBinary
-        ? commands.uninstall
-        : atom === atoms.acceptAcpRegistryUrlAuth
-          ? commands.acceptUrlAuth
-          : commands.updateProvider,
+      : atom === atoms.acceptAcpRegistryUrlAuth
+        ? commands.acceptUrlAuth
+        : (() => {
+            throw new Error("Unexpected provider mutation command");
+          })(),
 }));
 
 vi.mock("../../hooks/useSettings", () => ({
@@ -167,8 +161,7 @@ function provider(): ServerProvider {
       status: "behind_latest",
       currentVersion: "1.0.0",
       latestVersion: "1.1.0",
-      updateCommand: "pnpm add -g @openai/codex@latest",
-      canUpdate: true,
+
       checkedAt: "2026-07-24T12:00:00.000Z",
       message: "Update available.",
     },
@@ -232,8 +225,6 @@ describe("EnvironmentProviderSettings routing", () => {
     commands.canManageProviders = true;
     commands.canWriteSettings = true;
     commands.refresh.mockReset().mockResolvedValue({ _tag: "Success" });
-    commands.updateProvider.mockReset().mockResolvedValue({ _tag: "Success" });
-    commands.uninstall.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
     commands.acceptUrlAuth
       .mockReset()
       .mockResolvedValue({ _tag: "Success", value: { accepted: true } });
@@ -553,7 +544,6 @@ describe("EnvironmentProviderSettings routing", () => {
       operation: "remove",
       instanceId: firstId,
     });
-    expect(commands.uninstall).not.toHaveBeenCalled();
   });
 
   it("keeps the signed-in ACP account visible when login methods are no longer advertised", () => {
@@ -574,7 +564,7 @@ describe("EnvironmentProviderSettings routing", () => {
         instanceId,
         driver: ProviderDriverKind.make("acpRegistry"),
         auth: { status: "authenticated", canLogout: false },
-        setup: { canAuthenticate: false, canInstall: false },
+        setup: { canAuthenticate: false },
       },
     ];
     const panel = renderPanel({ targetInstanceId: instanceId });

@@ -1042,6 +1042,10 @@ export function EnvironmentProviderSettings({
           </div>
         }
       >
+        <p className="px-3 text-xs text-muted-foreground sm:px-4">
+          Provider versions are supplied by the sandbox image. Contact your deployment administrator
+          to install or upgrade a provider.
+        </p>
         {deviceTabs ? (
           <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 sm:px-4">{deviceTabs}</div>
         ) : null}

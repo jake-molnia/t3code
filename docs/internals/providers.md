@@ -78,27 +78,14 @@ run before the prompt. They reject profiles with such configuration before launc
 instructions and tool denial do not create a native sandbox.
 See [helper constraints](../../apps/server/src/textGeneration/AntigravityTextGeneration.ts).
 
-## Provider updates run only through the owning installer
+## Provider binaries belong to the sandbox image
 
-A package manager runs only when the resolved executable's path proves it owns the install. Homebrew
-and npm are proven by the real path (symlinks followed): a versioned keg or cask under
-`brew --prefix`, or `<prefix>/lib/node_modules/<pkg>/` (Windows: the shim beside `node_modules`).
-Native installer layouts and the global directories of pnpm, Bun, Yarn, and Vite+ may match on
-either the resolved path or its real target, since those installers place real files or their own
-symlinks there. Volta is proven by its `volta-shim` link plus the package's image directory. When
-nothing is proven, the provider's own updater (`claude update`, `codex update`, `opencode upgrade`,
-`pi update --self`, `grok update`) runs instead, because each one detects its installer itself;
-the runner's version check catches an updater that exits 0 without updating. Mise installs stay
-manual-only because their version is pinned in mise's config. npm updates pin `--prefix` because the
-`npm` on `PATH` can belong to a different Node than the one that owns the provider. Homebrew
-compares against `brew info` since casks trail npm by hours; native installs share npm's version
-train, so the registry stays authoritative for them.
-See the [resolver](../../apps/server/src/provider/providerMaintenance.ts).
-
-Ownership is cached per instance and re-read immediately before an update runs. The
-[runner](../../apps/server/src/provider/providerMaintenanceRunner.ts) refuses when the lock key
-changed since the advisory, and reports success only when the refreshed provider is still installed
-with a readable, current version.
+Provider installation and upgrades happen only in the pinned image build. Runtime status
+refreshes may read release metadata, but must not download executables, run package managers,
+or fall back to central-local execution. Account authentication and model selection remain
+runtime operations. An unavailable or incompatible executable requires a new image, not an
+installer action. See the [image pins](../../images/t3/providers.lock.json) and
+[build checks](../../images/t3/verify-image.mjs).
 
 ## Protocol traps
 

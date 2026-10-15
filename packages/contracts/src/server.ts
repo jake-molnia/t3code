@@ -216,32 +216,10 @@ export const ServerProviderVersionAdvisory = Schema.Struct({
   status: ServerProviderVersionAdvisoryStatus,
   currentVersion: Schema.NullOr(TrimmedNonEmptyString),
   latestVersion: Schema.NullOr(TrimmedNonEmptyString),
-  updateCommand: Schema.NullOr(TrimmedNonEmptyString),
-  canUpdate: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  canInstallVersion: Schema.optionalKey(Schema.Boolean),
   checkedAt: Schema.NullOr(IsoDateTime),
   message: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type ServerProviderVersionAdvisory = typeof ServerProviderVersionAdvisory.Type;
-
-export const ServerProviderUpdateStatus = Schema.Literals([
-  "idle",
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "unchanged",
-]);
-export type ServerProviderUpdateStatus = typeof ServerProviderUpdateStatus.Type;
-
-export const ServerProviderUpdateState = Schema.Struct({
-  status: ServerProviderUpdateStatus,
-  startedAt: Schema.NullOr(IsoDateTime),
-  finishedAt: Schema.NullOr(IsoDateTime),
-  message: Schema.NullOr(TrimmedNonEmptyString),
-  output: Schema.NullOr(Schema.String.check(Schema.isMaxLength(10_000))),
-});
-export type ServerProviderUpdateState = typeof ServerProviderUpdateState.Type;
 
 export const ServerProvider = Schema.Struct({
   // Routing key for the configured instance this snapshot represents. This
@@ -268,7 +246,6 @@ export const ServerProvider = Schema.Struct({
   setup: Schema.optional(
     Schema.Struct({
       canAuthenticate: Schema.Boolean,
-      canInstall: Schema.Boolean,
       documentationUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
     }),
   ),
@@ -315,13 +292,11 @@ export const ServerProvider = Schema.Struct({
   usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   compatibilityAdvisory: Schema.optionalKey(ServerProviderCompatibilityAdvisory),
-  updateState: Schema.optionalKey(ServerProviderUpdateState),
 });
 export type ServerProvider = typeof ServerProvider.Type;
 
 // Provider status kinds grow over time (ServerProviderState,
-// ServerProviderAuthStatus, ServerProviderVersionAdvisoryStatus,
-// ServerProviderUpdateStatus); an older client must not fail the whole config
+// ServerProviderAuthStatus, ServerProviderVersionAdvisoryStatus); an older client must not fail the whole config
 // decode over one provider it cannot render.
 export const ServerProviders = ForwardCompatibleArray(ServerProvider);
 export type ServerProviders = typeof ServerProviders.Type;
@@ -956,26 +931,6 @@ export const ServerProviderUpdatedPayload = Schema.Struct({
   providers: ServerProviders,
 });
 export type ServerProviderUpdatedPayload = typeof ServerProviderUpdatedPayload.Type;
-
-export const ServerProviderUpdateInput = Schema.Struct({
-  provider: ProviderDriverKind,
-  targetVersion: Schema.optionalKey(TrimmedNonEmptyString),
-  instanceId: Schema.optionalKey(ProviderInstanceId),
-});
-export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
-
-export class ServerProviderUpdateError extends Schema.TaggedError<ServerProviderUpdateError>()(
-  "ServerProviderUpdateError",
-  {
-    provider: ProviderDriverKind,
-    reason: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Provider update failed for ${this.provider}: ${this.reason}`;
-  }
-}
 
 export const ServerSelfUpdateInput = Schema.Struct({
   /** Exact npm version of the `t3` package to install (never a dist-tag, so

@@ -30,7 +30,6 @@ import {
 } from "@t3tools/provider-core/server/driver";
 import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -48,10 +47,9 @@ const decodeCursorSettings = Schema.decodeSync(CursorSettings);
 const isSdkRunnerError = Schema.is(CursorAgentSdk.CursorAgentSdkRunnerError);
 
 const DRIVER_KIND = ProviderDriverKind.make("cursor");
-const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
-  provider: DRIVER_KIND,
+const VERSION_SOURCE = {
   packageName: null,
-});
+};
 
 export type CursorDriverEnv =
   | CursorAdapterV2DriverEnv
@@ -156,7 +154,7 @@ export const CursorDriver: ProviderDriver<
       const stampSnapshot: typeof stampIdentity = (draft) =>
         stampIdentity({
           ...draft,
-          setup: { canAuthenticate: !auth.usesApiKey, canInstall: false },
+          setup: { canAuthenticate: !auth.usesApiKey },
           auth: {
             ...draft.auth,
             canLogout: !auth.usesApiKey,
@@ -253,7 +251,7 @@ export const CursorDriver: ProviderDriver<
 
       const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<CursorSettings>>({
-        resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
+        getVersionSource: () => Effect.succeed(VERSION_SOURCE),
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,

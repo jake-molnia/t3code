@@ -42,7 +42,7 @@ export function projectGatewaySnapshot(
 ): ServerProvider {
   if (state.kind === "disabled") return snapshot;
   const reason = gatewayUnavailableReason(state, snapshot.driver);
-  const setup = { ...snapshot.setup, canAuthenticate: false, canInstall: false };
+  const setup = { ...snapshot.setup, canAuthenticate: false };
   if (reason || state.kind !== "ready")
     return {
       ...snapshot,

@@ -127,7 +127,6 @@ export function AddProviderInstanceDialog({
   >([]);
   const [isManualAcpConfiguration, setIsManualAcpConfiguration] = useState(false);
   const [isRegistryLoading, setIsRegistryLoading] = useState(false);
-  const [isPreparingRegistryAgent, setIsPreparingRegistryAgent] = useState(false);
   // Driver-specific config drafts keyed by driver so toggling between drivers
   // during the same dialog session does not lose in-progress input.
   const [configByDriver, setConfigByDriver] = useState<Record<string, Record<string, unknown>>>({});
@@ -185,6 +184,10 @@ export function AddProviderInstanceDialog({
     : selectedAcp !== null || (isManualAcpConfiguration && manualAgentId.length > 0)
       ? null
       : "Select an ACP or configure one manually.";
+  const registryCommandError =
+    isAcpRegistry && !isLocalAcp && localCommandPath.length === 0
+      ? "An executable supplied by the sandbox image is required."
+      : null;
   const wizardStepSummaries = isAcpRegistry
     ? ([
         isLocalAcp ? "Local ACP command" : (selectedAcp?.name ?? (manualAgentId || null)),
@@ -211,7 +214,7 @@ export function AddProviderInstanceDialog({
   };
 
   const applyWizardNavigation = (navigation: WizardNavigation) => {
-    if (isSaving || isPreparingRegistryAgent || createdInstanceId) return;
+    if (isSaving || createdInstanceId) return;
     if (navigation.kind === "blocked") {
       setHasAttemptedSubmit(true);
     }
@@ -240,7 +243,7 @@ export function AddProviderInstanceDialog({
     );
   };
 
-  const handleAcpPrepared = (agent: AcpRegistrySearchAgent) => {
+  const handleAcpSelected = (agent: AcpRegistrySearchAgent) => {
     setDriver(ACP_REGISTRY_DRIVER_KIND);
     const nextLabel = agent.name;
     const registryIconUrl = resolveOfficialAcpRegistryIconUrl(agent.icon);
@@ -310,6 +313,10 @@ export function AddProviderInstanceDialog({
     if (isSaving || createdInstanceId) return;
     setHasAttemptedSubmit(true);
     if (instanceIdError !== null || (isAcpRegistry && acpSelectionError !== null)) return;
+    if (registryCommandError !== null) {
+      setWizardStep(identityStep);
+      return;
+    }
 
     const config =
       driver === "codex"
@@ -384,7 +391,7 @@ export function AddProviderInstanceDialog({
               summaries={wizardStepSummaries}
               instanceIdError={instanceIdError}
               steps={isLocalAcp ? LOCAL_ACP_WIZARD_STEPS : ACP_REGISTRY_WIZARD_STEPS}
-              disabled={isSaving || isPreparingRegistryAgent || createdInstanceId !== null}
+              disabled={isSaving || createdInstanceId !== null}
               identityStep={1}
               prerequisite={{ step: 0, error: acpSelectionError }}
               onNavigation={applyWizardNavigation}
@@ -394,7 +401,7 @@ export function AddProviderInstanceDialog({
               currentStep={wizardStep}
               summaries={wizardStepSummaries}
               instanceIdError={instanceIdError}
-              disabled={isSaving || isPreparingRegistryAgent}
+              disabled={isSaving}
               onNavigation={applyWizardNavigation}
             />
           )}
@@ -418,7 +425,6 @@ export function AddProviderInstanceDialog({
                   Provider
                 </div>
                 <RadioGroup
-                  disabled={isPreparingRegistryAgent}
                   value={driver}
                   onValueChange={(value) => {
                     setDriver(ProviderDriverKind.make(value));
@@ -517,11 +523,10 @@ export function AddProviderInstanceDialog({
                       <AcpRegistrySearchStep
                         environmentId={environmentId}
                         providerInstances={settings.providerInstances}
-                        onPrepared={handleAcpPrepared}
+                        onSelected={handleAcpSelected}
                         onManualConfiguration={handleManualAcpConfiguration}
                         onLocalConfiguration={handleLocalAcpConfiguration}
                         onLoadingChange={setIsRegistryLoading}
-                        onPreparingChange={setIsPreparingRegistryAgent}
                       />
                       {isAcpRegistry && hasAttemptedSubmit && acpSelectionError ? (
                         <p className="mt-2 text-2xs text-destructive">{acpSelectionError}</p>
@@ -626,6 +631,33 @@ export function AddProviderInstanceDialog({
                     />
                   }
                 />
+                {isAcpRegistry && !isLocalAcp ? (
+                  <SettingsRow
+                    title={<label htmlFor="add-provider-acp-executable">Executable</label>}
+                    description="Name or path supplied by the sandbox image. Registry arguments and environment are preserved."
+                    status={
+                      hasAttemptedSubmit && registryCommandError ? (
+                        <span role="alert" className="text-destructive">
+                          {registryCommandError}
+                        </span>
+                      ) : undefined
+                    }
+                    control={
+                      <div className="w-full @min-[32rem]/settings-row:w-56">
+                        <Input
+                          id="add-provider-acp-executable"
+                          size="sm"
+                          placeholder="e.g. /opt/agents/bin/agent"
+                          value={localCommandPath}
+                          aria-invalid={hasAttemptedSubmit && registryCommandError !== null}
+                          onChange={(event) =>
+                            setConfigDraft({ ...configDraft, commandPath: event.target.value })
+                          }
+                        />
+                      </div>
+                    }
+                  />
+                ) : null}
                 <SettingsRow
                   title="Accent color"
                   description="Optional marker shown in the picker."
@@ -663,7 +695,7 @@ export function AddProviderInstanceDialog({
               <Button
                 variant={wizardStep === 0 ? "ghost-muted" : "outline"}
                 size="sm"
-                disabled={isSaving || isPreparingRegistryAgent}
+                disabled={isSaving}
                 onClick={() => {
                   if (wizardStep === 0) {
                     onOpenChange(false);
@@ -685,11 +717,7 @@ export function AddProviderInstanceDialog({
                   />
                 </>
               ) : wizardStep < (isAcpRegistry ? 1 : 2) ? (
-                <Button
-                  size="sm"
-                  disabled={isPreparingRegistryAgent}
-                  onClick={() => navigateToStep(wizardStep + 1)}
-                >
+                <Button size="sm" onClick={() => navigateToStep(wizardStep + 1)}>
                   Next
                 </Button>
               ) : (

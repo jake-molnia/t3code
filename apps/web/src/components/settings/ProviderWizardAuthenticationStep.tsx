@@ -49,7 +49,7 @@ export function ProviderWizardAuthenticationStep({
                 ...provider,
                 setup: {
                   ...provider.setup,
-                  canInstall: provider.setup?.canInstall ?? false,
+
                   canAuthenticate,
                 },
               }}

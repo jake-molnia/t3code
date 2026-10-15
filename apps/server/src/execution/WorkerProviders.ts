@@ -1,3 +1,4 @@
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import { resolveModelPreferences } from "@t3tools/shared/serverSettings";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { createModelGatewayCatalog } from "./ModelGatewayCatalog.ts";
@@ -136,6 +137,7 @@ export const make = Effect.gen(function* () {
   const sources = yield* CredentialSources.CredentialSources;
   const authOwners = new Map<C.ProviderInstanceId, Set<string>>();
   const registry = yield* Registry.ProviderInstanceRegistry;
+  const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
   const mutator = yield* Mutator.ProviderInstanceRegistryMutator;
   const settings = yield* Settings.ServerSettingsService;
   const normalizeHarness = yield* ProviderConfigurationOverrides;
@@ -306,8 +308,13 @@ export const make = Effect.gen(function* () {
             return yield* new WorkerProviderError({ operation: "models_unavailable" });
           yield* instance.refreshModels();
           return null;
-        case "provider.refresh":
+        case "provider.refresh": {
+          yield* instance.invalidateCaches ?? Effect.void;
+          const versionSource = yield* instance.snapshot.getVersionSource({ fresh: true });
+          if (versionSource.packageName)
+            yield* latestVersions.invalidate(versionSource.packageName);
           return yield* encodeServerProvider(gateway.snapshot(yield* instance.snapshot.refresh));
+        }
         case "provider.snapshotForCwd": {
           const cwd = yield* decodeRpcValue2(command.input);
           const snapshot = instance.snapshotForCwd
