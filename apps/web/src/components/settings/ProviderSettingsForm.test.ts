@@ -8,6 +8,19 @@ import {
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
+  it("keeps execution controls while excluding account and endpoint fields", () => {
+    const fields = ["binaryPath", "homePath", "launchArgs", "autoCompactWindow"];
+    const codex = providerClients.get(ProviderDriverKind.make("codex"));
+    const opencode = providerClients.get(ProviderDriverKind.make("opencode"));
+    if (!codex || !opencode) throw new Error("Missing harness definition");
+    expect(
+      deriveProviderSettingsFields(codex, undefined, fields).map((field) => field.key),
+    ).toEqual(["binaryPath", "homePath", "launchArgs"]);
+    expect(
+      deriveProviderSettingsFields(opencode, undefined, fields).map((field) => field.key),
+    ).toEqual(["binaryPath"]);
+  });
+
   it("derives visible provider config fields from the client definition schema", () => {
     const codex = providerClients.get(ProviderDriverKind.make("codex"));
 

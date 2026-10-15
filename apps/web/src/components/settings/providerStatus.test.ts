@@ -18,6 +18,17 @@ const provider: ServerProvider = {
 };
 
 describe("getProviderSummary", () => {
+  it("distinguishes an enabled but unavailable remote harness from a disabled one", () => {
+    expect(
+      getProviderSummary({
+        ...provider,
+        enabled: true,
+        status: "disabled",
+        availability: "unavailable",
+        unavailableReason: "Execution is offline.",
+      }),
+    ).toEqual({ headline: "Unavailable", detail: "Execution is offline." });
+  });
   it("reports ready providers with unknown authentication as available", () => {
     expect(getProviderSummary({ ...provider, auth: { status: "unknown" } })).toEqual({
       headline: "Available",

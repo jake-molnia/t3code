@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
+  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   ThreadId,
@@ -59,6 +60,40 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("checks the destination provider grant for every gateway account mutation", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthProvidersManageScope],
+            permissions: [AuthProvidersManageScope],
+          }),
+        );
+        registry.set(sessions(other), AsyncResult.success(grant(true)));
+        for (const method of [
+          WS_METHODS.modelGatewayAddEndpoint,
+          WS_METHODS.modelGatewayStart,
+          WS_METHODS.modelGatewayStatus,
+          WS_METHODS.modelGatewayComplete,
+          WS_METHODS.modelGatewayCancel,
+          WS_METHODS.modelGatewaySetEnabled,
+          WS_METHODS.modelGatewayRemove,
+        ]) {
+          const command = createCommandPermissions(runtime, method);
+          expect(registry.get(command.permissionAtom(env))).toBe(true);
+          yield* command.authorize(registry, env);
+          expect(registry.get(command.permissionAtom(other))).toBe(false);
+          expect((yield* command.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
+            "EnvironmentAuthorizationError",
+          );
+        }
+      }),
+    ),
+  );
+
   it.effect(
     "requires the destination settings grant for MCP connection and project access changes",
     () =>

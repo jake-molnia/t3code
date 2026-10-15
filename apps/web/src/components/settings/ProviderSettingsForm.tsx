@@ -88,6 +88,7 @@ function readFieldBooleanDefault(
 export function deriveProviderSettingsFields(
   definition: SettingsFormDefinition,
   value?: unknown,
+  fieldKeys?: ReadonlyArray<string>,
 ): ReadonlyArray<ProviderSettingsFieldModel> {
   const isLocalAcp =
     definition.driverKind === "acpRegistry" &&
@@ -109,7 +110,7 @@ export function deriveProviderSettingsFields(
     .flatMap(({ key }) => {
       const fieldSchema = definition.settingsSchema.fields[key]!;
       const formAnnotation = readProviderSettingsFormAnnotation(fieldSchema);
-      if (formAnnotation.hidden) return [];
+      if (formAnnotation.hidden || (fieldKeys && !fieldKeys.includes(key))) return [];
       if (isLocalAcp && key !== "source" && key !== "commandPath") return [];
 
       const annotatedTitle = readFieldAnnotationString(fieldSchema, "title");
@@ -291,6 +292,7 @@ export function nextProviderConfigWithFieldValue(
 }
 
 interface ProviderSettingsFormProps {
+  readonly fieldKeys?: ReadonlyArray<string> | undefined;
   readonly definition: SettingsFormDefinition;
   readonly value: unknown;
   readonly idPrefix: string;
@@ -551,6 +553,7 @@ function ProviderSettingsFieldRow({
 }
 
 export function ProviderSettingsForm({
+  fieldKeys,
   definition,
   value,
   idPrefix,
@@ -558,8 +561,8 @@ export function ProviderSettingsForm({
   onChange,
 }: ProviderSettingsFormProps) {
   const fields = useMemo(
-    () => deriveProviderSettingsFields(definition, value),
-    [definition, value],
+    () => deriveProviderSettingsFields(definition, value, fieldKeys),
+    [definition, value, fieldKeys],
   );
   const isLocalAcp =
     definition.driverKind === "acpRegistry" &&

@@ -54,6 +54,8 @@ import {
   type ProviderStatusKey,
 } from "./providerStatus";
 
+const HARNESS_EXECUTION_FIELDS = ["binaryPath", "homePath", "launchArgs", "autoCompactWindow"];
+
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 function ProviderStatusDiagnostic({
@@ -576,6 +578,7 @@ interface ProjectOverrideControl {
 }
 
 interface ProviderInstanceCardProps {
+  readonly gatewayManaged?: boolean;
   readonly instanceId: ProviderInstanceId;
   readonly instance: ProviderInstanceConfig;
   readonly driverOption: ProviderClientDefinition | undefined;
@@ -657,6 +660,7 @@ export function ProviderInstanceCard({
   liveProvider,
   mode,
   selected = false,
+  gatewayManaged = false,
   onSelect,
   readOnly = false,
   canWriteSettings = true,
@@ -711,7 +715,7 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  const customModels = readConfigCustomModels(instance.config);
+  const customModels = gatewayManaged ? [] : readConfigCustomModels(instance.config);
   // Server-returned models may lag behind settings writes. Treat server
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
@@ -971,6 +975,7 @@ export function ProviderInstanceCard({
   const runtimeFields = driverOption ? (
     <ProviderSettingsForm
       definition={driverOption}
+      fieldKeys={gatewayManaged ? HARNESS_EXECUTION_FIELDS : undefined}
       value={instance.config}
       idPrefix={`provider-instance-${instanceId}`}
       variant="settings"
@@ -1058,7 +1063,7 @@ export function ProviderInstanceCard({
         />
       </SettingsSection>
 
-      {setup || environmentFields.length > 0 ? (
+      {!gatewayManaged && (setup || environmentFields.length > 0) ? (
         <SettingsSection title="Setup">
           {setup}
           <div
@@ -1084,7 +1089,11 @@ export function ProviderInstanceCard({
         </SettingsSection>
       ) : null}
 
-      {instance.driver === "codex" && readCodexSetupMode(instance.config) === "managed" ? (
+      {gatewayManaged ? (
+        <SettingsSection title="Execution" inert={readOnly} aria-disabled={readOnly || undefined}>
+          {runtimeFields}
+        </SettingsSection>
+      ) : instance.driver === "codex" && readCodexSetupMode(instance.config) === "managed" ? (
         <div
           inert={readOnly}
           aria-disabled={readOnly || undefined}
@@ -1110,18 +1119,20 @@ export function ProviderInstanceCard({
         </SettingsSection>
       ) : null}
 
-      <SettingsSection
-        title="Environment"
-        inert={readOnly}
-        aria-disabled={readOnly || undefined}
-        className={readOnly ? "opacity-50 select-none" : undefined}
-      >
-        <ProviderEnvironmentSection
-          environment={genericEnvironment}
-          onChange={updateGenericEnvironment}
-        />
-      </SettingsSection>
-      {environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
+      {!gatewayManaged ? (
+        <SettingsSection
+          title="Environment"
+          inert={readOnly}
+          aria-disabled={readOnly || undefined}
+          className={readOnly ? "opacity-50 select-none" : undefined}
+        >
+          <ProviderEnvironmentSection
+            environment={genericEnvironment}
+            onChange={updateGenericEnvironment}
+          />
+        </SettingsSection>
+      ) : null}
+      {!gatewayManaged && environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
         <AcpSessionManagementSection
           environmentId={environmentId}
           instanceId={instanceId}
@@ -1135,11 +1146,12 @@ export function ProviderInstanceCard({
         <SettingsSection title="Models">
           <div className="px-3 py-3 sm:px-4">
             <p className="mb-3 text-xs text-muted-foreground">
-              Model preferences and custom models are saved on the selected environment and shared
-              across connected devices.
+              {gatewayManaged
+                ? "Models are discovered from your connected accounts. Favorites and visibility are shared across your devices."
+                : "Model preferences and custom models are saved on the selected environment and shared across connected devices."}
             </p>
             <ProviderModelsSection
-              canManageCustomModels={!readOnly}
+              canManageCustomModels={!readOnly && !gatewayManaged}
               canWritePreferences={canWriteSettings}
               instanceId={instanceId}
               driverKind={driverKind}

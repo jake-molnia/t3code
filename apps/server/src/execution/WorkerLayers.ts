@@ -1,5 +1,5 @@
 import { ProviderConfigurationOverrides } from "../provider/ProviderConfigurationOverrides.ts";
-import { deploymentHarnessDefaults } from "./HarnessDefaults.ts";
+import { deploymentHarnessDefaults, prepareHarnessState } from "./HarnessDefaults.ts";
 import * as UsageService from "../usage/UsageService.ts";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
@@ -47,6 +47,7 @@ export function workerLayers(options: { cwd: string; stateDir: string; port: num
         paths.providerLogsDir,
       ])
         yield* fs.makeDirectory(directory, { recursive: true });
+      yield* Effect.sync(() => prepareHarnessState(options.stateDir));
       return ServerConfig.make({
         ...paths,
         cwd: options.cwd,

@@ -66,5 +66,6 @@ export * from "./executionPools.ts";
 export * from "./sandboxIde.ts";
 export * from "./sandboxComputer.ts";
 
+export * from "./modelGateway.ts";
 export * from "./mcpConnections.ts";
 export * from "./serverVersion.ts";

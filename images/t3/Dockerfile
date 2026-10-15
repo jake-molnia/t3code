@@ -1,6 +1,15 @@
 # syntax=docker/dockerfile:1.7
 FROM golang:1.27.1-trixie@sha256:9baa6b4187bbb98d240372a8a235ac0bb6b5ddd52bba1431dc2f7c0705862728 AS go-toolchain
 
+FROM go-toolchain AS cliproxy-build
+WORKDIR /src/cliproxy
+ADD --checksum=sha256:a1af572340e4cd58ca2bc08c2206657a696c2eb8560fa4870a2354ee9323412e https://codeload.github.com/jake-molnia/CLIProxyAPI/tar.gz/bf9341629ef2300ac9d846a2e80fe2756f63a671 /tmp/cliproxy.tar.gz
+RUN tar -xzf /tmp/cliproxy.tar.gz --strip-components=1 && rm /tmp/cliproxy.tar.gz
+COPY images/t3/cliproxy-device.patch /tmp/cliproxy-device.patch
+RUN git apply /tmp/cliproxy-device.patch \
+    && go test ./sdk/auth ./internal/api/handlers/management -run 'Test(OAuthSaveCancellationIsAtomic|CodexDeviceManagement|DeviceCompletionAndCancellationAreExclusive|CancelOAuthSession|RequestCodexToken|Devin)' -count=1 \
+    && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.Version=bf9341629ef2300ac9d846a2e80fe2756f63a671-t3' -o /out/cliproxyapi ./cmd/server
+
 FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bdcd73c103b096988922d7 AS worker-build
 RUN apt-get update && apt-get install -y --no-install-recommends git python3 make g++ ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -46,6 +55,7 @@ RUN test "$TARGETARCH" = amd64 \
     && mkdir -p /workspace && chown node:node /workspace
 COPY --from=desktop-tools /opt/code-server /opt/code-server
 COPY --from=go-toolchain /usr/local/go /usr/local/go
+COPY images/t3/harness-configs/gateway.json /opt/t3/gateway-harnesses.json
 COPY --from=worker-package /out/worker /opt/t3
 COPY --from=harnesses /opt/harnesses /opt/harnesses
 COPY --from=harnesses /opt/native/bin /opt/native/bin
@@ -62,6 +72,7 @@ ENV PATH=/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_m
     T3_SOURCE_REVISION=${T3_SOURCE_REVISION} \
     AZURE_EXTENSION_DIR=/opt/azure/extensions AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no AZURE_CORE_COLLECT_TELEMETRY=no \
     T3_WORKSPACE_ROOT=/workspace T3_WORKER_STATE_DIR=/workspace/.t3-worker \
+    T3_GATEWAY_HARNESS_CONFIG_FILE=/opt/t3/gateway-harnesses.json \
     T3_WORKER_PORT=8083 T3_BROWSER_EXECUTABLE=/usr/bin/chromium \
     T3CODE_SERVER_BROWSER_SANDBOX=0 SANDBOX_CHROMIUM_SANDBOX=disabled \
     T3_ACP_MCP_NODE=/usr/local/bin/node T3_ACP_MCP_ENTRYPOINT=/opt/t3/dist/bin.mjs \
@@ -109,6 +120,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && mkdir /data && chown node:node /data
 COPY --from=worker-package /out/worker /opt/t3
 COPY --from=web-build /src/t3/apps/web/dist /opt/t3/dist/client
+COPY --from=cliproxy-build /out/cliproxyapi /usr/local/bin/cliproxyapi
+COPY --from=cliproxy-build /src/cliproxy/LICENSE /opt/t3/licenses/CLIProxyAPI/LICENSE
+COPY images/t3/head-entrypoint.py images/t3/test_head_entrypoint.py /opt/t3/
+RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_head_entrypoint.py \
+    && rm /opt/t3/test_head_entrypoint.py
 COPY --from=executor-build /src/executor/.selfhost-runtime /opt/executor
 COPY images/t3/smoke-web.py images/t3/migrate-execution-profiles.py images/t3/test_migrate_execution_profiles.py /opt/t3/
 RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_migrate_execution_profiles.py \
@@ -120,6 +136,6 @@ USER 1000:1000
 WORKDIR /data
 RUN python3 /opt/t3/smoke-web.py /opt/t3
 EXPOSE 3773
-ENTRYPOINT ["/usr/bin/tini", "-g", "--", "node", "/opt/t3/dist/bin.mjs"]
+ENTRYPOINT ["/usr/bin/tini", "--", "python3", "/opt/t3/head-entrypoint.py", "node", "/opt/t3/dist/bin.mjs"]
 CMD ["serve", "--host", "0.0.0.0", "--port", "3773", "--no-browser", "--base-dir", "/data/t3"]
 

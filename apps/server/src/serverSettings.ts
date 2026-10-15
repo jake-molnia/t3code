@@ -28,6 +28,8 @@ import {
   ServerSettingsError,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
+import { migrateGatewaySettings } from "./execution/GatewayMigration.ts";
+import * as Config from "effect/Config";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -622,6 +624,7 @@ function foldLegacyProjectSettings(
 
 const make = Effect.gen(function* () {
   const { settingsPath } = yield* ServerConfig.ServerConfig;
+  const gatewayManaged = Option.isSome(yield* Config.option(Config.String("T3_GATEWAY_API_KEY")));
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -838,7 +841,11 @@ const make = Effect.gen(function* () {
       : { settings: folded, secretMoves: [] };
     // Only rewrite a file that decoded cleanly; an untrusted one stays for the user to repair.
     const migrated = settingsFileTrusted
-      ? yield* moveInlineSettingsSecrets(sourceControlMigration.settings)
+      ? yield* moveInlineSettingsSecrets(
+          gatewayManaged
+            ? migrateGatewaySettings(sourceControlMigration.settings)
+            : sourceControlMigration.settings,
+        )
       : folded;
     // A file still carrying the retired `providers`, `bitbucket`, or `github` keys is rewritten
     // once so the migrated values persist and the old keys disappear.
@@ -1071,7 +1078,9 @@ const make = Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
         const updated = yield* update(current);
         const persisted = yield* persistSettingsSecrets(current, updated);
-        const next = yield* normalizeServerSettings(persisted.settings);
+        const next = yield* normalizeServerSettings(
+          gatewayManaged ? migrateGatewaySettings(persisted.settings) : persisted.settings,
+        );
         const materialized = yield* Effect.uninterruptibleMask(() =>
           Effect.gen(function* () {
             const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
