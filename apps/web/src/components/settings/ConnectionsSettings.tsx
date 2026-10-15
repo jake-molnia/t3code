@@ -232,10 +232,6 @@ function selectPairingEndpoint(
   );
 }
 
-function isTailscaleHttpsEndpoint(endpoint: AdvertisedEndpoint): boolean {
-  return endpoint.id.startsWith("tailscale-magicdns:");
-}
-
 function endpointDefaultPreferenceKey(endpoint: AdvertisedEndpoint): string {
   if (endpoint.id.startsWith("desktop-loopback:")) {
     return "desktop-core:loopback:http";
@@ -245,9 +241,6 @@ function endpointDefaultPreferenceKey(endpoint: AdvertisedEndpoint): string {
   }
   if (endpoint.id.startsWith("tailscale-ip:")) {
     return "tailscale:ip:http";
-  }
-  if (isTailscaleHttpsEndpoint(endpoint)) {
-    return "tailscale:magicdns:https";
   }
 
   let scheme = "unknown";

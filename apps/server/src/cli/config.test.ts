@@ -37,10 +37,9 @@ const minimalDesktopFlags = (baseDir: string) => ({
   bootstrapFd: Option.none<number>(),
   autoBootstrapProjectFromCwd: Option.none<boolean>(),
   logWebSocketEvents: Option.none<boolean>(),
-  tailscaleServeEnabled: Option.none<boolean>(),
-  tailscaleServePort: Option.none<number>(),
 });
 
+const decodeDesktopBootstrap = Schema.decodeEffect(DesktopBackendBootstrap);
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
 const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -53,8 +52,6 @@ const makeDesktopBootstrap = (
   t3Home: "/tmp/t3-bootstrap-home",
   host: "127.0.0.1",
   desktopBootstrapToken: "desktop-bootstrap-token",
-  tailscaleServeEnabled: false,
-  tailscaleServePort: 443,
   ...overrides,
 });
 
@@ -94,6 +91,47 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         }),
     );
   });
+
+  it.effect("ignores legacy Tailscale Serve environment settings", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-retired-serve-" });
+      const resolved = yield* resolveServerConfig(minimalWebFlags(baseDir), Option.none()).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NetService.layer,
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_TAILSCALE_SERVE: "true",
+                  // Even an invalid retired value must not prevent normal startup.
+                  T3CODE_TAILSCALE_SERVE_PORT: "not-a-port",
+                },
+              }),
+            ),
+          ),
+        ),
+      );
+      expect(resolved.mode).toBe("web");
+      expect(resolved).not.toHaveProperty("tailscaleServeEnabled");
+      expect(resolved).not.toHaveProperty("tailscaleServePort");
+    }),
+  );
+
+  it.effect("drops legacy Tailscale Serve bootstrap fields", () =>
+    Effect.gen(function* () {
+      const legacy = {
+        ...makeDesktopBootstrap(),
+        tailscaleServeEnabled: true,
+        tailscaleServePort: 8443,
+      };
+      const decoded = yield* decodeDesktopBootstrap(legacy);
+      expect(decoded.host).toBe(legacy.host);
+      expect(decoded.desktopBootstrapToken).toBe(legacy.desktopBootstrapToken);
+      expect(decoded).not.toHaveProperty("tailscaleServeEnabled");
+      expect(decoded).not.toHaveProperty("tailscaleServePort");
+    }),
+  );
 
   it.effect("keeps stale records and supervised startup out of the manual launch preflight", () =>
     Effect.gen(function* () {
@@ -157,8 +195,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: Option.none<boolean>(),
         bootstrapFd: Option.none<number>(),
         logWebSocketEvents: Option.none<boolean>(),
-        tailscaleServeEnabled: Option.none<boolean>(),
-        tailscaleServePort: Option.none<number>(),
       };
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromEnv({
@@ -200,8 +236,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: Option.none<boolean>(),
         bootstrapFd: Option.none<number>(),
         logWebSocketEvents: Option.none<boolean>(),
-        tailscaleServeEnabled: Option.none<boolean>(),
-        tailscaleServePort: Option.none<number>(),
       };
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromEnv({ env: { T3CODE_DEV_AUTH_TOKEN: secret } }),
@@ -246,8 +280,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -290,8 +322,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
         logWebSocketEvents: true,
-        tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
       });
       assert.equal(resolved.stateDir, join(baseDir, "userdata"));
     }),
@@ -316,8 +346,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.some(true),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.some(true),
-          tailscaleServeEnabled: Option.some(true),
-          tailscaleServePort: Option.some(8443),
         },
         Option.some("Debug"),
       ).pipe(
@@ -357,8 +385,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
         logWebSocketEvents: true,
-        tailscaleServeEnabled: true,
-        tailscaleServePort: 8443,
       });
       assert.equal(resolved.dbPath, join(baseDir, "userdata", "statev2.sqlite"));
     }),
@@ -371,8 +397,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       const fd = yield* openBootstrapFd(
         makeDesktopBootstrap({
           noBrowser: true,
-          tailscaleServeEnabled: false,
-          tailscaleServePort: 443,
         }),
       );
       const derivedPaths = yield* deriveExplicitServerPaths(
@@ -391,8 +415,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.some(false),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.some(false),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -427,8 +449,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-bootstrap-token",
         logWebSocketEvents: false,
-        tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
       });
     }),
   );
@@ -448,8 +468,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           desktopBootstrapToken: "desktop-token",
           desktopTelemetryFd: 4,
           desktopTelemetryControlFd: 5,
-          tailscaleServeEnabled: false,
-          tailscaleServePort: 443,
           otlpTracesUrl: "http://localhost:4318/v1/traces",
           otlpMetricsUrl: "http://localhost:4318/v1/metrics",
           otlpLogsUrl: "http://localhost:4318/v1/logs",
@@ -468,8 +486,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -508,8 +524,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         desktopTelemetryControlFd: 5,
         resourceMonitorPath: undefined,
         logWebSocketEvents: false,
-        tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
       });
       assert.equal(join(baseDir, "userdata"), resolved.stateDir);
       assert.equal(resolved.desktopTelemetryFd, 4);
@@ -565,8 +579,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -605,8 +617,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           t3Home: "/tmp/t3-bootstrap-home",
           noBrowser: false,
           desktopBootstrapToken: "desktop-token",
-          tailscaleServeEnabled: false,
-          tailscaleServePort: 443,
         }),
       );
       const derivedPaths = yield* deriveExplicitServerPaths(
@@ -625,8 +635,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.some("Debug"),
       ).pipe(
@@ -663,8 +671,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-token",
         logWebSocketEvents: true,
-        tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
       });
     }),
   );
@@ -698,8 +704,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -732,8 +736,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
         logWebSocketEvents: false,
-        tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
       });
     }),
   );
@@ -767,8 +769,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -815,8 +815,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -854,8 +852,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
         {
@@ -891,8 +887,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         startupPresentation: "headless",
         desktopBootstrapToken: undefined,
         logWebSocketEvents: false,
-        tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
       });
     }),
   );
@@ -913,8 +907,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -955,8 +947,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -999,8 +989,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -1038,8 +1026,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: Option.none(),
           bootstrapFd: Option.none(),
           logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -1069,8 +1055,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     noBrowser: Option.none<boolean>(),
     bootstrapFd: Option.none<number>(),
     logWebSocketEvents: Option.none<boolean>(),
-    tailscaleServeEnabled: Option.none<boolean>(),
-    tailscaleServePort: Option.none<number>(),
   });
 
   it.effect(
