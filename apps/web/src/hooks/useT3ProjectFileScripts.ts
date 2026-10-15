@@ -33,7 +33,9 @@ export function useT3ProjectFileState(
   environmentId: EnvironmentId,
   cwd: string | null,
 ): T3ProjectFileState {
-  const query = useProjectFileQuery(environmentId, cwd ?? "", T3_PROJECT_FILE_NAME, cwd !== null);
+  const query = useProjectFileQuery(environmentId, cwd ?? "", T3_PROJECT_FILE_NAME, cwd !== null, {
+    passive: true,
+  });
   const contents = query.data && !query.data.truncated ? query.data.contents : null;
   const isPending = query.isPending;
   return useMemo(() => {

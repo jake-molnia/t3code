@@ -59,7 +59,17 @@ export const fileSystemLayer = Layer.effect(
           return { entries: input.paths.map((requested) => metadata.get(requested) ?? null) };
         }),
       readFile: (input) =>
-        routes.call({ cwd: input.cwd, method: "files.read", input: { ...input } }).pipe(
+        Effect.gen(function* () {
+          const read = routes.call({ cwd: input.cwd, method: "files.read", input: { ...input } });
+          if (!input.passive) return yield* read;
+          const result = yield* routes.observe(input.cwd, read);
+          if (result === null)
+            return yield* new WorkspaceRouting.WorkspaceRoutingError({
+              operation: "read",
+              cause: "Workspace is stopped.",
+            });
+          return result;
+        }).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(C.ProjectReadFileResult)),
           Effect.mapError(
             (cause) =>
