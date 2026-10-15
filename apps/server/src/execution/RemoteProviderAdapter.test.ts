@@ -14,7 +14,11 @@ import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexA
 import { makeProviderExecutor } from "./ProviderExecutor.ts";
 import { createExecutionWorker, type ExecutionWorker } from "./ExecutionWorker.ts";
 import { createExecutionClient, ExecutionTransportError } from "./ExecutionClient.ts";
-import { createRemoteProviderAdapter, remoteEventEnvelope } from "./RemoteProviderAdapter.ts";
+import {
+  ackRemoteEvent,
+  createRemoteProviderAdapter,
+  remoteEventEnvelope,
+} from "./RemoteProviderAdapter.ts";
 import { openWorkerJournal } from "./WorkerJournal.ts";
 import { listenWorker } from "./WorkerHttpServer.ts";
 
@@ -168,6 +172,8 @@ it.live(
             });
             const eventCursors: number[] = [];
             const mutationCalls: string[] = [];
+            const acknowledged: number[] = [];
+            let committedCursor = 0;
             let terminalFailure:
               | "identity_changed"
               | "authorization"
@@ -176,6 +182,10 @@ it.live(
             let firstBatch: Awaited<ReturnType<typeof liveClient.events>> | undefined;
             const client: typeof liveClient = {
               ...liveClient,
+              ack: async (sessionId, sequence) => {
+                acknowledged.push(sequence);
+                await liveClient.ack(sessionId, sequence);
+              },
               call: async (method, value, operationId) => {
                 mutationCalls.push(method);
                 return liveClient.call(method, value, operationId);
@@ -217,7 +227,7 @@ it.live(
               client,
               getEventCursor: async () => {
                 cursorReads++;
-                return 0;
+                return committedCursor;
               },
               requireRemoteMcpEndpoint: true,
               mcpEndpoint: "http://t3-central:3773/mcp",
@@ -259,6 +269,54 @@ it.live(
               expect(mutationCalls).toEqual(callsBeforeReconnect);
             }
             terminalFailure = undefined;
+            committedCursor = 2;
+            const captured = firstBatch?.[0];
+            if (!captured || !worker) return yield* Effect.die("Missing worker event");
+            for (let index = 0; index < 32; index++) {
+              yield* Effect.promise(() => worker!.publish(providerSessionId, captured.event));
+            }
+            const burst = yield* Stream.runCollect(
+              runtime.events.pipe(
+                Stream.take(32),
+                Stream.tap((event) => {
+                  committedCursor = Math.min(
+                    remoteEventEnvelope(event)?.sequence ?? committedCursor,
+                    33,
+                  );
+                  return ackRemoteEvent(event);
+                }),
+              ),
+            );
+            expect(burst).toHaveLength(32);
+            expect(acknowledged).toEqual([]);
+            const lastEvent = burst.at(-1);
+            if (!lastEvent) return yield* Effect.die("Missing batch end");
+            committedCursor = 34;
+            yield* ackRemoteEvent(lastEvent);
+            expect(acknowledged).toEqual([34]);
+            yield* Effect.promise(() => worker!.publish(providerSessionId, captured.event));
+            yield* Effect.promise(() =>
+              worker!.publish(providerSessionId, {
+                type: "turn.terminal",
+                driver,
+                providerThreadId: C.ProviderThreadId.make("thread"),
+                providerTurnId: C.ProviderTurnId.make("turn"),
+                runOrdinal: 1,
+                status: "completed",
+                failure: null,
+                threadDisposition: "reusable",
+              } satisfies A.ProviderAdapterV2Event),
+            );
+            yield* Effect.promise(() => worker!.publish(providerSessionId, captured.event));
+            yield* runtime.events.pipe(
+              Stream.take(3),
+              Stream.tap((event) => {
+                committedCursor = remoteEventEnvelope(event)?.sequence ?? committedCursor;
+                return ackRemoteEvent(event);
+              }),
+              Stream.runDrain,
+            );
+            expect(acknowledged).toEqual([34, 36, 37]);
             const event = events[0];
             expect(event?.type).toBe("provider_session.updated");
             if (event) expect(remoteEventEnvelope(event)?.sequence).toBe(1);

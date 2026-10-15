@@ -304,11 +304,15 @@ export function createRemoteProviderAdapter(options: {
                   eventEnvelopes.set(event, envelope);
                   if (event.type === "turn.terminal")
                     terminalCompletions.set(event, yield* Deferred.make<void>());
-                  eventAcknowledgers.set(event, async () => {
-                    const committed = await options.getEventCursor?.(sessionId);
-                    if (committed !== undefined && committed >= envelope.sequence)
-                      await options.client.ack(sessionId, committed);
-                  });
+                  // A batch shares one durable cursor. A round-trip and worker fsync for
+                  // every streamed delta would hold terminal delivery behind the backlog.
+                  if (envelope === batch.at(-1) || event.type === "turn.terminal") {
+                    eventAcknowledgers.set(event, async () => {
+                      const committed = await options.getEventCursor?.(sessionId);
+                      if (committed !== undefined && committed >= envelope.sequence)
+                        await options.client.ack(sessionId, committed);
+                    });
+                  }
                   selected.push(event);
                 }
               }
