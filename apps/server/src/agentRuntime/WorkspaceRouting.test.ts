@@ -45,6 +45,8 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
               return {
                 entries: [{ kind: "file", byteLength: workspaceId.endsWith("project-a") ? 1 : 2 }],
               };
+            if (method === "files.read")
+              return { relativePath: "t3.json", contents: "{}", byteLength: 2, truncated: false };
             return method === "workspace.isEmpty" || method === "git.isRepository"
               ? true
               : { contents: workspaceId };
@@ -133,6 +135,23 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
           { cwd: second.slice("/workspace/".length), paths: ["README.md"] },
         ]);
         metadataRunning = false;
+
+        const beforePassiveRead = calls.length;
+        expect(
+          (yield* files
+            .readFile({ cwd: first, relativePath: "t3.json", passive: true })
+            .pipe(Effect.exit))._tag,
+        ).toBe("Failure");
+        expect(calls.length).toBe(beforePassiveRead);
+        expect(explicitWakes).toBe(0);
+        metadataRunning = true;
+        expect(
+          (yield* files.readFile({ cwd: first, relativePath: "t3.json", passive: true })).contents,
+        ).toBe("{}");
+        expect(explicitWakes).toBe(0);
+        metadataRunning = false;
+        yield* files.readFile({ cwd: first, relativePath: "t3.json" });
+        expect(explicitWakes).toBe(1);
 
         yield* routes.call({
           cwd: first,

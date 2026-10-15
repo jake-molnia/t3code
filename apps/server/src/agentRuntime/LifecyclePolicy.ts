@@ -30,6 +30,7 @@ import type { ExecutionIdentity } from "../../../../packages/contracts/src/execu
 import { sameIdentity } from "../execution/ExecutionWorker.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as ResourceCleanup from "../orchestration-v2/ResourceCleanupService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
 import * as Protocol from "./worker/Protocol.ts";
@@ -187,6 +188,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
   const scope = yield* Scope.Scope;
   const activity = yield* WorkspaceActivity;
   const recentActivity = yield* WorkspaceRecentActivity;
+  const cleanup = yield* ResourceCleanup.ResourceCleanupService;
   const activityGuard = (snapshot: LifecycleSnapshot) =>
     Effect.gen(function* () {
       const { workspaceId } = snapshot;
@@ -368,6 +370,28 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
     )
       return "stale" as const;
     if (settledAt !== null && settlementAt(afterClose) !== settledAt) return "stale" as const;
+    if (settledAt !== null)
+      for (const { thread } of afterClose.members)
+        if (thread.settledOverride === "settled" && thread.settledAt !== null) {
+          const beforePreviewClose = yield* ports.read(threadId);
+          if (
+            !beforePreviewClose ||
+            beforePreviewClose.revision !== snapshot.revision ||
+            beforePreviewClose.pendingEffects ||
+            beforePreviewClose.members.some(memberIsBusy) ||
+            settlementAt(beforePreviewClose) !== settledAt ||
+            !beforePreviewClose.members.some(
+              (member) =>
+                member.thread.id === thread.id &&
+                member.thread.settledOverride === "settled" &&
+                millis(member.thread.settledAt) === millis(thread.settledAt),
+            )
+          )
+            return "stale" as const;
+          yield* cleanup
+            .cleanupPreviews(thread.id)
+            .pipe(Effect.mapError(failure("preview-cleanup")));
+        }
     if (settledAt !== null && snapshot.settleScript) {
       const operationId = `settle:${threadId}:${settledAt}`;
       const deliveryId = `${operationId}:${client.identity.incarnation}`;

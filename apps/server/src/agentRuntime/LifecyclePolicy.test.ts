@@ -18,6 +18,7 @@ import {
 } from "../../../../packages/contracts/src/execution.ts";
 import * as Policy from "./LifecyclePolicy.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
+import * as ResourceCleanup from "../orchestration-v2/ResourceCleanupService.ts";
 
 const root = ThreadId.make("root");
 const child = ThreadId.make("child");
@@ -165,6 +166,68 @@ function harness(initial = snapshot()) {
     },
   };
 }
+
+it.effect("preserves a sibling reopened while another member's preview cleanup is running", () =>
+  Effect.gen(function* () {
+    const h = harness(snapshot([member(root), member(child)]));
+    const closed: string[] = [];
+    const policy = yield* Policy.makePolicy(h.ports).pipe(
+      Effect.provideService(ResourceCleanup.ResourceCleanupService, {
+        cleanupTerminals: () => Effect.void,
+        cleanupAttachments: () => Effect.void,
+        cleanupPreviews: (threadId) =>
+          Effect.sync(() => {
+            closed.push(threadId);
+            const reopened = member(child);
+            h.setSnapshot({
+              ...snapshot([
+                member(root),
+                {
+                  ...reopened,
+                  thread: { ...reopened.thread, settledOverride: "active", settledAt: null },
+                },
+              ]),
+              revision: 11,
+            });
+          }),
+      }),
+    );
+    expect(yield* policy.reconcileThread(root)).toBe("stale");
+    expect(closed).toEqual([root]);
+    expect(h.stops).toEqual([]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("retains compute when settled preview cleanup fails and retries cleanup", () =>
+  Effect.gen(function* () {
+    const h = harness();
+    let unavailable = true;
+    const policy = yield* Policy.makePolicy(h.ports).pipe(
+      Effect.provideService(ResourceCleanup.ResourceCleanupService, {
+        cleanupTerminals: () => Effect.void,
+        cleanupAttachments: () => Effect.void,
+        cleanupPreviews: (threadId) =>
+          Effect.suspend(() =>
+            unavailable
+              ? Effect.fail(
+                  new ResourceCleanup.ResourceCleanupError({
+                    operation: "preview",
+                    threadId,
+                    cause: "worker unavailable",
+                  }),
+                )
+              : Effect.void,
+          ),
+      }),
+    );
+    const error = yield* policy.reconcileThread(root).pipe(Effect.flip);
+    expect(error.operation).toBe("preview-cleanup");
+    expect(h.stops).toEqual([]);
+    unavailable = false;
+    expect(yield* policy.reconcileThread(root)).toBe("release-submitted");
+    expect(h.stops).toHaveLength(1);
+  }).pipe(Effect.scoped),
+);
 
 it.effect(
   "holds compute throughout a pending workspace request and releases its intent on interruption",

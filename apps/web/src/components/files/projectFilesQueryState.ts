@@ -70,10 +70,11 @@ export function getProjectFileQueryAtom(
   environmentId: EnvironmentId,
   cwd: string,
   relativePath: string | null,
+  options?: { readonly passive?: boolean },
 ) {
   return projectEnvironment.readFile({
     environmentId,
-    input: { cwd, relativePath: relativePath ?? EMPTY_PROJECT_FILE_PATH },
+    input: { cwd, relativePath: relativePath ?? EMPTY_PROJECT_FILE_PATH, ...options },
   });
 }
 
@@ -252,6 +253,7 @@ export function useProjectFileQuery(
   cwd: string,
   relativePath: string | null,
   enabled = true,
+  options?: { readonly passive?: boolean },
 ): ProjectFileQueryState {
   // The caller decides what to read. A media path is not skipped here: a folder
   // named `assets.png` is only knowable as a folder from the read failure.
@@ -260,7 +262,7 @@ export function useProjectFileQuery(
   const isQueryEnabled = enabled;
   const atom =
     enabled && canReadFiles
-      ? getProjectFileQueryAtom(environmentId, cwd, relativePath)
+      ? getProjectFileQueryAtom(environmentId, cwd, relativePath, options)
       : EMPTY_PROJECT_FILE_QUERY_ATOM;
   const result = useAtomValue(atom);
   const refreshAtom = useAtomRefresh(atom);

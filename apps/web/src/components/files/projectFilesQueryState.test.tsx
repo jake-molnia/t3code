@@ -250,6 +250,10 @@ describe("project query refresh", () => {
           file: config,
           scripts: config.scripts,
         });
+        expect(projectMocks.readFile).toHaveBeenLastCalledWith({
+          environmentId,
+          input: { cwd: "/repo", relativePath: "t3.json", passive: true },
+        });
       } finally {
         registry.dispose();
         atomHooks.registry = null;
