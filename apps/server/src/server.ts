@@ -423,6 +423,7 @@ const layerThreadSettlementWorker = Layer.effectDiscard(
   ThreadSettlementService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(
   Layer.provide(LifecyclePolicy.layer),
+  Layer.provide(ResourceCleanupService.layer),
   Layer.provide(layerPullRequestService),
   Layer.provide(ProjectionStoreV2.layer),
   Layer.provide(ProjectStore.layer),
