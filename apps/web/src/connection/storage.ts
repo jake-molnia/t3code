@@ -611,14 +611,8 @@ export const layer = Layer.effectContext(
     const githubRoutingPermissions = makeBrowserGitHubRoutingPermissions();
 
     const targetStore = Persistence.ConnectionTargetStore.of({
-      list: catalog.read.pipe(
-        Effect.map((document) => document.targets),
-        Effect.mapError((cause) => persistenceError("list-targets", cause)),
-      ),
-      listDisabled: catalog.read.pipe(
-        Effect.map((document) => document.disabledEnvironmentIds),
-        Effect.mapError((cause) => persistenceError("list-disabled-targets", cause)),
-      ),
+      list: Effect.succeed([]),
+      listDisabled: Effect.succeed([]),
     });
     const registrationStore = Persistence.ConnectionRegistrationStore.of({
       register: (registration, routes) =>

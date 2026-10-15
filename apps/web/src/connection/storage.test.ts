@@ -1,5 +1,6 @@
 import {
   ConnectionTransientError,
+  BearerConnectionTarget,
   PrimaryConnectionTarget,
 } from "@t3tools/client-runtime/connection";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -390,3 +391,31 @@ describe("browser GitHub routing permissions", () => {
     }).pipe(Effect.scoped),
   );
 });
+
+it.effect("does not restore saved machine targets or disabled state into the central browser", () =>
+  Effect.gen(function* () {
+    const getConnectionCatalog = vi.fn().mockResolvedValue(
+      encodeCatalog({
+        ...emptyCatalog,
+        targets: [
+          new BearerConnectionTarget({
+            connectionId: "old-machine-connection",
+            environmentId: EnvironmentId.make("old-machine"),
+            label: "Old machine",
+          }),
+        ],
+        disabledEnvironmentIds: [EnvironmentId.make("central")],
+      }),
+    );
+    vi.stubGlobal("indexedDB", undefined);
+    vi.stubGlobal("window", {
+      desktopBridge: { getConnectionCatalog, setConnectionCatalog: vi.fn() },
+    });
+    yield* Effect.gen(function* () {
+      const targets = yield* Persistence.ConnectionTargetStore;
+      expect(yield* targets.list).toEqual([]);
+      expect(yield* targets.listDisabled).toEqual([]);
+    }).pipe(Effect.provide(ConnectionStorage.layer));
+    expect(getConnectionCatalog).not.toHaveBeenCalled();
+  }),
+);
