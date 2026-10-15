@@ -17,6 +17,7 @@ import {
   ExecutionResult,
 } from "../../../../packages/contracts/src/execution.ts";
 import * as Policy from "./LifecyclePolicy.ts";
+import * as RuntimeClient from "./RuntimeClient.ts";
 
 const root = ThreadId.make("root");
 const child = ThreadId.make("child");
@@ -786,5 +787,45 @@ it.effect(
       expect(observations).toBe(before);
       expect(h.scriptRuns()).toBe(1);
       expect(h.stops).toHaveLength(1);
+    }).pipe(Effect.scoped),
+);
+
+it.effect.each(
+  (["idle", "busy", "newer-revision", "new-settlement"] as const).flatMap((scenario) => [
+    { scenario, queued: false },
+    { scenario, queued: true },
+  ]),
+)(
+  "reconciles recoverable stops only after policy rechecks: $scenario queued=$queued",
+  ({ scenario, queued }) =>
+    Effect.gen(function* () {
+      const h = harness();
+      const view = snapshot();
+      view.settlementProven = scenario !== "new-settlement";
+      if (scenario === "busy") view.pendingEffects = true;
+      if (scenario === "newer-revision") view.revision = 11;
+      h.setSnapshot(view);
+      const failure = new RuntimeClient.RuntimeStopRetry({
+        receipt: {
+          operationId: "release:workspace:1000",
+          revision: 10,
+          action: "release_compute",
+          expectedIdentity: identity,
+          version: "before",
+          acceptedVersion: "accepted",
+        },
+        error: queued
+          ? null
+          : { code: "worker_busy", message: "Worker still busy", retryable: true },
+      });
+      const policy = yield* Policy.makePolicy({
+        ...h.ports,
+        observe: () => Effect.succeed({ kind: "retryable-stop", failure }),
+      });
+      expect(yield* policy.reconcileThread(root)).toBe(
+        scenario === "idle" ? "release-submitted" : scenario === "busy" ? "busy" : "stale",
+      );
+      expect(h.stops).toHaveLength(scenario === "idle" ? 1 : 0);
+      expect(h.methods).toEqual([]);
     }).pipe(Effect.scoped),
 );

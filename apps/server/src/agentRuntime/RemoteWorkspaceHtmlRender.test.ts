@@ -1,9 +1,9 @@
-import * as ExecutionClientTestkit from "./ExecutionClient.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { captureRunPromise } from "../execution/EffectHttpBoundary.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -17,8 +17,6 @@ import * as RuntimeClient from "./RuntimeClient.ts";
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
 
-const decodeHtml = Schema.decodeUnknownSync(Schema.Struct({ html: Schema.String }));
-
 const services = ServerConfig.layerTest(process.cwd(), { prefix: "remote-html-central-" }).pipe(
   Layer.provideMerge(NodeServices.layer),
 );
@@ -27,6 +25,7 @@ it.layer(services, { excludeTestServices: true })("remote HTML publication", (it
     "inlines worker-only images before central publication and keeps the artifact after worker loss",
     () =>
       Effect.gen(function* () {
+        const run = yield* captureRunPromise;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const config = yield* ServerConfig.ServerConfig;
@@ -55,11 +54,22 @@ it.layer(services, { excludeTestServices: true })("remote HTML publication", (it
           podUid: "pod",
           protocolVersion: 1,
         } satisfies ExecutionClient["identity"];
-        const client = yield* ExecutionClientTestkit.makeClient(identity, (method, input) => {
-          if (method !== "html.prepare") return Effect.die("unexpected operation");
-          const decoded = decodeHtml(input);
-          return workerHtml.prepare(decoded.html);
-        });
+        const client: ExecutionClient = {
+          credentialSource: () => {
+            throw new Error("Credential sharing is unused in this fixture");
+          },
+          identity,
+          call: async (method, input) => {
+            if (method !== "html.prepare") throw new Error("unexpected operation");
+            const decoded = Schema.decodeUnknownSync(Schema.Struct({ html: Schema.String }))(input);
+            return run(workerHtml.prepare(decoded.html));
+          },
+          events: async () => [],
+          ack: async () => {},
+          operationStatus: async () => ({ state: "missing" }),
+          inspectIdentity: async () => identity,
+          transient: async () => null,
+        };
         const runtime = RuntimeClient.RuntimeClient.of({
           enabled: true,
           forThread: () => Effect.succeed(client),

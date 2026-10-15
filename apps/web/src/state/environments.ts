@@ -4,7 +4,6 @@ import {
   hasRelayRoute,
   type EnvironmentPresentation as BaseEnvironmentPresentation,
 } from "@t3tools/client-runtime/connection";
-
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { useMemo } from "react";
@@ -16,7 +15,6 @@ import {
   useEnvironmentPresentation,
 } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
-
 import { usePreparedConnection } from "./session";
 
 export interface EnvironmentPresentation extends BaseEnvironmentPresentation {

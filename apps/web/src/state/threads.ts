@@ -1,5 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-
 import { arrayElementsEqual } from "@t3tools/client-runtime/state/entities";
 import {
   createEnvironmentThreadDetailAtoms,

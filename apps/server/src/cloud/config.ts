@@ -1,10 +1,5 @@
-import {
-  RelayManagedEndpointOrigin,
-  RelayManagedEndpointRuntimeConfig,
-} from "@t3tools/contracts/relay";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 
@@ -13,11 +8,6 @@ export const RELAY_URL_SECRET = "cloud-relay-url";
 export const RELAY_ISSUER_SECRET = "cloud-relay-issuer";
 export const RELAY_ENVIRONMENT_CREDENTIAL_SECRET = "cloud-relay-environment-credential";
 export const PUBLISH_AGENT_ACTIVITY_SECRET = "cloud-publish-agent-activity";
-
-export const ManagedEndpointConfirmedOrigin = Schema.Struct({
-  config: RelayManagedEndpointRuntimeConfig,
-  origin: RelayManagedEndpointOrigin,
-});
 
 export function isAgentActivityPublishingEnabledValue(value: string | null): boolean {
   return value === "true";

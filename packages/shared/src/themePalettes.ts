@@ -3,11 +3,7 @@ export const BUILT_IN_THEME_IDS = ["t3-chat", "grove", "ocean", "ember", "iris"]
 /** The standard T3 Code palette, kept separate from the optional built-in theme library. */
 const MOBILE_DEFAULT_THEME_ID = "t3-code";
 
-/**
- * Every palette the mobile app can render. Declared here so host-side tooling
- * (the app-store screenshot harness) can validate a requested theme without
- * importing React Native application code.
- */
+/** Legacy native palette IDs remain readable in saved theme data. */
 const MOBILE_THEME_IDS = [MOBILE_DEFAULT_THEME_ID, ...BUILT_IN_THEME_IDS] as const;
 
 /**

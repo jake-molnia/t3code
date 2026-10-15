@@ -33,7 +33,12 @@ it.live(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* RuntimeSchema.migrate;
-      const receipt = JSON.stringify(proof);
+      const receipt = JSON.stringify({
+        ...proof,
+        expectedIdentity: identity,
+        version: "before-stop",
+        acceptedVersion: "stopped",
+      });
       yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id,owner_thread_id,admission_revision,execution_requested,lifecycle_request_json) VALUES ('workspace','owner',10,1,${receipt})`;
       const run = yield* captureRunPromise;
       let posts = 0;
@@ -44,7 +49,25 @@ it.live(
             host: "127.0.0.1",
             port: 0,
             handle: async (request) => {
-              if (request.method === "POST") {
+              const resource = () =>
+                Response.json(
+                  {
+                    id: "workspace",
+                    pool: "local",
+                    profile: "t3",
+                    desiredState: ready ? "running" : "suspended",
+                    state: ready ? "running" : "suspended",
+                    version: ready ? "ready" : "stopped",
+                    progress: null,
+                    error: null,
+                    identity,
+                    execution: ready
+                      ? { identity, endpoint: "http://worker.test", token: "worker-token" }
+                      : null,
+                  },
+                  { headers: { etag: ready ? '"ready"' : '"stopped"' } },
+                );
+              if (request.method === "PUT" && new URL(request.url).pathname.endsWith("/state")) {
                 posts++;
                 const flags = await run(
                   sql<{
@@ -58,42 +81,17 @@ it.live(
                       Effect.provideService(SqlClient.SqlClient, sql),
                     ),
                   );
-                  return Response.json({}, { status: 409 });
+                  return Response.json({}, { status: 412 });
                 }
                 ready = true;
-                return Response.json({}, { status: 202 });
               }
-              if (!ready)
-                return Response.json({
-                  state: {
-                    request: proof,
-                    completedOperation: proof.operationId,
-                    epoch: 1,
-                    phase: "suspended",
-                    identity,
-                  },
-                });
-              // A delayed old observation cannot retire the new revision.
-              await run(
-                Enrollment.retire("workspace", 10, proof).pipe(
-                  Effect.provideService(SqlClient.SqlClient, sql),
-                ),
-              );
-              return Response.json({
-                state: {
-                  request: {
-                    operationId: "ensure:workspace:11",
-                    revision: 11,
-                    action: "ensure_running",
-                  },
-                  completedOperation: "ensure:workspace:11",
-                  epoch: 1,
-                  phase: "running",
-                  identity,
-                  endpoint: "http://worker.test",
-                },
-                token: "worker-token",
-              });
+              if (ready)
+                await run(
+                  Enrollment.retire("workspace", 10, proof).pipe(
+                    Effect.provideService(SqlClient.SqlClient, sql),
+                  ),
+                );
+              return resource();
             },
           }),
         ),

@@ -1,13 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off -- Tests exercise the actual on-disk journal and HTTP boundary.
 import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
+import * as Effect from "effect/Effect";
+import { captureRunPromise } from "./EffectHttpBoundary.ts";
 import { VcsProcessExitError } from "@t3tools/contracts";
 import { WorkspaceExecutionError } from "../agentRuntime/worker/Protocol.ts";
 import { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { afterEach, expect, test } from "@effect/vitest";
+import { afterEach, expect, it, test } from "@effect/vitest";
 import { openWorkerJournal } from "./WorkerJournal.ts";
 import { createExecutionWorker } from "./ExecutionWorker.ts";
 import { createExecutionClient } from "./ExecutionClient.ts";
@@ -365,47 +367,79 @@ test.each(["", "/"])(
   },
 );
 
-test("returns safe workspace failure codes through durable and transient HTTP operations", async () => {
-  const { client } = await fixture(() =>
-    Promise.reject(
-      new WorkspaceExecutionError({ code: "fork_destination_exists", cause: "sensitive stderr" }),
-    ),
-  );
-  await expect(client.call("git.importFork", {})).rejects.toMatchObject({
-    code: "fork_destination_exists",
-  });
-  await expect(client.transient("asset.stage", {})).rejects.toMatchObject({
-    code: "fork_destination_exists",
-  });
-});
-
-test("does not serialize arbitrary exception messages or malformed codes", async () => {
-  const { client } = await fixture(() =>
-    Promise.reject(
-      new WorkspaceExecutionError({ code: "secret token value", cause: "sensitive stderr" }),
-    ),
-  );
-  await expect(client.call("git.importFork", {})).rejects.toMatchObject({
-    code: "operation_failed",
-    message: "operation_failed",
-  });
-});
-
-test("returns Git failure classification without exposing paths or stderr", async () => {
-  const { client } = await fixture(() =>
-    Promise.reject(
-      new VcsProcessExitError({
-        operation: "fork.bundle",
-        command: "git",
-        cwd: "/private/source",
-        exitCode: 128,
-        detail: "sensitive stderr",
-        failureKind: "authentication",
+it.live("returns safe workspace failure codes through durable and transient HTTP operations", () =>
+  Effect.gen(function* () {
+    const run = yield* captureRunPromise;
+    const { client } = yield* Effect.promise(() =>
+      fixture(() =>
+        run(
+          Effect.fail(
+            new WorkspaceExecutionError({
+              code: "fork_destination_exists",
+              cause: "sensitive stderr",
+            }),
+          ),
+        ),
+      ),
+    );
+    yield* Effect.promise(() =>
+      expect(client.call("git.importFork", {})).rejects.toMatchObject({
+        code: "fork_destination_exists",
       }),
-    ),
-  );
-  await expect(client.call("git.bundleFork", {})).rejects.toMatchObject({
-    code: "vcs_authentication",
-    message: "vcs_authentication",
-  });
-});
+    );
+    yield* Effect.promise(() =>
+      expect(client.transient("asset.stage", {})).rejects.toMatchObject({
+        code: "fork_destination_exists",
+      }),
+    );
+  }),
+);
+
+it.live("does not serialize arbitrary exception messages or malformed codes", () =>
+  Effect.gen(function* () {
+    const run = yield* captureRunPromise;
+    const { client } = yield* Effect.promise(() =>
+      fixture(() =>
+        run(
+          Effect.fail(
+            new WorkspaceExecutionError({ code: "secret token value", cause: "sensitive stderr" }),
+          ),
+        ),
+      ),
+    );
+    yield* Effect.promise(() =>
+      expect(client.call("git.importFork", {})).rejects.toMatchObject({
+        code: "operation_failed",
+        message: "operation_failed",
+      }),
+    );
+  }),
+);
+
+it.live("returns Git failure classification without exposing paths or stderr", () =>
+  Effect.gen(function* () {
+    const run = yield* captureRunPromise;
+    const { client } = yield* Effect.promise(() =>
+      fixture(() =>
+        run(
+          Effect.fail(
+            new VcsProcessExitError({
+              operation: "fork.bundle",
+              command: "git",
+              cwd: "/private/source",
+              exitCode: 128,
+              detail: "sensitive stderr",
+              failureKind: "authentication",
+            }),
+          ),
+        ),
+      ),
+    );
+    yield* Effect.promise(() =>
+      expect(client.call("git.bundleFork", {})).rejects.toMatchObject({
+        code: "vcs_authentication",
+        message: "vcs_authentication",
+      }),
+    );
+  }),
+);

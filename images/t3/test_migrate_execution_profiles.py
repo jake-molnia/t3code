@@ -13,36 +13,45 @@ spec.loader.exec_module(migration)
 
 
 class MigrationTests(unittest.TestCase):
+    def resource(self, **fields):
+        return dict(id='workspace', pool='pool', profile='v1', state='suspended',
+                    desiredState='suspended', version='observed', identity={'incarnation': 'worker'},
+                    execution=None, bindingGeneration=1, **fields)
+
     def test_release_migrate_and_resume_after_controller_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             database, pools, ledger = root/'state.sqlite', root/'pools.json', root/'ledger.json'
             db = sqlite3.connect(database)
+            self.addCleanup(db.close)
             db.execute('CREATE TABLE agent_runtime_workspaces(workspace_id TEXT PRIMARY KEY,pool_id TEXT,profile_id TEXT,admission_revision INTEGER,lifecycle_request_json TEXT)')
             db.execute('INSERT INTO agent_runtime_workspaces VALUES (?,?,?,?,?)', ('workspace','pool','v1',7,'{"profile":"v1"}'))
             db.commit()
             pools.write_text(json.dumps({'defaultPoolId':'pool','pools':[{'id':'pool','profile':'v2','url':'http://controller','tokenFile':'unused'}]}))
-            current = {'phase':'suspended','request':{'workspaceId':'workspace','revision':10,'operationId':'old','profile':'v1'},'completedOperation':'old','epoch':4,'identity':{'incarnation':'worker'},'handle':{'allocationId':'4'},'profileHash':'original'}
+            current = self.resource()
             calls = []
             fail_once = [True]
-            def request(pool, path, body=None):
-                if path.startswith('/v1/workspaces/'):
-                    if ('profile='+current['request']['profile']) not in path:
-                        return 503, None
-                    return 200, {'state':json.loads(json.dumps(current))}
+            def request(pool, path, body=None, **kwargs):
                 calls.append(path)
-                if path == '/v1/operations':
-                    self.assertEqual(body['revision'], 11)
-                    current.update(phase='released',request=body,completedOperation=body['operationId'],identity=None,handle=None)
-                    return 202, {'taskId':'task'}
+                if path.endswith('/migration'):
+                    return 200, {'profile':current['profile'],'profileHash':'hash','revision':11,'epoch':4,'bindingGeneration':current['bindingGeneration'],'state':current['state']}
+                if path.endswith('/state'):
+                    self.assertEqual(kwargs, {'method':'PUT','version':'observed'})
+                    self.assertEqual(body, {'desiredState':'released'})
+                    current.update(state='released',desiredState='released',version='released',identity=None)
+                    return 202, dict(current)
+                if path.startswith('/v1/workspaces/'):
+                    self.assertNotIn('?', path)
+                    return 200, dict(current)
                 if path == '/v1/profile-migrations':
                     self.assertEqual(body['expectedRevision'], 11)
-                    current['request']['profile']='v2'
-                    current['profileHash']='new'
+                    if current['profile'] != 'v2':
+                        current['bindingGeneration'] += 1
+                    current['profile']='v2'
                     if fail_once[0]:
                         fail_once[0]=False
                         raise migration.MigrationError('simulated response loss after commit')
-                    return 200, current
+                    return 200, {}
                 self.fail(path)
             with patch.object(migration, 'request', request):
                 with self.assertRaises(migration.MigrationError):
@@ -56,193 +65,149 @@ class MigrationTests(unittest.TestCase):
                 with patch.object(migration, 'save', fail_after_database_commit):
                     with self.assertRaises(migration.MigrationError):
                         migration.apply(database,pools,ledger,'v1','v2')
-                self.assertEqual(db.execute('SELECT profile_id,admission_revision,lifecycle_request_json FROM agent_runtime_workspaces').fetchone(), ('v2',11,None))
+                self.assertEqual(db.execute('SELECT profile_id,admission_revision,lifecycle_request_json FROM agent_runtime_workspaces').fetchone(), ('v2',7,None))
                 migration.apply(database,pools,ledger,'v1','v2')
-                self.assertEqual(calls.count('/v1/operations'),1)
-                backup=sqlite3.connect(ledger.with_suffix('.sqlite-backup'))
-                self.assertEqual(backup.execute('SELECT profile_id FROM agent_runtime_workspaces').fetchone()[0],'v1')
-                backup.close()
-                # A normal later web run may advance revisions. Its next init is a no-op.
+                self.assertEqual(calls.count('/v1/workspaces/workspace/state'),1)
+                with closing(sqlite3.connect(ledger.with_suffix('.sqlite-backup'))) as backup:
+                    self.assertEqual(backup.execute('SELECT profile_id FROM agent_runtime_workspaces').fetchone()[0],'v1')
                 db.execute('UPDATE agent_runtime_workspaces SET admission_revision=20')
                 db.commit()
                 migration.apply(database,pools,ledger,'v1','v2')
-            db.close()
+                completed = json.loads(ledger.read_text())
+                for entry in completed['workspaces'].values():
+                    entry['migration'].pop('expectedBindingGeneration')
+                    entry['migration'].pop('operationId')
+                ledger.write_text(json.dumps(completed))
+                with patch.object(migration, 'request', side_effect=AssertionError('Completed legacy ledger must remain a no-op')):
+                    migration.apply(database,pools,ledger,'v1','v2')
 
-    def test_failed_owned_release_retries_with_a_new_operation(self):
-        for terminal, partial in (('FAILED', False), ('CANCELLED', False), ('FAILED', True)):
-            with self.subTest(terminal=terminal, partial=partial):
-                current = {'phase':'suspended','request':{'workspaceId':'w','revision':10,'operationId':'old','profile':'v1'},
-                    'completedOperation':'old','epoch':4,'identity':{'incarnation':'worker'},
-                    'handle':{'allocationId':'4','pvcUid':'retained'},'profileHash':'original'}
-                entry = {'before':{'workspace_id':'w','admission_revision':7}}
-                submissions=[]
-                def request(pool,path,body=None):
-                    if path.startswith('/v1/workspaces/'):
-                        return 200, {'state':json.loads(json.dumps(current))}
-                    if path == '/v1/operations':
-                        submissions.append(json.loads(json.dumps(body)))
-                        current.update(request=json.loads(json.dumps(body)),taskId='task-'+str(len(submissions)))
-                        if partial:
-                            current.update(phase='released',identity=None,handle=None)
-                        if len(submissions)>1:
-                            current.update(phase='released',completedOperation=body['operationId'],identity=None,handle=None)
-                        return 202, {'taskId':current['taskId']}
-                    if path.startswith('/v1/operations/'):
-                        return 200, {'status':terminal}
-                    if path == '/v1/profile-migrations':
-                        current['request']['profile']='v2'
-                        return 200,current
-                    self.fail(path)
-                with patch.object(migration,'request',request):
-                    with self.assertRaises(migration.MigrationError):
-                        migration.migrate_controller({},entry,lambda:None,'v1','v2',1)
-                    persisted = []
-                    def crash_after_persisting_replacement():
-                        persisted.append(json.loads(json.dumps(entry)))
-                        raise migration.MigrationError('crash before replacement POST')
-                    with self.assertRaises(migration.MigrationError):
-                        migration.migrate_controller({},entry,crash_after_persisting_replacement,'v1','v2',1)
-                    self.assertEqual(len(submissions),1)
-                    entry = persisted[-1]
-                    planned = json.loads(json.dumps(entry['release']))
-                    revision=migration.migrate_controller({},entry,lambda:None,'v1','v2',1)
-                self.assertEqual(submissions[1],planned)
-                self.assertEqual(revision,12)
-                self.assertEqual([r['revision'] for r in submissions],[11,12])
-                self.assertNotEqual(submissions[0]['operationId'],submissions[1]['operationId'])
-                self.assertEqual(entry['releaseAttempts'][0]['status'],terminal)
-                self.assertEqual(entry['releaseAttempts'][0]['request'],submissions[0])
+    def test_release_conflict_does_not_retry_a_newer_allocation(self):
+        entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
+        current = self.resource()
+        writes = []
+        def request(pool, path, body=None, **kwargs):
+            if path.endswith('/state'):
+                writes.append(kwargs['version'])
+                return 412, None
+            return 200, dict(current)
+        with patch.object(migration, 'request', request):
+            with self.assertRaisesRegex(migration.MigrationError, '412'):
+                migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
+            current['version'] = 'newer'
+            with self.assertRaisesRegex(migration.MigrationError, 'superseded'):
+                migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
+        self.assertEqual(writes, ['observed'])
 
-    def test_terminal_preexisting_lifecycle_recovers_without_forcing_quiescence(self):
-        for status in ('FAILED', 'CANCELLED'):
-            with self.subTest(status=status):
-                current={'request':{'workspaceId':'w','revision':40,'operationId':'existing-idle-release','profile':'v1','action':'release_compute'},
-                    'taskId':'previous','epoch':4,'profileHash':'original','phase':'running',
-                    'completedOperation':'older-ensure', 'identity':{'incarnation':'one'},
-                    'handle':{'allocationId':'4','pvcUid':'retained'}}
-                entry={'before':{'workspace_id':'w','admission_revision':35}}
-                posts=[]
-                def request(pool,path,body=None):
-                    if path.startswith('/v1/workspaces/'):
-                        return 200,{'state':json.loads(json.dumps(current))}
-                    if path == '/v1/operations/previous':
-                        return 200,{'status':status}
-                    if path == '/v1/operations':
-                        posts.append(json.loads(json.dumps(body)))
-                        self.assertEqual(body['action'],'release_compute')
-                        self.assertEqual(body['expectedAllocationId'],'4')
-                        self.assertEqual(body['expectedIncarnation'],'one')
-                        self.assertEqual(body['expectedGeneration'],4)
-                        current.update(request=json.loads(json.dumps(body)),completedOperation=body['operationId'],
-                            phase='released',identity=None,handle=None,taskId='migration')
-                        return 202,{'taskId':'migration'}
-                    if path == '/v1/profile-migrations':
-                        current['request']['profile']='v2'
-                        return 200,current
-                    self.fail(path)
-                persisted=[]
-                def crash_before_post():
-                    persisted.append(json.loads(json.dumps(entry)))
-                    raise migration.MigrationError('crash after preparing recovery')
-                with patch.object(migration,'request',request):
-                    with self.assertRaises(migration.MigrationError):
-                        migration.migrate_controller({},entry,crash_before_post,'v1','v2',1)
-                    self.assertEqual(posts,[])
-                    entry=persisted[-1]
-                    planned=json.loads(json.dumps(entry['release']))
-                    revision=migration.migrate_controller({},entry,lambda:None,'v1','v2',1)
-                self.assertEqual(revision,41)
-                self.assertEqual(posts,[planned])
-                self.assertFalse(entry['releaseAttempts'][0]['owned'])
+    def test_lost_release_response_fails_closed_when_already_completed(self):
+        entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
+        current = self.resource()
+        writes = []
+        def request(pool, path, body=None, **kwargs):
+            if path.endswith('/state'):
+                writes.append(body)
+                current.update(state='released',desiredState='released',version='released',identity=None)
+                raise migration.MigrationError('response lost')
+            if path.endswith('/migration'):
+                return 200, {'profile':current['profile'],'profileHash':'hash','revision':11,'epoch':4,'bindingGeneration':current['bindingGeneration'],'state':'released'}
+            if path == '/v1/profile-migrations':
+                if current['profile'] != 'v2':
+                    current['bindingGeneration'] += 1
+                current['profile']='v2'
+                return 200, {}
+            return 200, dict(current)
+        with patch.object(migration, 'request', request):
+            with self.assertRaises(migration.MigrationError):
+                migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
+            with self.assertRaisesRegex(migration.MigrationError, 'release completion cannot be reconciled'):
+                migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
+            self.assertEqual(current['profile'],'v1')
+            self.assertNotIn('migration',entry)
+        self.assertEqual(writes,[{'desiredState':'released'}])
 
-    def test_preexisting_operation_requires_terminal_status_and_stable_state(self):
-        for scenario in ('RUNNING','QUEUED','SUCCEEDED','unknown','profile','identity','storage','revision'):
-            with self.subTest(scenario=scenario):
-                current={'request':{'workspaceId':'w','revision':40,'operationId':'existing','profile':'v1'},
-                    'taskId':'previous','epoch':4,'profileHash':'original','phase':'running',
-                    'completedOperation':'older','identity':{'incarnation':'one'},'handle':{'allocationId':'4','pvcUid':'same'}}
-                confirmed=json.loads(json.dumps(current))
-                if scenario=='profile': confirmed['profileHash']='changed'
-                if scenario=='identity': confirmed['identity']['incarnation']='changed'
-                if scenario=='storage': confirmed['handle']['pvcUid']='changed'
-                if scenario=='revision': confirmed['request']['revision']=41
-                reads=0
-                def request(pool,path,body=None):
-                    nonlocal reads
-                    self.assertIsNone(body,'must not mutate unknown or changed preexisting operation')
-                    if path.startswith('/v1/workspaces/'):
-                        reads+=1
-                        return 200,{'state':json.loads(json.dumps(current if reads==1 else confirmed))}
-                    if path == '/v1/operations/previous':
-                        if scenario=='unknown': return 503,None
-                        return 200,{'status':scenario if scenario in ('RUNNING','QUEUED','SUCCEEDED') else 'FAILED'}
-                    self.fail(path)
-                entry={'before':{'workspace_id':'w','admission_revision':35}}
-                with patch.object(migration,'request',request):
-                    with self.assertRaises(migration.MigrationError):
-                        migration.migrate_controller({},entry,lambda:None,'v1','v2',1)
-                self.assertNotIn('release',entry)
+    def test_lost_release_response_then_busy_worker_can_retry_after_restart(self):
+        entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
+        current = self.resource()
+        writes = []
+        def request(pool, path, body=None, **kwargs):
+            if path.endswith('/state'):
+                writes.append(kwargs['version'])
+                if len(writes) == 1:
+                    current.update(state='failed',desiredState='released',version='accepted',error={'code':'worker_busy','retryable':True})
+                    raise migration.MigrationError('response lost')
+                current.update(state='released',desiredState='released',version='retried',identity=None,error=None)
+                return 202, dict(current)
+            if path.endswith('/migration'):
+                return 200, {'profile':current['profile'],'profileHash':'hash','revision':11,'epoch':4,'bindingGeneration':current['bindingGeneration'],'state':'released'}
+            if path == '/v1/profile-migrations':
+                if current['profile'] != 'v2':
+                    current['bindingGeneration'] += 1
+                current['profile']='v2'
+                return 200, {}
+            return 200, dict(current)
+        with patch.object(migration, 'request', request):
+            with self.assertRaises(migration.MigrationError):
+                migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
+            self.assertEqual(migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1),7)
+        self.assertEqual(writes,['observed','accepted'])
 
-    def test_saved_replacement_rechecks_predecessor_before_post(self):
-        for change in ('superseded','identity','storage','profile','running','unknown'):
-            with self.subTest(change=change):
-                old={'workspaceId':'w','revision':11,'operationId':'failed','profile':'v1','expectedGeneration':4}
-                current={'request':old,'taskId':'task','epoch':4,'profileHash':'original','phase':'suspended',
-                    'identity':{'incarnation':'one'},'handle':{'allocationId':'4','pvcUid':'same'}}
-                replacement={**old,'revision':12,'operationId':'saved-replacement'}
-                entry={'before':{'workspace_id':'w','admission_revision':7},'release':replacement,
-                    'releaseBasis':json.loads(json.dumps(current)),
-                    'releaseAttempts':[{'request':json.loads(json.dumps(old)),'taskId':'task','status':'FAILED'}]}
-                if change=='superseded': current['request']={**old,'operationId':'other'}
-                if change=='identity': current['identity']={'incarnation':'new'}
-                if change=='storage': current['handle']={'allocationId':'4','pvcUid':'replaced'}
-                if change=='profile': current['profileHash']='changed'
-                def request(pool,path,body=None):
-                    self.assertIsNone(body, 'replacement submitted before validating predecessor')
-                    if path.startswith('/v1/workspaces/'):
-                        return 200, {'state':json.loads(json.dumps(current))}
-                    if path.startswith('/v1/operations/'):
-                        return (503,None) if change=='unknown' else (200,{'status':'RUNNING' if change=='running' else 'FAILED'})
-                    self.fail(path)
-                with patch.object(migration,'request',request):
-                    with self.assertRaises(migration.MigrationError):
-                        migration.migrate_controller({},entry,lambda:None,'v1','v2',1)
-                self.assertEqual(entry['release'],replacement)
-                self.assertEqual(len(entry['releaseAttempts']),1)
+    def test_queued_release_replays_after_submission_failure_and_ledger_reload(self):
+        entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
+        current = self.resource()
+        versions = []
+        submission_available = False
+        def request(pool, path, body=None, **kwargs):
+            if path.endswith('/state'):
+                versions.append(kwargs['version'])
+                self.assertEqual(body, {'desiredState':'released'})
+                if not submission_available:
+                    current.update(desiredState='released',version='queued-version',progress={'step':'queued'},execution=None)
+                    return 503, None
+                current.update(state='released',desiredState='released',version='queued-version',identity=None,progress=None)
+                return 202, dict(current)
+            if path.endswith('/migration'):
+                return 200, {'profile':current['profile'],'profileHash':'hash','revision':11,'epoch':4,'bindingGeneration':current['bindingGeneration'],'state':'released'}
+            if path == '/v1/profile-migrations':
+                if current['profile'] != 'v2':
+                    current['bindingGeneration'] += 1
+                current['profile']='v2'
+                return 200, {}
+            return 200, dict(current)
+        saved = None
+        def persist():
+            nonlocal saved
+            saved = json.dumps(entry)
+        with patch.object(migration, 'request', request), patch.object(migration.time, 'sleep', side_effect=AssertionError('Queued submission must be replayed before waiting')):
+            with self.assertRaisesRegex(migration.MigrationError, '503'):
+                migration.migrate_controller({'id':'pool'},entry,persist,'v1','v2',1)
+            entry = json.loads(saved)
+            submission_available = True
+            self.assertEqual(migration.migrate_controller({'id':'pool'},entry,persist,'v1','v2',1),7)
+        self.assertEqual(versions,['observed','queued-version'])
 
-    def test_release_retry_never_duplicates_unknown_or_running_task(self):
-        release={'workspaceId':'w','revision':11,'operationId':'owned','profile':'v1','expectedGeneration':4}
-        current={'request':release,'taskId':'task','epoch':4,'profileHash':'original','phase':'suspended'}
-        for code,status in ((200,'RUNNING'),(200,'QUEUED'),(503,None)):
-            with self.subTest(code=code,status=status):
-                entry={'release':release.copy()}
-                with patch.object(migration,'request',return_value=(code,{'status':status})) as api:
-                    if code == 503:
-                        with self.assertRaises(migration.MigrationError):
-                            migration.retry_failed_release({},entry,current,lambda:None,'v1')
-                    else:
-                        migration.retry_failed_release({},entry,current,lambda:None,'v1')
-                    self.assertEqual(api.call_count,1)
-                self.assertEqual(entry['release'],release)
-                self.assertNotIn('releaseAttempts',entry)
+    def test_failed_release_with_null_error_fails_with_migration_error(self):
+        entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
+        current = self.resource()
+        current.update(state='failed',desiredState='released',error=None)
+        with patch.object(migration, 'request', return_value=(200,current)) as request:
+            with self.assertRaisesRegex(migration.MigrationError, 'not retryable'):
+                migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
+        self.assertEqual(request.call_args_list[0].args[1], '/v1/workspaces/workspace')
+        self.assertTrue(all(call.kwargs.get('method') != 'PUT' for call in request.call_args_list))
 
-    def test_release_retry_rejects_changed_allocation(self):
-        release={'workspaceId':'w','revision':11,'operationId':'owned','profile':'v1','expectedGeneration':4}
-        original={'request':release,'taskId':'task','epoch':4,'profileHash':'original','phase':'suspended',
-            'identity':{'incarnation':'one'},'handle':{'allocationId':'4','pvcUid':'same'}}
-        for change in ('profile','storage','identity','superseded'):
-            with self.subTest(change=change):
-                changed=json.loads(json.dumps(original))
-                if change=='profile': changed['profileHash']='different'
-                if change=='storage': changed['handle']['pvcUid']='replaced'
-                if change=='identity': changed['identity']['incarnation']='another'
-                if change=='superseded': changed['request']['operationId']='someone-else'
-                entry={'before':{'admission_revision':11},'release':release,'releaseBasis':original}
-                with patch.object(migration,'request',side_effect=[(200,{'status':'FAILED'}),(200,{'state':changed})]) as api:
-                    with self.assertRaises(migration.MigrationError):
-                        migration.retry_failed_release({},entry,original,lambda:None,'v1')
-                    self.assertEqual(api.call_count,2)
-                self.assertNotIn('releaseAttempts',entry)
+    def test_failed_release_is_reported_without_polling_internal_tasks(self):
+        entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
+        current = self.resource()
+        paths = []
+        def request(pool, path, body=None, **kwargs):
+            paths.append(path)
+            if path.endswith('/state'):
+                current.update(state='failed',desiredState='released',version='accepted',error={'code':'worker_busy','retryable':True})
+                return 202, dict(current)
+            return 200, dict(current)
+        with patch.object(migration, 'request', request):
+            with self.assertRaisesRegex(migration.MigrationError, 'release failed'):
+                migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
+        self.assertTrue(all(path.startswith('/v1/workspaces/') for path in paths))
 
     def test_fresh_install_skips_without_creating_database_or_ledger(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -280,6 +245,143 @@ class MigrationTests(unittest.TestCase):
             db.close()
 
 
+class BindingGenerationTests(unittest.TestCase):
+    def setUp(self):
+        self.current = {'id':'workspace','pool':'pool','profile':'v1','state':'released',
+                        'desiredState':'released','identity':None,'execution':None,'version':'resource'}
+        self.generation = 1
+        self.last_migration = None
+        self.posts = []
+        self.lose_response = False
+        self.reject_submission = False
+        self.entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
+        self.saved = None
+        api = patch.object(migration, 'request', self.request)
+        api.start()
+        self.addCleanup(api.stop)
+
+    def persist(self):
+        self.saved = json.dumps(self.entry)
+
+    def run_migration(self):
+        return migration.migrate_controller({'id':'pool'},self.entry,self.persist,'v1','v2',1)
+
+    def request(self, pool, path, body=None, **kwargs):
+        if path.endswith('/migration'):
+            return 200, {'profile':self.current['profile'],'profileHash':self.current['profile'],
+                         'revision':11,'epoch':4,'state':'released','bindingGeneration':self.generation}
+        if path == '/v1/profile-migrations':
+            self.posts.append(dict(body))
+            if self.reject_submission:
+                return 503, None
+            if (self.last_migration == body and self.generation == body['expectedBindingGeneration'] + 1
+                    and self.current['profile'] == body['toProfile']):
+                return 200, {}
+            if self.generation != body['expectedBindingGeneration'] or self.current['profile'] != body['fromProfile']:
+                return 409, None
+            self.current['profile'] = body['toProfile']
+            self.generation += 1
+            self.last_migration = dict(body)
+            if self.lose_response:
+                self.lose_response = False
+                raise migration.MigrationError('response lost after profile commit')
+            return 200, {}
+        return 200, dict(self.current)
+
+    def test_unacknowledged_saved_release_does_not_adopt_unrelated_completed_release(self):
+        for accepted in (None, ''):
+            with self.subTest(acceptedVersion=accepted):
+                self.entry['release'] = {'version':'earlier-request','identity':{'incarnation':'earlier-worker'},'acceptedVersion':accepted}
+                with self.assertRaisesRegex(migration.MigrationError, 'release completion cannot be reconciled'):
+                    self.run_migration()
+                self.assertEqual(self.posts,[])
+                self.assertEqual(self.current['profile'],'v1')
+                self.assertNotIn('migration',self.entry)
+
+    def test_matching_accepted_release_version_allows_migration(self):
+        self.entry['release'] = {'version':'earlier-request','identity':{'incarnation':'worker'},'acceptedVersion':self.current['version']}
+        self.assertEqual(self.run_migration(),7)
+        self.assertEqual(self.current['profile'],'v2')
+        self.assertEqual(len(self.posts),1)
+
+    def test_fresh_already_released_workspace_requires_no_release_receipt(self):
+        self.assertEqual(self.run_migration(),7)
+        self.assertNotIn('release',self.entry)
+        self.assertEqual(self.current['profile'],'v2')
+        self.assertEqual(len(self.posts),1)
+
+    def test_identity_persisted_before_submission_and_reused_after_rejection(self):
+        self.reject_submission = True
+        with self.assertRaisesRegex(migration.MigrationError, '503'):
+            self.run_migration()
+        self.assertEqual(json.loads(self.saved)['migration'],self.posts[0])
+        self.assertEqual(str(migration.uuid.UUID(self.posts[0]['operationId'])),self.posts[0]['operationId'])
+        self.entry = json.loads(self.saved)
+        self.reject_submission = False
+        self.assertEqual(self.run_migration(),7)
+        self.assertEqual(self.posts[0],self.posts[1])
+        self.assertEqual(self.generation,2)
+
+    def test_lost_response_replays_same_operation_from_legacy_generation_zero(self):
+        self.generation = 0
+        self.lose_response = True
+        with self.assertRaises(migration.MigrationError):
+            self.run_migration()
+        self.entry = json.loads(self.saved)
+        self.assertEqual(self.run_migration(),7)
+        self.assertEqual(self.posts[0],self.posts[1])
+        self.assertEqual(self.posts[0]['expectedBindingGeneration'],0)
+        self.assertEqual(self.generation,1)
+
+    def test_return_to_source_rejects_delayed_retry_without_overriding_rollback(self):
+        self.lose_response = True
+        with self.assertRaises(migration.MigrationError):
+            self.run_migration()
+        original = dict(self.entry['migration'])
+        rollback = {**original,'operationId':'rollback','fromProfile':'v2','toProfile':'v1','expectedBindingGeneration':2}
+        self.assertEqual(self.request({'id':'pool'},'/v1/profile-migrations',rollback)[0],200)
+        with self.assertRaisesRegex(migration.MigrationError, 'changed after migration was prepared'):
+            self.run_migration()
+        self.assertEqual(self.current['profile'],'v1')
+        self.assertEqual(self.generation,3)
+        self.assertEqual(self.entry['migration'],original)
+        self.assertEqual(self.posts,[original,rollback])
+
+    def test_return_to_target_does_not_adopt_a_newer_binding(self):
+        self.lose_response = True
+        with self.assertRaises(migration.MigrationError):
+            self.run_migration()
+        original = dict(self.entry['migration'])
+        rollback = {**original,'operationId':'rollback','fromProfile':'v2','toProfile':'v1','expectedBindingGeneration':2}
+        replacement = {**original,'operationId':'replacement','expectedBindingGeneration':3}
+        self.request({'id':'pool'},'/v1/profile-migrations',rollback)
+        self.request({'id':'pool'},'/v1/profile-migrations',replacement)
+        with self.assertRaisesRegex(migration.MigrationError, 'target controller state changed'):
+            self.run_migration()
+        self.assertEqual(self.generation,4)
+        self.assertEqual(self.posts,[original,rollback,replacement])
+
+    def test_target_generation_alone_does_not_prove_operation_identity(self):
+        self.reject_submission = True
+        with self.assertRaises(migration.MigrationError):
+            self.run_migration()
+        self.reject_submission = False
+        different = {**self.entry['migration'],'operationId':'different-maintainer'}
+        self.request({'id':'pool'},'/v1/profile-migrations',different)
+        with self.assertRaisesRegex(migration.MigrationError, 'no longer owns the target binding'):
+            self.run_migration()
+        self.assertEqual(self.last_migration,different)
+        self.assertEqual(self.generation,2)
+
+    def test_unfinished_legacy_prepared_migration_is_not_upgraded_by_guessing(self):
+        self.entry['migration'] = {'workspaceId':'workspace','fromProfile':'v1','toProfile':'v2',
+                                   'expectedProfileHash':'v1','expectedRevision':11,'expectedEpoch':4}
+        with self.assertRaisesRegex(migration.MigrationError, 'prepared legacy migration'):
+            self.run_migration()
+        self.assertEqual(self.posts,[])
+        self.assertEqual(self.generation,1)
+
+
 class MigrationChainTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -301,19 +403,26 @@ class MigrationChainTests(unittest.TestCase):
             for index, profile in enumerate(profiles):
                 workspace = str(index)
                 db.execute('INSERT INTO agent_runtime_workspaces VALUES (?,?,?,?,?)', (workspace,'p',profile,7,None))
-                self.controllers[workspace] = {'phase':'released','epoch':2,'profileHash':profile,
+                self.controllers[workspace] = {'phase':'released','epoch':2,'profileHash':profile,'bindingGeneration':1,
                     'request':{'workspaceId':workspace,'profile':profile,'revision':7,'operationId':'old'},
                     'completedOperation':'old'}
 
-    def request(self, pool, path, body=None):
+    def request(self, pool, path, body=None, **kwargs):
         if path.startswith('/v1/workspaces/'):
-            workspace = path.split('/')[3].split('?')[0]
+            workspace = path.split('/')[3]
             current = self.controllers[workspace]
-            return (200, {'state':json.loads(json.dumps(current))}) if path.endswith('profile='+current['request']['profile']) else (409,None)
+            if path.endswith('/migration'):
+                return 200, {'profile':current['request']['profile'],'profileHash':current['profileHash'],
+                             'revision':current['request']['revision'],'epoch':current['epoch'],'state':current['phase'],'bindingGeneration':current['bindingGeneration']}
+            return 200, {'id':workspace,'pool':'p','profile':current['request']['profile'],'version':'version',
+                         'state':current['phase'],'desiredState':'released','identity':None,'execution':None}
         if path == '/v1/profile-migrations':
             current = self.controllers[body['workspaceId']]
             self.assertEqual(current['request']['profile'],body['fromProfile'])
             self.migrations.append((body['workspaceId'],body['fromProfile'],body['toProfile']))
+            self.assertEqual(current['bindingGeneration'], body['expectedBindingGeneration'])
+            self.assertTrue(body['operationId'])
+            current['bindingGeneration'] += 1
             current['request']['profile'] = body['toProfile']
             current['profileHash'] = body['toProfile']
             return 200,json.loads(json.dumps(current))
