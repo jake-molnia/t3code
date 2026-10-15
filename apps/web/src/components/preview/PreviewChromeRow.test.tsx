@@ -18,11 +18,11 @@ it.each(["", "https://previous.test/"])(
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
-    const render = (url: string) =>
+    const render = (url: string, loading = false) =>
       root.render(
         <PreviewChromeRow
           url={url}
-          loading={false}
+          loading={loading}
           canGoBack={false}
           canGoForward={false}
           refreshDisabled={true}
@@ -55,6 +55,14 @@ it.each(["", "https://previous.test/"])(
       expect(input.value).toBe("https://example.com");
       await act(async () => {
         render(initialUrl);
+      });
+      expect(input.value).toBe("https://example.com");
+      await act(async () => {
+        render(initialUrl, true);
+      });
+      expect(input.value).toBe("https://example.com");
+      await act(async () => {
+        render(initialUrl, false);
       });
       expect(input.value).toBe("https://example.com");
       await act(async () => {

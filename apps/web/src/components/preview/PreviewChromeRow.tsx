@@ -98,12 +98,8 @@ export function PreviewChromeRow({
   const [submittedNavigation, setSubmittedNavigation] = useState<{
     url: string;
     previousUrl: string;
-    loading: boolean;
   } | null>(null);
-  if (
-    submittedNavigation &&
-    (submittedNavigation.previousUrl !== url || submittedNavigation.loading !== loading)
-  ) {
+  if (submittedNavigation && submittedNavigation.previousUrl !== url) {
     setSubmittedNavigation(null);
   }
   const displayedUrl = submittedNavigation?.url ?? url;
@@ -119,7 +115,7 @@ export function PreviewChromeRow({
     event?.preventDefault();
     const next = draft.trim();
     if (next.length === 0) return;
-    setSubmittedNavigation({ url: next, previousUrl: url, loading });
+    setSubmittedNavigation({ url: next, previousUrl: url });
     onSubmit(next);
     inputRef.current?.blur();
   };
