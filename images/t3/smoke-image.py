@@ -81,6 +81,7 @@ try:
         verification = r"""
 import base64, json, os, tempfile, urllib.request
 assert os.getuid() == 0
+assert os.environ['USER'] == os.environ['LOGNAME'] == 'root'
 with tempfile.NamedTemporaryFile() as f:
     os.chown(f.name, 1000, 1000)
     assert os.stat(f.name).st_uid == 1000

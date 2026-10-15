@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY images/t3/install-code-server.sh /tmp/
 RUN sh /tmp/install-code-server.sh "${TARGETARCH}" /opt/code-server
 
-FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:accc2fdce07aa859dc86a59549e0d12baea04aeced200533475281e7f0347d84 AS t3-worker
+FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:3ef66b7877049c3a81d2dba0a32425bd6c84fa0e4dfb8dcd5f7604619f597806 AS t3-worker
 USER 0:0
 ARG TARGETARCH
 RUN test "$TARGETARCH" = amd64 \
@@ -65,7 +65,7 @@ ENV PATH=/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_m
     T3_WORKER_PORT=8083 T3_BROWSER_EXECUTABLE=/usr/bin/chromium \
     T3CODE_SERVER_BROWSER_SANDBOX=0 SANDBOX_CHROMIUM_SANDBOX=disabled \
     T3_ACP_MCP_NODE=/usr/local/bin/node T3_ACP_MCP_ENTRYPOINT=/opt/t3/dist/bin.mjs \
-    HOME=/workspace/home CODEX_HOME=/workspace/home/.codex \
+    HOME=/workspace/home USER=root LOGNAME=root CODEX_HOME=/workspace/home/.codex \
     DISABLE_AUTOUPDATER=1 MUSE_NO_AUTO_UPDATE=1
 COPY --chmod=755 images/t3/entrypoint.sh /usr/local/bin/t3-worker-entrypoint
 COPY --chmod=755 images/t3/git-credential.py /usr/local/bin/t3-git-credential
