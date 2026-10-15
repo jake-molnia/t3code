@@ -97,7 +97,7 @@ describe("shouldOfferModelPickerSetup", () => {
           ...providerEntry,
           snapshot: {
             ...providerEntry.snapshot,
-            setup: { canAuthenticate: true, canInstall: false },
+            setup: { canAuthenticate: true },
           },
         },
         [],

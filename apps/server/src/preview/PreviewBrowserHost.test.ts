@@ -91,7 +91,7 @@ describe("diagnoseLaunchFailure", () => {
 
   it.effect("names every library the loader cannot find", () =>
     Effect.gen(function* () {
-      const { error } = yield* diagnose({
+      const { error, commands } = yield* diagnose({
         platform: "linux",
         output: "error while loading shared libraries: libglib-2.0.so.0",
         ldd: LDD_IN_BARE_DEBIAN,
@@ -101,19 +101,26 @@ describe("diagnoseLaunchFailure", () => {
         libraries: ["libglib-2.0.so.0", "libnss3.so", "libX11.so.6"],
       });
       expect(error?.message).toContain("Rebuild the worker image");
+      expect(commands).toEqual([
+        "/home/me/.t3/tools/chrome-headless-shell/linux64/154/chrome-headless-shell --version",
+        "ldd /home/me/.t3/tools/chrome-headless-shell/linux64/154/chrome-headless-shell",
+      ]);
     }),
   );
 
   it.effect("trusts the browser's own start over ldd", () =>
     Effect.gen(function* () {
       // NixOS: ldd lists libraries that nix-ld still provides to the real loader.
-      const { error } = yield* diagnose({
+      const { error, commands } = yield* diagnose({
         platform: "linux",
         output: "crashed",
         ldd: LDD_IN_BARE_DEBIAN,
         version: "Google Chrome for Testing 154.0.8037.92\n",
       });
       expect(error).toBeUndefined();
+      expect(commands).toEqual([
+        "/home/me/.t3/tools/chrome-headless-shell/linux64/154/chrome-headless-shell --version",
+      ]);
     }),
   );
 

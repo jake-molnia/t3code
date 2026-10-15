@@ -46,7 +46,7 @@ export function createAttachmentEnvironmentAtoms<R, E>(
  * a failed RPC is not guaranteed to be a decoded error class instance, only a
  * tagged value.
  */
-export function isAssetAttachmentNotFoundFailure(error: unknown): boolean {
+function isAssetAttachmentNotFoundFailure(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&

@@ -114,11 +114,6 @@ const desktopSecondaryBootstrapsReader = createDesktopSecondaryBootstrapsReader(
   () => window.desktopBridge,
 );
 
-/** Read the topology while preserving failures for platform cache policy. */
-export function readDesktopSecondaryBootstrapsResult(): DesktopSecondaryBootstrapsRead {
-  return desktopSecondaryBootstrapsReader.readResult();
-}
-
 /** Read the latest successful topology snapshot for renderer consumers. */
 export function readDesktopSecondaryBootstraps(): ReadonlyArray<DesktopEnvironmentBootstrap> {
   return desktopSecondaryBootstrapsReader.readSnapshot();

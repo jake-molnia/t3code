@@ -194,7 +194,7 @@ function keyboardEvent() {
 }
 
 it.each(["local-exec", "remote-links"] as const)(
-  "selects the preferred editor without launching a %s workspace",
+  "selects VS Code before opening the sandbox IDE in %s mode",
   async (mode) => {
     state.allowed.add(selected);
     state.clientEditors = ["cursor", "vscode"];
@@ -209,18 +209,12 @@ it.each(["local-exec", "remote-links"] as const)(
     const openButton = renderer!.root.findByProps({ "aria-label": "Open in VS Code" });
     expect(state.run).not.toHaveBeenCalled();
     expect(state.openUrl).not.toHaveBeenCalled();
+    expect(state.openIde).not.toHaveBeenCalled();
 
     await act(async () => openButton.props.onClick());
-    if (mode === "local-exec") {
-      expect(state.run).toHaveBeenCalledExactlyOnceWith({
-        environmentId: selected,
-        input: { cwd: "/work/project", editor: "vscode" },
-      });
-    } else {
-      expect(state.openUrl).toHaveBeenCalledExactlyOnceWith(
-        "vscode://vscode-remote/ssh-remote+test-host/work/project",
-      );
-    }
+    expect(state.openIde).toHaveBeenCalledOnce();
+    expect(state.run).not.toHaveBeenCalled();
+    expect(state.openUrl).not.toHaveBeenCalled();
   },
 );
 

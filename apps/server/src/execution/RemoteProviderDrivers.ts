@@ -334,11 +334,9 @@ export const makeRemoteDrivers = Effect.gen(function* () {
           snapshot: {
             getSnapshot,
             refresh,
-            resolveMaintenance: () =>
+            getVersionSource: () =>
               Effect.succeed({
-                provider: driver.driverKind,
                 packageName: null,
-                update: null,
                 latestVersion: null,
               }),
             streamChanges: Stream.fromEffectRepeat(

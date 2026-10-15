@@ -62,7 +62,6 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents
   | typeof WS_METHODS.subscribeDiscoveredLocalServers
-  | typeof WS_METHODS.subscribeDeviceState
   | typeof WS_METHODS.subscribeResourceTelemetry
   | typeof WS_METHODS.pullRequestsSubscribeRefreshes
   | typeof WS_METHODS.subscribeVcsStatus
@@ -73,8 +72,6 @@ export type EnvironmentSubscriptionRpcTag =
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.chatGptHandoffSubscribe
-  | typeof WS_METHODS.cloudInstallRelayClient
-  | typeof WS_METHODS.serverUpdateServerWithProgress
   | typeof WS_METHODS.gitRunStackedAction;
 
 export type EnvironmentStreamRpcTag =
@@ -99,7 +96,7 @@ export class EnvironmentRpcSubscriptionObserver extends Context.Reference<{
   }),
 }) {}
 
-export const isRpcClientError = Schema.is(RpcClientError.RpcClientError);
+const isRpcClientError = Schema.is(RpcClientError.RpcClientError);
 const isEnvironmentAuthorizationError = Schema.is(EnvironmentAuthorizationError);
 
 /** Ceiling for the doubling delay between same-session expected-failure retries. */

@@ -1,6 +1,5 @@
 import {
   CLIENT_GUARDED_RPC_SCOPES,
-  type DeviceListInput,
   clientRpcRequiredScopes,
   authScopeRequiredResponse,
   AssetCreateUrlInput,
@@ -19,8 +18,6 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
   AuthTerminalOperateScope,
   ORCHESTRATION_V2_WS_METHODS,
   AuthTerminalReadScope,
@@ -62,6 +59,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.projectsMutate]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverProbe]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,
+  [WS_METHODS.serverGetReleaseNotice]: AuthOrchestrationReadScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,
   [WS_METHODS.providerAuthStart]: AuthProvidersManageScope,
   [WS_METHODS.providerConsumeResetCredit]: AuthProvidersManageScope,
@@ -74,8 +72,6 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.providerAuthCancel]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthLogout]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthSubscribe]: AuthProvidersManageScope,
-  [WS_METHODS.serverUpdateServer]: AuthEnvironmentMaintainScope,
-  [WS_METHODS.serverUpdateServerWithProgress]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverUpsertKeybinding]: AuthSettingsWriteScope,
   [WS_METHODS.serverRemoveKeybinding]: AuthSettingsWriteScope,
   [WS_METHODS.serverGetStorageCleanupReport]: AuthOrchestrationReadScope,
@@ -112,8 +108,6 @@ export const RPC_REQUIRED_SCOPES = {
   // Delivery logs hold request bodies, so they need the same scope as the URL.
   [WS_METHODS.scheduledTasksListWebhookDeliveries]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksGetWebhookDelivery]: AuthOrchestrationOperateScope,
-  [WS_METHODS.cloudGetRelayClientStatus]: AuthRelayReadScope,
-  [WS_METHODS.cloudInstallRelayClient]: AuthRelayWriteScope,
   [WS_METHODS.pullRequestsList]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsListStats]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsSummary]: AuthOrchestrationReadScope,
@@ -193,15 +187,6 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.previewReportStatus]: AuthPreviewOperateScope,
   [WS_METHODS.subscribePreviewEvents]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeDiscoveredLocalServers]: AuthOrchestrationReadScope,
-  [WS_METHODS.deviceConfigure]: AuthSettingsWriteScope,
-  [WS_METHODS.deviceTestHost]: AuthSettingsWriteScope,
-  [WS_METHODS.deviceList]: AuthOrchestrationReadScope,
-  [WS_METHODS.deviceOpen]: AuthOrchestrationOperateScope,
-  [WS_METHODS.deviceClose]: AuthOrchestrationOperateScope,
-  [WS_METHODS.deviceShutdown]: AuthOrchestrationOperateScope,
-  [WS_METHODS.deviceDetail]: AuthOrchestrationReadScope,
-  [WS_METHODS.deviceAction]: AuthOrchestrationOperateScope,
-  [WS_METHODS.subscribeDeviceState]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeServerConfig]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeServerLifecycle]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
@@ -219,7 +204,7 @@ export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope 
   return requiredScope;
 }
 
-export const rpcAuthorizationError = (requiredScope: AuthEnvironmentScope) =>
+const rpcAuthorizationError = (requiredScope: AuthEnvironmentScope) =>
   new EnvironmentAuthorizationError({
     message: `The authenticated token is missing required scope: ${requiredScope}.`,
     ...authScopeRequiredResponse(requiredScope),
@@ -276,9 +261,3 @@ export const layer = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
     const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
     return requiredScope === undefined ? effect : Effect.fail(rpcAuthorizationError(requiredScope));
   });
-
-/** Retrying can install or restart tools even though ordinary listing is readable. */
-export const requiredScopeForDeviceList = (input: DeviceListInput): AuthEnvironmentScope =>
-  input.retryHostId || input.updateTool
-    ? AuthOrchestrationOperateScope
-    : AuthOrchestrationReadScope;

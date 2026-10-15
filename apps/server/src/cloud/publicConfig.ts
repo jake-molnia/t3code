@@ -58,8 +58,6 @@ export function makeRelayUrlConfig(fallback = buildTimeRelayUrl) {
   );
 }
 
-export const relayUrlConfig = makeRelayUrlConfig();
-
 /**
  * Hosted app origin used for out-of-band OAuth on headless
  * machines. Overridable so staging/nightly builds can point their CLIs at a
@@ -164,11 +162,3 @@ export function makeCloudCliOAuthConfig({
     ),
   );
 }
-
-export const cloudCliOAuthConfig = makeCloudCliOAuthConfig();
-
-export const hasCloudPublicConfig = Boolean(
-  (normalizeSecureRelayUrl(process.env.T3CODE_RELAY_URL ?? "") ?? buildTimeRelayUrl) &&
-  (process.env.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() || buildTimeClerkPublishableKey) &&
-  (process.env.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() || buildTimeClerkCliOAuthClientId),
-);

@@ -125,7 +125,7 @@ export const preparePairingRegistration = Effect.fn(
   }
   const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
   // An outdated server is still saved so it can be updated from this client.
-  if (compatibilityError !== null && compatibilityError.serverUpdateRequired !== true) {
+  if (compatibilityError !== null) {
     return yield* compatibilityError;
   }
   const access = yield* bootstrapRemoteBearerSession({

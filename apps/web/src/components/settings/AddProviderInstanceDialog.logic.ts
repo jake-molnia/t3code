@@ -67,7 +67,12 @@ export function isConfiguredAcpRegistryAgent(
       return false;
     }
     const config = instance.config as Record<string, unknown>;
-    return config.source !== "local" && config.agentId === agentId;
+    return (
+      config.source !== "local" &&
+      config.agentId === agentId &&
+      typeof config.commandPath === "string" &&
+      config.commandPath.trim().length > 0
+    );
   });
 }
 

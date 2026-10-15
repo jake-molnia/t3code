@@ -1,7 +1,6 @@
 # OpenCode
 
-Install and authenticate OpenCode on the machine running your environment, then
-enable it in **Settings > Providers**. See [provider setup](./install.md#providers).
+Authenticate the deployment's OpenCode provider, then enable it in **Settings > Providers**. See [provider setup](./install.md#providers).
 T3 Code requires OpenCode 1.14.19 or newer, including when you connect an existing
 OpenCode server.
 
@@ -11,10 +10,9 @@ T3 Code supports OpenCode 2.0.18 and newer. It detects the version on its own, s
 the same provider settings work for OpenCode 1.x and 2.x. OpenCode 1.x shows
 **Limited support** in its provider settings.
 
-OpenCode 2 is a separate package, `@opencode/cli`. To move from 1.x, install it
-yourself, for example `npm install -g @opencode/cli`. Then refresh provider status.
-T3 Code's update button updates whichever package you have installed. It never
-switches a 1.x install to 2.x.
+OpenCode versions are supplied by the sandbox image. Ask your deployment administrator to
+upgrade the image when you need a newer version. Refresh provider status after the replacement
+worker is available.
 
 OpenCode 2 converts the shared OpenCode database to its own format the first time it
 runs. Don't run OpenCode 1.x and 2.x side by side on the same machine. Threads you

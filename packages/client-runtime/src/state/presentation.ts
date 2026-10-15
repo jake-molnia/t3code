@@ -91,7 +91,7 @@ export interface EnvironmentConnectionSummary {
   readonly connectionErrorTraceId: string | null;
 }
 
-export function projectEnvironmentConnectionSummary(
+function projectEnvironmentConnectionSummary(
   environmentId: EnvironmentId,
   environment: EnvironmentPresentation,
 ): EnvironmentConnectionSummary {

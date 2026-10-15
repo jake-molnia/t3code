@@ -52,6 +52,8 @@ jobs:
           context: .
           file: images/t3/Dockerfile
           target: ${{ matrix.target }}
+          build-args: |
+            T3_SOURCE_REVISION=${{ github.sha }}
           platforms: linux/amd64
           tags: t3-local:${{ matrix.target }}-${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -72,9 +74,11 @@ jobs:
           python3 - <<'PYLABEL'
           import json, os
           with open(f"{os.environ['RUNNER_TEMP']}/{os.environ['TARGET']}.inspect.json") as source:
-              labels = json.load(source)[0]["Config"]["Labels"]
+              config = json.load(source)[0]["Config"]
+              labels = config["Labels"]
           assert labels["org.opencontainers.image.revision"] == os.environ["T3_SHA"]
           assert labels["org.opencontainers.image.source"] == "https://github.com/" + os.environ["GITHUB_REPOSITORY"]
+          assert "T3_SOURCE_REVISION=" + os.environ["T3_SHA"] in config["Env"]
           PYLABEL
           printf 't3=%s\n' "$T3_SHA" > "$RUNNER_TEMP/$TARGET.sources.txt"
           awk '/^FROM ghcr.io\/jake-molnia\/agent-runtime-sandbox@/ {print "runtime_base=" $2}' images/t3/Dockerfile >> "$RUNNER_TEMP/$TARGET.sources.txt"

@@ -94,8 +94,8 @@ export const AuthFilesystemWriteScope = "filesystem:write" as const;
 const AuthReviewWriteScope = "review:write" as const;
 export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
-export const AuthRelayReadScope = "relay:read" as const;
-export const AuthRelayWriteScope = "relay:write" as const;
+const AuthRelayReadScope = "relay:read" as const;
+const AuthRelayWriteScope = "relay:write" as const;
 export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
@@ -254,7 +254,7 @@ export const ServerAuthDescriptor = Schema.Struct({
   bootstrapMethods: Schema.Array(ServerAuthBootstrapMethod),
   sessionMethods: Schema.Array(ServerAuthSessionMethod),
   sessionCookieName: TrimmedNonEmptyString,
-  /** Older servers omit this and authorize self-updates with orchestration:operate. */
+  /** Legacy marker for split authorization scopes; retained to interpret older sessions. */
   serverUpdateScope: Schema.optionalKey(Schema.Literal(AuthEnvironmentMaintainScope)),
 });
 export type ServerAuthDescriptor = typeof ServerAuthDescriptor.Type;

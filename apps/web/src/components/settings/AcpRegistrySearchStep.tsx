@@ -22,30 +22,25 @@ import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 interface AcpRegistrySearchStepProps {
   readonly environmentId: EnvironmentId;
   readonly providerInstances: Readonly<Record<string, ProviderInstanceConfig>>;
-  readonly onPrepared: (agent: AcpRegistrySearchAgent) => void;
+  readonly onSelected: (agent: AcpRegistrySearchAgent) => void;
   readonly onManualConfiguration: () => void;
   readonly onLocalConfiguration?: () => void;
   readonly onLoadingChange?: (loading: boolean) => void;
-  readonly onPreparingChange?: (preparing: boolean) => void;
 }
 
 export function AcpRegistrySearchStep({
   environmentId,
   providerInstances,
-  onPrepared,
+  onSelected,
   onManualConfiguration,
   onLocalConfiguration,
   onLoadingChange,
-  onPreparingChange,
 }: AcpRegistrySearchStepProps) {
   const [query, setQuery] = useState("");
   // An empty registry query is the compact compatible catalog. Start there so
   // entering this step is useful before the user knows what to search for.
   const [submittedQuery, setSubmittedQuery] = useState("");
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
-  const [preparingId, setPreparingId] = useState<string | null>(null);
-  const [prepareError, setPrepareError] = useState<string | null>(null);
-  const prepareGeneration = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const search = useEnvironmentQuery(
     serverEnvironment.searchAcpRegistry({
@@ -55,18 +50,15 @@ export function AcpRegistrySearchStep({
   );
   useEffect(
     () => () => {
-      prepareGeneration.current += 1;
       if (searchTimer.current !== null) clearTimeout(searchTimer.current);
-      onPreparingChange?.(false);
     },
-    [onPreparingChange],
+    [],
   );
 
   const submitSearch = (nextQuery: string) => {
     if (searchTimer.current !== null) clearTimeout(searchTimer.current);
     const trimmed = nextQuery.trim();
     setQuery(trimmed);
-    setPrepareError(null);
     if (trimmed === submittedQuery) {
       search.refresh();
     } else {
@@ -79,15 +71,9 @@ export function AcpRegistrySearchStep({
     submitSearch(query);
   };
 
-  const handlePrepare = async (agent: AcpRegistrySearchAgent) => {
+  const handleSelect = (agent: AcpRegistrySearchAgent) => {
     if (!readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
-    const generation = ++prepareGeneration.current;
-    setPrepareError(null);
-    setPreparingId(agent.id);
-    onPreparingChange?.(true);
-    setPreparingId(null);
-    onPreparingChange?.(false);
-    onPrepared(agent);
+    onSelected(agent);
   };
 
   const results = search.data?.agents ?? null;
@@ -113,11 +99,10 @@ export function AcpRegistrySearchStep({
           </InputGroupAddon>
           <InputGroupInput
             aria-label="Search ACP Registry"
-            disabled={preparingId !== null}
+
             onChange={(event) => {
               const nextQuery = event.currentTarget.value;
               setQuery(nextQuery);
-              setPrepareError(null);
               if (searchTimer.current !== null) clearTimeout(searchTimer.current);
               searchTimer.current = setTimeout(() => {
                 searchTimer.current = null;
@@ -130,23 +115,11 @@ export function AcpRegistrySearchStep({
             value={query}
           />
         </InputGroup>
-        <Button
-          disabled={preparingId !== null}
-          onClick={onManualConfiguration}
-          size="sm"
-          type="button"
-          variant="ghost-muted"
-        >
+        <Button onClick={onManualConfiguration} size="sm" type="button" variant="ghost-muted">
           Enter manually
         </Button>
         {onLocalConfiguration ? (
-          <Button
-            disabled={preparingId !== null}
-            onClick={onLocalConfiguration}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
+          <Button onClick={onLocalConfiguration} size="sm" type="button" variant="outline">
             Local ACP command
           </Button>
         ) : null}
@@ -162,9 +135,9 @@ export function AcpRegistrySearchStep({
               : ""}
       </div>
 
-      {search.error || prepareError ? (
+      {search.error ? (
         <Alert variant="error" role="status" aria-live="polite">
-          <AlertDescription>{prepareError ?? search.error}</AlertDescription>
+          <AlertDescription>{search.error}</AlertDescription>
         </Alert>
       ) : null}
 
@@ -187,8 +160,6 @@ export function AcpRegistrySearchStep({
             <div className="pr-2.5">
               {results.map((agent) => {
                 const alreadyAdded = isConfiguredAcpRegistryAgent(providerInstances, agent.id);
-                const isPreparing = preparingId === agent.id;
-                const progressLabel = agent.distribution === "binary" ? "Downloading" : "Preparing";
                 return (
                   <article className="min-w-0 py-2.5" key={agent.id}>
                     <div className="flex min-w-0 items-center justify-between gap-3">
@@ -238,13 +209,13 @@ export function AcpRegistrySearchStep({
                           </Tooltip>
                         ) : null}
                         <Button
-                          aria-label={`${alreadyAdded ? "Already added" : isPreparing ? progressLabel : "Add"} ${agent.name}`}
-                          disabled={!canManageProviders || alreadyAdded || preparingId !== null}
-                          onClick={() => void handlePrepare(agent)}
+                          aria-label={`${alreadyAdded ? "Already added" : "Add"} ${agent.name}`}
+                          disabled={!canManageProviders || alreadyAdded}
+                          onClick={() => handleSelect(agent)}
                           size="xs"
-                          variant={isPreparing ? "secondary" : "outline"}
+                          variant="outline"
                         >
-                          {alreadyAdded ? "Added" : isPreparing ? progressLabel : "Add"}
+                          {alreadyAdded ? "Added" : "Add"}
                         </Button>
                       </div>
                     </div>

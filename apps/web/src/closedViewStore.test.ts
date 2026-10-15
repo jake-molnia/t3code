@@ -41,7 +41,7 @@ describe("closedViewStore", () => {
       await useClosedViewStore.persist.rehydrate();
       expect(useClosedViewStore.persist.hasHydrated()).toBe(true);
       expect(useClosedViewStore.getState().entries).toEqual([]);
-      expect(await storage!.getItem(name!)).toEqual({ state: { entries: [] }, version: 2 });
+      expect(await storage!.getItem(name!)).toEqual({ state: { entries: [] }, version: 3 });
     },
   );
 
@@ -62,7 +62,11 @@ describe("closedViewStore", () => {
       id: "bad",
       kind: "panel-tab",
       threadRef: refA,
-      surface: { kind: "device", id: "device:x", target: {} },
+      surface: {
+        kind: "device",
+        id: "device:phone",
+        target: { hostId: "mac", deviceId: "phone", platform: "ios", name: "iPhone" },
+      },
     },
     {
       id: "bad",
@@ -70,18 +74,21 @@ describe("closedViewStore", () => {
       threadRef: refA,
       surface: { kind: "pull-request", id: "pull-request:x", repository: "owner/repo", number: 1 },
     },
-  ])("discards incomplete saved views %j while retaining valid history", async (entry) => {
-    const id = useClosedViewStore.getState().remember(diff(refA));
-    const { storage, name } = useClosedViewStore.persist.getOptions();
-    await storage!.setItem(name!, {
-      state: { entries: [entry as ClosedViewEntry, ...useClosedViewStore.getState().entries] },
-      version: 1,
-    });
-    await useClosedViewStore.persist.rehydrate();
-    expect(useClosedViewStore.persist.hasHydrated()).toBe(true);
-    expect(useClosedViewStore.getState().entries).toEqual([{ ...diff(refA), id }]);
-    expect(() => useClosedViewStore.getState().remember(diff(refB))).not.toThrow();
-  });
+  ])(
+    "discards obsolete or incomplete saved views %j while retaining valid history",
+    async (entry) => {
+      const id = useClosedViewStore.getState().remember(diff(refA));
+      const { storage, name } = useClosedViewStore.persist.getOptions();
+      await storage!.setItem(name!, {
+        state: { entries: [entry as ClosedViewEntry, ...useClosedViewStore.getState().entries] },
+        version: 2,
+      });
+      await useClosedViewStore.persist.rehydrate();
+      expect(useClosedViewStore.persist.hasHydrated()).toBe(true);
+      expect(useClosedViewStore.getState().entries).toEqual([{ ...diff(refA), id }]);
+      expect(() => useClosedViewStore.getState().remember(diff(refB))).not.toThrow();
+    },
+  );
 
   it("preserves every supported saved panel type and its restore data", async () => {
     const surfaces = [
@@ -90,13 +97,6 @@ describe("closedViewStore", () => {
       { kind: "pull-requests", id: "pull-requests" },
       { kind: "preview", id: "browser:new", resourceId: null },
       { kind: "preview", id: "browser:saved", resourceId: "saved" },
-      { kind: "device", id: "device" },
-      {
-        kind: "device",
-        id: "device:phone",
-        title: "My phone",
-        target: { hostId: "mac", deviceId: "phone", platform: "ios", name: "iPhone" },
-      },
       { kind: "file", id: "file:x", relativePath: "x", revealLine: 12, revealRequestId: 1 },
       {
         kind: "file",

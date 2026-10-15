@@ -1,3 +1,4 @@
+import { ServerBuild } from "./serverVersion.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -31,7 +32,7 @@ export type ExecutionEnvironmentPlatformArch = typeof ExecutionEnvironmentPlatfo
  * Servers detect one from the hardware they run on (`platform.machine`), and
  * the `environmentIcon` server setting lets a user pick one instead.
  */
-export const ENVIRONMENT_MACHINE_KINDS = [
+const ENVIRONMENT_MACHINE_KINDS = [
   "server",
   "cloud",
   "linux",
@@ -42,7 +43,6 @@ export const ENVIRONMENT_MACHINE_KINDS = [
 ] as const;
 export const EnvironmentMachineKind = Schema.Literals(ENVIRONMENT_MACHINE_KINDS);
 export type EnvironmentMachineKind = typeof EnvironmentMachineKind.Type;
-export const isEnvironmentMachineKind = Schema.is(EnvironmentMachineKind);
 
 export const ExecutionEnvironmentPlatform = Schema.Struct({
   os: ExecutionEnvironmentPlatformOs,
@@ -68,32 +68,6 @@ export type ThreadEnvMode = typeof ThreadEnvMode.Type;
 export const WorktreeSubmodules = Schema.Literals(["recursive", "top-level", "none"]);
 export type WorktreeSubmodules = typeof WorktreeSubmodules.Type;
 export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.Type;
-
-/** How a server can replace itself with another version when asked over RPC.
-    New servers only advertise the stable launcher-backed "boot-service" path;
-    "respawn" remains decodable for compatibility with older servers.
-    "desktop-app" means the supervising desktop app updated and relaunched
-    itself, bringing the server back with it. */
-export const ServerSelfUpdateMethod = Schema.Literals(["boot-service", "respawn", "desktop-app"]);
-export type ServerSelfUpdateMethod = typeof ServerSelfUpdateMethod.Type;
-
-/** Proven ownership for a manual update; unknown installs omit this descriptor. */
-export const ServerInstallation = Schema.Union([
-  Schema.Struct({ kind: Schema.Literals(["npx", "pnpm-dlx", "bunx"]) }),
-  Schema.Struct({ kind: Schema.Literal("npm-global"), prefix: TrimmedNonEmptyString }),
-]);
-export type ServerInstallation = typeof ServerInstallation.Type;
-
-/** What update path a client should offer for a server: one of the RPC
-    self-update methods above, or "desktop-managed" when the backend's
-    version belongs to the T3 Code desktop app supervising it — updating the
-    app on that machine is the only way to update the server. */
-export const ServerSelfUpdateCapability = Schema.Literals([
-  "boot-service",
-  "respawn",
-  "desktop-managed",
-]);
-export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -184,18 +158,6 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server understands thread.pull-request.watch and wakes agents on pull request changes. */
   threadPullRequestWatch: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
-  /** The update path clients should offer for this server. Absent on
-      servers that must be relaunched manually (dev checkouts, Windows
-      foreground runs, pre-update servers). */
-  serverSelfUpdate: Schema.optionalKey(ServerSelfUpdateCapability),
-  /** Manual commands must update this install, not the host's default global prefix. */
-  serverInstallation: ForwardCompatibleOptional(ServerInstallation),
-  /** Server can stream self-update progress before acknowledging the
-      restart. Clients fall back to server.updateServer when absent. */
-  serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
-  /** Server can durably mark running provider turns before a self-update and
-      continue them after the replacement process starts. */
-  serverUpdateThreadContinuation: Schema.optionalKey(Schema.Boolean),
   /** Agent-activity publishes (push notifications and Live Activities)
       currently leave this environment: the publish opt-in is enabled and the
       relay link credentials exist. Clients skip seeding a Live Activity when
@@ -211,11 +173,6 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       setting. Older servers drop the key on write, so clients show the
       picker inert rather than offering a choice that would never stick. */
   environmentIcon: Schema.optionalKey(Schema.Boolean),
-  /** The desktop app supervising this server can be driven over RPC:
-      server.updateServer runs its check -> download -> relaunch. Absent on
-      desktop servers whose app predates the remote trigger, where clients
-      must keep telling the user to update the app on that machine. */
-  desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
   /** Server hosts preview tabs in its own headless Chromium (`runtime:
       "server"`) and streams them over `/api/preview-stream`. Clients
       without a local browser runtime open server tabs here. */
@@ -228,6 +185,7 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
+  build: Schema.optionalKey(ServerBuild),
   /** Absent on hosts from before explicit orchestration protocol negotiation. */
   orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
   capabilities: ExecutionEnvironmentCapabilities,

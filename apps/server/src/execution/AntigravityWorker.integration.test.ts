@@ -126,7 +126,7 @@ test("native Antigravity runs through the standalone worker and retains credenti
       "gemini-test-low",
       "gemini-test-high",
     ]);
-    expect(snapshot.setup?.canInstall).toBe(false);
+    expect(snapshot.setup).not.toHaveProperty("canInstall");
     const requests = (await NodeFSP.readFile(requestsPath, "utf8"))
       .trim()
       .split("\n")

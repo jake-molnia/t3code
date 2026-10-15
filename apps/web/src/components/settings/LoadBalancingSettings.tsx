@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ExecutionPool } from "@t3tools/contracts";
 import { useExecutionPools } from "~/hooks/useExecutionPools";
 
 import {
@@ -6,8 +6,8 @@ import {
   useClientSettingsHydrated,
   useUpdateClientSettings,
 } from "~/hooks/useSettings";
-import type { EnvironmentPresentation } from "~/state/environments";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { EnvironmentRow } from "./EnvironmentRow";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
@@ -34,18 +34,15 @@ function preferenceLabel(preference: LoadPreference): string {
 }
 
 /**
- * Closed-header summary: the machines not at Normal, so the folded section
- * still tells you what is set. Null when every machine is at the default.
+ * Summarizes pool preferences that differ from Normal.
  */
 export function summarizeLoadPreferences(
-  environments: ReadonlyArray<Pick<EnvironmentPresentation, "environmentId" | "label">>,
+  pools: ReadonlyArray<Pick<ExecutionPool, "id" | "label">>,
   weights: Readonly<Record<string, number>>,
 ): string | null {
-  const parts = environments.flatMap((environment) => {
-    const preference = loadPreferenceForWeight(weights[environment.environmentId]);
-    return preference === 50
-      ? []
-      : [`${environment.label} ${preferenceLabel(preference).toLowerCase()}`];
+  const parts = pools.flatMap((pool) => {
+    const preference = loadPreferenceForWeight(weights[pool.id]);
+    return preference === 50 ? [] : [`${pool.label} ${preferenceLabel(preference).toLowerCase()}`];
   });
   return parts.length === 0 ? null : parts.join(" · ");
 }
@@ -57,23 +54,37 @@ export function LoadBalancingSettings({ environmentId }: { environmentId: Enviro
 
   const catalog = useExecutionPools(environmentId);
   const pools = catalog.snapshot?.pools ?? [];
-  if (pools.length < 2) return null;
+  if (!catalog.snapshot || pools.length === 0) {
+    return (
+      <FoldedSettingsSection
+        id="load-balancing"
+        title="Execution pools"
+        summary={catalog.failed ? "Unavailable" : catalog.snapshot ? "None configured" : "Loading…"}
+      >
+        <p className="px-4 py-3 text-xs text-muted-foreground">
+          {catalog.failed
+            ? "Could not load execution pools."
+            : "Execution pools are managed by this service. Your projects and conversations remain available while execution is unavailable."}
+        </p>
+        {catalog.failed ? (
+          <div className="px-4 pb-3">
+            <Button size="sm" variant="outline" onClick={catalog.refresh}>
+              Retry
+            </Button>
+          </div>
+        ) : null}
+      </FoldedSettingsSection>
+    );
+  }
 
-  const { id, title } = searchableSetting("load-balancing");
+  const { id } = searchableSetting("load-balancing");
   return (
     <FoldedSettingsSection
       id={id}
-      title={title}
+      title="Execution pools"
       summary={
         settings.loadBalancingEnabled
-          ? pools
-              .flatMap((pool) => {
-                const preference = loadPreferenceForWeight(settings.loadBalancingWeights[pool.id]);
-                return preference === 50
-                  ? []
-                  : [`${pool.label} ${preferenceLabel(preference).toLowerCase()}`];
-              })
-              .join(" · ") || null
+          ? summarizeLoadPreferences(pools, settings.loadBalancingWeights)
           : "Off"
       }
       control={
@@ -94,7 +105,13 @@ export function LoadBalancingSettings({ environmentId }: { environmentId: Enviro
           key={pool.id}
           kind="cloud"
           label={pool.label}
-          subtitle={pool.available ? "Available" : "Unavailable"}
+          subtitle={
+            pool.available
+              ? pool.requestCapacity
+                ? `${pool.requestCapacity.availableSlots} estimated slots available`
+                : "Available"
+              : "Unavailable"
+          }
         >
           <Select
             items={preferences}
