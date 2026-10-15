@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 
 class MigrationError(Exception):
@@ -56,7 +57,19 @@ def released(resource):
             and resource.get('identity') is None and resource.get('execution') is None)
 
 
+def binding_generation(info):
+    generation = info.get('bindingGeneration')
+    if type(generation) is not int or generation < 0:
+        raise MigrationError('controller has no valid profile binding generation')
+    return generation
+
+
 def migrate_controller(pool, entry, persist, source, target, timeout):
+    saved = entry.get('migration')
+    if saved is not None and (type(saved.get('expectedBindingGeneration')) is not int
+            or saved['expectedBindingGeneration'] < 0
+            or not isinstance(saved.get('operationId'), str) or not saved['operationId'].strip()):
+        raise MigrationError('prepared legacy migration lacks binding generation or operation identity; complete it before upgrading the controller')
     workspace = entry['before']['workspace_id']
     path = '/v1/workspaces/' + urllib.parse.quote(workspace, safe='')
     code, current = state(pool, workspace)
@@ -65,12 +78,15 @@ def migrate_controller(pool, entry, persist, source, target, timeout):
     if code != 200 or current['id'] != workspace or current['pool'] != pool['id']:
         raise MigrationError('workspace controller state cannot be reconciled')
     if current['profile'] == target:
-        saved = entry.get('migration')
         info_code, info = request(pool, path + '/migration')
         if (not saved or not released(current) or info_code != 200
                 or info['profile'] != target or info['state'] != 'released'
-                or info['revision'] != saved['expectedRevision'] or info['epoch'] != saved['expectedEpoch']):
+                or info['revision'] != saved['expectedRevision'] or info['epoch'] != saved['expectedEpoch']
+                or binding_generation(info) != saved['expectedBindingGeneration'] + 1):
             raise MigrationError('target controller state changed')
+        code, _ = request(pool, '/v1/profile-migrations', saved)
+        if code != 200:
+            raise MigrationError('profile migration retry no longer owns the target binding (HTTP %s)' % code)
         return entry['before']['admission_revision']
     if current['profile'] != source:
         raise MigrationError('controller profile does not match migration source')
@@ -131,6 +147,8 @@ def migrate_controller(pool, entry, persist, source, target, timeout):
         'workspaceId': workspace, 'fromProfile': source, 'toProfile': target,
         'expectedProfileHash': info['profileHash'],
         'expectedRevision': info['revision'], 'expectedEpoch': info['epoch'],
+        'expectedBindingGeneration': binding_generation(info),
+        'operationId': saved['operationId'] if saved is not None else str(uuid.uuid4()),
     }
     if entry.get('migration') and entry['migration'] != migration:
         raise MigrationError('controller changed after migration was prepared')
@@ -142,6 +160,10 @@ def migrate_controller(pool, entry, persist, source, target, timeout):
     code, migrated = state(pool, workspace)
     if code != 200 or not released(migrated) or migrated['profile'] != target:
         raise MigrationError('profile migration outcome is not established')
+    info_code, confirmed = request(pool, path + '/migration')
+    if (info_code != 200 or confirmed['profile'] != target or confirmed['state'] != 'released'
+            or binding_generation(confirmed) != migration['expectedBindingGeneration'] + 1):
+        raise MigrationError('profile migration binding changed after acceptance')
     # T3's admission revision is a local activity fence, independent of the controller.
     return entry['before']['admission_revision']
 
