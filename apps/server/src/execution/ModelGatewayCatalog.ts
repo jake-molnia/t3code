@@ -2,8 +2,9 @@
 // @effect-diagnostics globalFetch:off -- Worker inference catalog transport, bounded and scoped per worker.
 import * as NodeFSP from "node:fs/promises";
 import * as Schema from "effect/Schema";
+import { lock } from "proper-lockfile";
 import type { ModelSelection, ServerProvider, ServerProviderModel } from "@t3tools/contracts";
-import { migrateGatewayModelSelection } from "./GatewayMigration.ts";
+import { migrateGatewayModelId, migrateGatewayModelSelection } from "./GatewayMigration.ts";
 
 // The pinned proxy patch preserves known input modalities alongside model identities.
 export const Catalog = Schema.Struct({
@@ -133,11 +134,62 @@ export function nativeGatewayConfigs(catalog: Catalog, upstream: string) {
           baseUrl: `${upstream}/v1`,
           api: "openai-responses",
           apiKey: "${T3_GATEWAY_API_KEY}",
-          models: catalog.data.map((model) => ({ id: model.id, name: model.id })),
+          models: catalog.data.map((model) => ({
+            id: model.id,
+            name: model.id,
+            input: openCodeInputModalities(model).filter(
+              (modality) => modality === "text" || modality === "image",
+            ),
+          })),
         },
       },
     },
   };
+}
+
+const decodePiRecord = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
+
+async function readPiRecord(path: string) {
+  let text: string;
+  try {
+    text = await NodeFSP.readFile(path, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return {};
+    throw new Error(
+      "Pi state could not be read. Repair the retained Pi configuration before retrying.",
+      { cause: error },
+    );
+  }
+  const decoded = decodePiRecord(text);
+  if (decoded._tag === "None")
+    throw new Error("Pi state is invalid. Repair the retained Pi configuration before retrying.");
+  return decoded.value;
+}
+
+/** Share Pi's own file lock so gateway credential repair cannot overwrite another account's login. */
+async function reconcilePiAccess(directory: string) {
+  await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
+  const path = `${directory}/auth.json`;
+  const release = await lock(path, {
+    realpath: false,
+    retries: { retries: 10, minTimeout: 20, maxTimeout: 200 },
+  });
+  try {
+    const saved = await readPiRecord(path);
+    const gateway = { type: "api_key", key: "${T3_GATEWAY_API_KEY}" };
+    if (JSON.stringify(saved.gateway) !== JSON.stringify(gateway)) {
+      await NodeFSP.writeFile(`${path}.tmp`, JSON.stringify({ ...saved, gateway }, null, 2), {
+        mode: 0o600,
+      });
+      await NodeFSP.rename(`${path}.tmp`, path);
+    }
+  } finally {
+    await release();
+  }
+  const settings = await readPiRecord(`${directory}/settings.json`);
+  return typeof settings.defaultModel === "string" ? settings.defaultModel : undefined;
 }
 
 /** Each worker owns its catalog and files; no catalog is shared between workspaces. */
@@ -165,6 +217,13 @@ export function createModelGatewayCatalog(options: {
   let state: GatewayCatalogState = base ? { kind: "unavailable" } : { kind: "disabled" };
   let pending: Promise<GatewayCatalogState> | undefined;
   let written: string | undefined;
+  let piDefaultModel: string | undefined;
+  const normalizeSelection = (driver: string, selection: ModelSelection) => {
+    if (!base) return selection;
+    if (driver === "pi" && selection.model === "default" && piDefaultModel)
+      return { ...selection, model: gatewayModelSlug(driver, piDefaultModel) };
+    return migrateGatewayModelSelection(driver, selection);
+  };
   const refresh = async (): Promise<GatewayCatalogState> => {
     if (!base) return state;
     if (pending) return pending;
@@ -209,17 +268,29 @@ export function createModelGatewayCatalog(options: {
   return {
     refresh,
     requiresSessionRestart: (driver: string) => Boolean(base) && driver === "pi",
-    normalizeSelection: (driver: string, selection: ModelSelection) =>
-      base ? migrateGatewayModelSelection(driver, selection) : selection,
+    normalizeSelection,
     snapshot: (snapshot: ServerProvider) => projectGatewaySnapshot(snapshot, state),
     async prepareInference(driver: string, model?: string) {
       const next = await refresh();
       const reason = gatewayUnavailableReason(next, driver);
       if (reason) throw new Error(reason);
+      if (next.kind === "ready" && driver === "pi") {
+        const preferred = await reconcilePiAccess(`${options.directory}/pi`);
+        piDefaultModel =
+          next.catalog.data.find((entry) => entry.id === preferred)?.id ??
+          next.catalog.data.find((entry) => entry.id === piDefaultModel)?.id ??
+          next.catalog.data[0]?.id;
+      }
+      const requested =
+        model === undefined
+          ? undefined
+          : driver === "pi" && model === "default"
+            ? piDefaultModel && gatewayModelSlug(driver, piDefaultModel)
+            : migrateGatewayModelId(driver, model);
       if (
         next.kind === "ready" &&
-        model &&
-        !next.catalog.data.some((entry) => gatewayModelSlug(driver, entry.id) === model)
+        requested &&
+        !next.catalog.data.some((entry) => gatewayModelSlug(driver, entry.id) === requested)
       )
         throw new Error(
           "The selected model is no longer available. Select a model from a connected account.",

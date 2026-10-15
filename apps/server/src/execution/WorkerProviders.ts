@@ -155,9 +155,10 @@ export const make = Effect.gen(function* () {
               ...input.settings,
               ...resolveModelPreferences(input.settings),
             });
-            configurations[input.instanceId] = yield* Effect.try(() =>
-              normalizeHarness(input.config),
-            );
+            configurations[input.instanceId] = yield* Effect.try(() => {
+              validateHarnessLaunch(input.config);
+              return normalizeHarness(input.config);
+            });
             yield* mutator.reconcile(configurations);
             const instance = yield* registry.getInstance(input.instanceId);
             if (!instance) return yield* new WorkerProviderError({ operation: "configure" });
@@ -287,10 +288,7 @@ export const make = Effect.gen(function* () {
       if (method.startsWith("text.")) {
         const selection = yield* decodeInferenceSelection(command.input);
         yield* Effect.tryPromise(() =>
-          gateway.prepareInference(
-            instance.driverKind,
-            normalizeInput(selection).modelSelection.model,
-          ),
+          gateway.prepareInference(instance.driverKind, selection.modelSelection.model),
         );
       }
       switch (method) {

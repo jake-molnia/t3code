@@ -270,3 +270,77 @@ test("OpenCode's generated registry preserves discovered image support without g
     await NodeFSP.rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Pi refresh makes the deployment credential authoritative without touching other accounts", async () => {
+  const directory = await NodeFSP.mkdtemp(`${NodeOS.tmpdir()}/t3-pi-credential-`);
+  await NodeFSP.mkdir(`${directory}/pi`);
+  const other = { type: "oauth", refresh: "unrelated-refresh", access: "unrelated-access" };
+  const gateway = createModelGatewayCatalog({
+    directory,
+    environment: { T3_GATEWAY_URL: "http://head", T3_GATEWAY_API_KEY: "current-deployment-key" },
+    request: async () => Response.json({ data: [{ id: "model" }] }),
+  });
+  try {
+    for (const stale of ["stale-key", "another-stale-key"]) {
+      await NodeFSP.writeFile(
+        `${directory}/pi/auth.json`,
+        JSON.stringify({ gateway: { type: "api_key", key: stale }, other }),
+      );
+      await gateway.prepareInference("pi", "gateway/model");
+      const saved = JSON.parse(await NodeFSP.readFile(`${directory}/pi/auth.json`, "utf8"));
+      expect(saved).toEqual({ gateway: { type: "api_key", key: "${T3_GATEWAY_API_KEY}" }, other });
+      expect(JSON.stringify(saved)).not.toContain("current-deployment-key");
+    }
+  } finally {
+    await NodeFSP.rm(directory, { recursive: true, force: true });
+  }
+});
+test("Pi generated models keep known text and image modalities", () => {
+  const result = nativeGatewayConfigs(
+    {
+      data: [
+        { id: "vision", supported_input_modalities: ["TEXT", "IMAGE", "AUDIO"] },
+        { id: "unknown" },
+      ],
+    },
+    "http://head",
+  );
+  expect(result.pi.providers.gateway.models[0]).toMatchObject({ input: ["text", "image"] });
+  expect(result.pi.providers.gateway.models[1]).toMatchObject({ input: ["text"] });
+});
+test("saved Pi default resolves its configured available model before catalog admission", async () => {
+  const directory = await NodeFSP.mkdtemp(`${NodeOS.tmpdir()}/t3-pi-default-`);
+  await NodeFSP.mkdir(`${directory}/pi`);
+  await NodeFSP.writeFile(
+    `${directory}/pi/settings.json`,
+    JSON.stringify({ defaultProvider: "gateway", defaultModel: "preferred", theme: "dark" }),
+  );
+  const gateway = createModelGatewayCatalog({
+    directory,
+    environment: { T3_GATEWAY_URL: "http://head", T3_GATEWAY_API_KEY: "key" },
+    request: async () => Response.json({ data: [{ id: "other" }, { id: "preferred" }] }),
+  });
+  try {
+    await gateway.prepareInference("pi", "default");
+    expect(
+      gateway.normalizeSelection("pi", {
+        instanceId: ProviderInstanceId.make("pi"),
+        model: "default",
+      }).model,
+    ).toBe("gateway/preferred");
+    const noSettings = createModelGatewayCatalog({
+      directory: `${directory}/new`,
+      environment: { T3_GATEWAY_URL: "http://head", T3_GATEWAY_API_KEY: "key" },
+      request: async () => Response.json({ data: [{ id: "available" }] }),
+    });
+    await noSettings.prepareInference("pi", "default");
+    expect(
+      noSettings.normalizeSelection("pi", {
+        instanceId: ProviderInstanceId.make("pi"),
+        model: "default",
+      }).model,
+    ).toBe("gateway/available");
+  } finally {
+    await NodeFSP.rm(directory, { recursive: true, force: true });
+  }
+});

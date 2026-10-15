@@ -5,13 +5,19 @@ import {
   type ModelSelection,
 } from "@t3tools/contracts";
 
+/** Retired provider prefixes name the same gateway models. */
+export function migrateGatewayModelId(driver: string, model: string): string {
+  return driver === "opencode" || driver === "pi"
+    ? model.replace(/^aperture(?:-chat|-anthropic)?\//, "gateway/")
+    : model;
+}
+
 /** Translate saved selections at execution time; historical events retain their original IDs. */
 export function migrateGatewayModelSelection(
   driver: string,
   selection: ModelSelection,
 ): ModelSelection {
-  if (driver !== "opencode" && driver !== "pi") return selection;
-  const model = selection.model.replace(/^aperture(?:-chat|-anthropic)?\//, "gateway/");
+  const model = migrateGatewayModelId(driver, selection.model);
   return model === selection.model ? selection : { ...selection, model };
 }
 

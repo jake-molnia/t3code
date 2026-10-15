@@ -160,14 +160,12 @@ export const makeProviderExecutor = (options: {
               target: normalizeSelection(adapter.driver, selection.target),
             });
           }
-          const input = normalizeInput(
-            adapter.driver,
-            sandboxInput(yield* decodeOpenSession(command.input)),
-          );
+          const decoded = sandboxInput(yield* decodeOpenSession(command.input));
           if (prepareInference)
             yield* Effect.tryPromise(() =>
-              prepareInference(adapter.driver, input.modelSelection.model),
+              prepareInference(adapter.driver, decoded.modelSelection.model),
             );
+          const input = normalizeInput(adapter.driver, decoded);
           if (retiredSessions.has(input.providerSessionId))
             return yield* new ProviderExecutionError({ code: "session_retired" });
           const live = sessions.get(input.providerSessionId);
@@ -255,11 +253,7 @@ export const makeProviderExecutor = (options: {
         ) {
           const input = yield* decodeInferenceSelection(command.input);
           yield* Effect.tryPromise(() =>
-            prepareInference(
-              runtime.driver,
-              input.modelSelection &&
-                normalizeSelection(runtime.driver, input.modelSelection).model,
-            ),
+            prepareInference(runtime.driver, input.modelSelection?.model),
           );
         }
         switch (method) {

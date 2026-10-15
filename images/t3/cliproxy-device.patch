@@ -252,18 +252,62 @@ index 2913dd8..63f0090 100644
  	log.Info("Devin authentication successful")
  }
  
+diff --git a/internal/api/handlers/management/auth_files_fields.go b/internal/api/handlers/management/auth_files_fields.go
+index 2749677..0c77d35 100644
+--- a/internal/api/handlers/management/auth_files_fields.go
++++ b/internal/api/handlers/management/auth_files_fields.go
+@@ -977,7 +977,7 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
+ 			legacyID = strings.TrimSpace(legacyClaudeCredential.FileName)
+ 		}
+ 		if errDelete := store.Delete(ctx, legacyID); errDelete != nil {
+-			return savedPath, fmt.Errorf("canonical Claude credential saved but legacy credential cleanup failed: %w", errDelete)
++			return savedPath, &authCommitFollowupError{stage: "legacy-cleanup", cause: fmt.Errorf("canonical Claude credential saved but legacy credential cleanup failed: %w", errDelete)}
+ 		}
+ 	}
+ 	if h.postAuthPersistHook != nil {
+@@ -991,7 +991,7 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
+ 				PluginAuthParser: h.pluginHost,
+ 			}, savedPath, data)
+ 			if errSynthesize != nil {
+-				return savedPath, fmt.Errorf("synthesize persisted auth failed: %w", errSynthesize)
++				return savedPath, &authCommitFollowupError{stage: "synthesis", cause: fmt.Errorf("synthesize persisted auth failed: %w", errSynthesize)}
+ 			}
+ 			for _, auth := range auths {
+ 				if auth != nil && (auth.ID == record.ID || len(auths) == 1) {
+@@ -1001,7 +1001,7 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
+ 			}
+ 		}
+ 		if errHook := h.postAuthPersistHook(ctx, persistedRecord); errHook != nil {
+-			return savedPath, fmt.Errorf("post-auth persist hook failed: %w", errHook)
++			return savedPath, &authCommitFollowupError{stage: "post-persist-hook", cause: fmt.Errorf("post-auth persist hook failed: %w", errHook)}
+ 		}
+ 	}
+ 	return savedPath, nil
 diff --git a/internal/api/handlers/management/auth_files_oauth_save.go b/internal/api/handlers/management/auth_files_oauth_save.go
 new file mode 100644
-index 0000000..ceff327
+index 0000000..a97195e
 --- /dev/null
 +++ b/internal/api/handlers/management/auth_files_oauth_save.go
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,35 @@
 +package management
 +
 +import (
 +	"context"
++	"errors"
++
 +	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
++	log "github.com/sirupsen/logrus"
 +)
++
++// authCommitFollowupError records failure after Store.Save acknowledged persistence.
++// It preserves the existing error for non-OAuth callers while identifying the commit boundary.
++type authCommitFollowupError struct {
++	stage string
++	cause error
++}
++
++func (e *authCommitFollowupError) Error() string { return e.cause.Error() }
++func (e *authCommitFollowupError) Unwrap() error { return e.cause }
 +
 +// saveOAuthTokenRecord commits credentials and session completion together with respect to cancellation.
 +func (h *Handler) saveOAuthTokenRecord(ctx context.Context, state string, record *coreauth.Auth) (string, error) {
@@ -271,16 +315,21 @@ index 0000000..ceff327
 +	err := oauthSessions.finishOAuth(state, func() error {
 +		var err error
 +		path, err = h.saveTokenRecord(ctx, record)
++		var followup *authCommitFollowupError
++		if errors.As(err, &followup) {
++			log.WithField("stage", followup.stage).Warn("OAuth credentials saved; post-save synchronization failed")
++			return nil
++		}
 +		return err
 +	})
 +	return path, err
 +}
 diff --git a/internal/api/handlers/management/auth_files_oauth_save_test.go b/internal/api/handlers/management/auth_files_oauth_save_test.go
 new file mode 100644
-index 0000000..e197866
+index 0000000..521d2ac
 --- /dev/null
 +++ b/internal/api/handlers/management/auth_files_oauth_save_test.go
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,147 @@
 +package management
 +
 +import (
@@ -349,6 +398,81 @@ index 0000000..e197866
 +			}
 +			if _, err := os.Stat(directory + "/account.json"); err != nil {
 +				t.Fatal(err)
++			}
++		})
++	}
++}
++
++func TestOAuthSavePostPersistFailureKeepsCommittedOutcome(t *testing.T) {
++	directory := t.TempDir()
++	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: directory}, nil)
++	h.tokenStore = sdkAuth.NewFileTokenStore()
++	record := &coreauth.Auth{ID: "account.json", FileName: "account.json", Provider: "codex", Metadata: map[string]any{"type": "codex", "access_token": "test"}}
++	var hooked *coreauth.Auth
++	h.postAuthPersistHook = func(_ context.Context, auth *coreauth.Auth) error {
++		hooked = auth.Clone()
++		return errors.New("private-hook-error")
++	}
++	state := "saved-with-hook-error"
++	RegisterOAuthSession(state, "codex")
++	path, err := h.saveOAuthTokenRecord(context.Background(), state, record)
++	if err != nil {
++		t.Fatalf("durably saved login reported failure: %v", err)
++	}
++	if _, err := os.Stat(path); err != nil {
++		t.Fatal(err)
++	}
++	if hooked == nil || hooked.ID != record.ID || hooked.Attributes[coreauth.AttributePath] != path || hooked.Attributes[coreauth.AttributeSourceBackend] != coreauth.AuthSourceFile {
++		t.Fatalf("post-save synchronization did not receive the canonical source identity: %#v", hooked)
++	}
++	session, ok := oauthSessions.Get(state)
++	if !ok || !session.Completed {
++		t.Fatal("saved credential must have a completed login")
++	}
++	SetOAuthSessionError(state, "late failure")
++	session, _ = oauthSessions.Get(state)
++	if session.Status != "" || !session.Completed {
++		t.Fatal("late error replaced committed outcome")
++	}
++	if CancelOAuthSession(state) {
++		t.Fatal("cancellation won after credential commit")
++	}
++}
++
++type failingOAuthTokenStore struct{ coreauth.Store }
++
++func (s failingOAuthTokenStore) Save(context.Context, *coreauth.Auth) (string, error) {
++	// A store's error is authoritative even when it returns a nonempty diagnostic path.
++	return "/not-persisted/account.json", errors.New("store-failure")
++}
++
++func TestOAuthSaveBeforeCommitFailureRemainsRejected(t *testing.T) {
++	for _, stage := range []string{"pre-save-hook", "store"} {
++		t.Run(stage, func(t *testing.T) {
++			directory := t.TempDir()
++			h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: directory}, nil)
++			h.tokenStore = sdkAuth.NewFileTokenStore()
++			if stage == "pre-save-hook" {
++				h.postAuthHook = func(context.Context, *coreauth.Auth) error { return errors.New("hook-failure") }
++			} else {
++				h.tokenStore = failingOAuthTokenStore{Store: h.tokenStore}
++			}
++			record := &coreauth.Auth{ID: "account.json", FileName: "account.json", Provider: "codex", Metadata: map[string]any{"type": "codex", "access_token": "test"}}
++			state := "not-saved-" + stage
++			RegisterOAuthSession(state, "codex")
++			if _, err := h.saveOAuthTokenRecord(context.Background(), state, record); err == nil {
++				t.Fatal("pre-commit failure was swallowed")
++			}
++			files, err := os.ReadDir(directory)
++			if err != nil || len(files) != 0 {
++				t.Fatal("failed save left credentials")
++			}
++			session, ok := oauthSessions.Get(state)
++			if !ok || session.Completed {
++				t.Fatal("failed save marked enrollment completed")
++			}
++			if !CancelOAuthSession(state) {
++				t.Fatal("failed save prevented cancellation")
 +			}
 +		})
 +	}

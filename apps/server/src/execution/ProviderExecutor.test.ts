@@ -188,9 +188,9 @@ it.layer(NodeServices.layer, { excludeTestServices: true })(
   },
 );
 
-it.effect(
-  "gateway checks each resumed operation while keeping session closure available during outages",
-  () =>
+it.effect.each(["aperture-anthropic/claude", "default"])(
+  "gateway admits %s before normalizing and keeps session closure available during outages",
+  (savedModel) =>
     Effect.gen(function* () {
       const instanceId = C.ProviderInstanceId.make("pi");
       const driver = C.ProviderDriverKind.make("pi");
@@ -200,6 +200,7 @@ it.effect(
       const prepared: string[] = [];
       const received: string[] = [];
       let available = true;
+      let preparedDefault = false;
       let closed = false;
       const unused = () => Effect.die("Unexpected provider operation");
       const providerThread: C.OrchestrationV2ProviderThread = {
@@ -268,16 +269,23 @@ it.effect(
       const executor = yield* makeProviderExecutor({
         adapters: new Map([[instanceId, adapter]]),
         publish: async () => {},
-        normalizeSelection: migrateGatewayModelSelection,
-        prepareInference: async (_driver, model) => {
+        normalizeSelection: (driver, selection) =>
+          selection.model === "default" && preparedDefault
+            ? { ...selection, model: "gateway/claude" }
+            : migrateGatewayModelSelection(driver, selection),
+        prepareInference: async (driver, model) => {
           if (!available) throw new Error("The model gateway is unavailable.");
-          if (model) prepared.push(model);
+          if (model === "default") {
+            preparedDefault = true;
+            prepared.push("gateway/claude");
+          } else if (model)
+            prepared.push(migrateGatewayModelSelection(driver, { instanceId, model }).model);
         },
       });
       const input = {
         threadId,
         providerSessionId,
-        modelSelection: { instanceId, model: "aperture-anthropic/claude" },
+        modelSelection: { instanceId, model: savedModel },
         runtimePolicy: {
           runtimeMode: "full-access",
           interactionMode: "default",
