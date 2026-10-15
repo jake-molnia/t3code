@@ -1,6 +1,4 @@
 import type {
-  DesktopElectronProcessMetric,
-  DesktopHostTelemetrySnapshot,
   ResourceMonitorProcessSample,
   ResourceMonitorSnapshotEvent,
   ResourceTelemetryAggregate,
@@ -11,7 +9,6 @@ import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
 const MAX_DELTA_INTERVAL_MS = 30_000;
-const ELECTRON_IDENTITY_TOLERANCE_MS = 2_000;
 
 export interface ProcessState {
   readonly process: ResourceTelemetryProcess;
@@ -28,7 +25,6 @@ export interface GroupCounters {
 
 export interface TelemetryCounters {
   readonly backend: GroupCounters;
-  readonly electron: GroupCounters;
   readonly monitor: GroupCounters;
   readonly allT3: GroupCounters;
 }
@@ -46,9 +42,6 @@ export interface MergeProcessesInput {
   readonly sidecarPid: Option.Option<number>;
   readonly fallbackSampledAtMs: number;
   readonly nativeSnapshot: Option.Option<ResourceMonitorSnapshotEvent>;
-  readonly desktopSnapshot: Option.Option<DesktopHostTelemetrySnapshot>;
-  readonly electronRootPids?: ReadonlySet<number>;
-  readonly electronRootStartTimes?: ReadonlyMap<number, number>;
   readonly previous: ReadonlyMap<string, ProcessState>;
   readonly counters: TelemetryCounters;
   readonly updatePrevious: boolean;
@@ -61,7 +54,6 @@ export interface MergeProcessesResult {
   readonly counters: TelemetryCounters;
   readonly groups: {
     readonly backend: ResourceTelemetryAggregate;
-    readonly electron: ResourceTelemetryAggregate;
     readonly monitor: ResourceTelemetryAggregate;
     readonly allT3: ResourceTelemetryAggregate;
   };
@@ -78,7 +70,6 @@ const emptyGroupCounters = (): GroupCounters => ({
 
 export const emptyTelemetryCounters = (): TelemetryCounters => ({
   backend: emptyGroupCounters(),
-  electron: emptyGroupCounters(),
   monitor: emptyGroupCounters(),
   allT3: emptyGroupCounters(),
 });
@@ -91,75 +82,9 @@ function finiteNonNegative(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
-function categoryGroup(
-  category: ResourceTelemetryProcessCategory,
-): "backend" | "electron" | "monitor" {
+function categoryGroup(category: ResourceTelemetryProcessCategory): "backend" | "monitor" {
   if (category === "resource-monitor") return "monitor";
-  if (category.startsWith("electron-")) return "electron";
   return "backend";
-}
-
-function electronCategory(metric: DesktopElectronProcessMetric): ResourceTelemetryProcessCategory {
-  switch (metric.type) {
-    case "Browser":
-      return "electron-main";
-    case "Tab":
-      return "electron-renderer";
-    case "GPU":
-      return "electron-gpu";
-    default:
-      return "electron-utility";
-  }
-}
-
-function inferredElectronCategory(
-  process: ResourceMonitorProcessSample,
-): ResourceTelemetryProcessCategory {
-  const command = process.command.toLowerCase();
-  if (command.includes("--type=renderer")) return "electron-renderer";
-  if (command.includes("--type=gpu-process")) return "electron-gpu";
-  return "electron-utility";
-}
-
-function matchElectronMetric(
-  process: ResourceMonitorProcessSample,
-  metricsByPid: ReadonlyMap<number, DesktopElectronProcessMetric>,
-): DesktopElectronProcessMetric | undefined {
-  const metric = metricsByPid.get(process.pid);
-  if (!metric) return undefined;
-  return Math.abs(metric.creationTimeMs - process.startTimeMs) <= ELECTRON_IDENTITY_TOLERANCE_MS
-    ? metric
-    : undefined;
-}
-
-function syntheticNativeSample(
-  metric: DesktopElectronProcessMetric,
-  sampledAtMs: number,
-  previous: ProcessState | undefined,
-): ResourceMonitorProcessSample {
-  const cpuTimeMs =
-    metric.cumulativeCpuSeconds !== undefined
-      ? Math.max(0, Math.round(metric.cumulativeCpuSeconds * 1_000))
-      : previous
-        ? previous.process.cpuTimeMs +
-          Math.max(0, ((sampledAtMs - previous.sampledAtMs) * metric.cpuPercent) / 100)
-        : 0;
-  return {
-    pid: metric.pid,
-    ppid: 0,
-    startTimeMs: metric.creationTimeMs,
-    runTimeMs: Math.max(0, sampledAtMs - metric.creationTimeMs),
-    name: metric.name ?? metric.serviceName ?? metric.type,
-    command: metric.name ?? metric.serviceName ?? metric.type,
-    status: "Running",
-    cpuPercent: metric.cpuPercent,
-    cpuTimeMs,
-    residentBytes: metric.workingSetBytes,
-    virtualBytes: 0,
-    ioReadBytes: 0,
-    ioWriteBytes: 0,
-    ioSemantics: "storage",
-  };
 }
 
 function processDepths(
@@ -184,40 +109,6 @@ function processDepths(
     }
   }
   return depths;
-}
-
-function isElectronDescendant(
-  pid: number,
-  processesByPid: ReadonlyMap<number, ResourceMonitorProcessSample>,
-  electronPids: ReadonlySet<number>,
-): boolean {
-  const visited = new Set<number>();
-  let currentPid = pid;
-  while (!visited.has(currentPid)) {
-    visited.add(currentPid);
-    if (electronPids.has(currentPid)) return true;
-    const current = processesByPid.get(currentPid);
-    if (!current || current.ppid <= 0 || current.ppid === currentPid) return false;
-    currentPid = current.ppid;
-  }
-  return false;
-}
-
-function hasElectronAncestor(
-  process: ResourceMonitorProcessSample,
-  processesByPid: ReadonlyMap<number, ResourceMonitorProcessSample>,
-  electronPids: ReadonlySet<number>,
-): boolean {
-  const visited = new Set<number>();
-  let currentPid = process.ppid;
-  while (currentPid > 0 && !visited.has(currentPid)) {
-    visited.add(currentPid);
-    if (electronPids.has(currentPid)) return true;
-    const current = processesByPid.get(currentPid);
-    if (!current || current.ppid === currentPid) return false;
-    currentPid = current.ppid;
-  }
-  return false;
 }
 
 function orderProcessTree(
@@ -290,7 +181,6 @@ function applyLifecycleCounters(input: {
   readonly previous: ReadonlyMap<string, ProcessState>;
 }): TelemetryCounters {
   let backend = input.counters.backend;
-  let electron = input.counters.electron;
   let monitor = input.counters.monitor;
   let allT3 = input.counters.allT3;
   for (const processDelta of input.deltas) {
@@ -298,9 +188,6 @@ function applyLifecycleCounters(input: {
     switch (group) {
       case "backend":
         backend = incrementCounters(backend, processDelta);
-        break;
-      case "electron":
-        electron = incrementCounters(electron, processDelta);
         break;
       case "monitor":
         monitor = incrementCounters(monitor, processDelta);
@@ -316,9 +203,6 @@ function applyLifecycleCounters(input: {
       case "backend":
         backend = incrementCounters(backend, { processStarts: 1 });
         break;
-      case "electron":
-        electron = incrementCounters(electron, { processStarts: 1 });
-        break;
       case "monitor":
         monitor = incrementCounters(monitor, { processStarts: 1 });
         break;
@@ -333,9 +217,6 @@ function applyLifecycleCounters(input: {
       case "backend":
         backend = incrementCounters(backend, { processExits: 1 });
         break;
-      case "electron":
-        electron = incrementCounters(electron, { processExits: 1 });
-        break;
       case "monitor":
         monitor = incrementCounters(monitor, { processExits: 1 });
         break;
@@ -343,7 +224,7 @@ function applyLifecycleCounters(input: {
     allT3 = incrementCounters(allT3, { processExits: 1 });
   }
 
-  return { backend, electron, monitor, allT3 };
+  return { backend, monitor, allT3 };
 }
 
 function aggregate(
@@ -376,87 +257,12 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
     onNone: () => [] as ReadonlyArray<ResourceMonitorProcessSample>,
     onSome: (snapshot) => snapshot.processes,
   });
-  const electronMetrics = Option.match(input.desktopSnapshot, {
-    onNone: () => [] as ReadonlyArray<DesktopElectronProcessMetric>,
-    onSome: (snapshot) => snapshot.electronProcesses,
-  });
   const sampledAtMs = Option.match(input.nativeSnapshot, {
-    onNone: () =>
-      Option.match(input.desktopSnapshot, {
-        onNone: () => input.fallbackSampledAtMs,
-        onSome: (snapshot) => snapshot.sampledAtUnixMs,
-      }),
-    onSome: (native) =>
-      Option.match(input.desktopSnapshot, {
-        onNone: () => native.sampledAtUnixMs,
-        onSome: (desktop) => Math.max(native.sampledAtUnixMs, desktop.sampledAtUnixMs),
-      }),
+    onNone: () => input.fallbackSampledAtMs,
+    onSome: (snapshot) => snapshot.sampledAtUnixMs,
   });
-  const nativeSampledAtMs = Option.map(
-    input.nativeSnapshot,
-    (snapshot) => snapshot.sampledAtUnixMs,
-  );
-  const desktopSampledAtMs = Option.map(
-    input.desktopSnapshot,
-    (snapshot) => snapshot.sampledAtUnixMs,
-  );
-  const nativeProcessPids = new Set(nativeProcesses.map((process) => process.pid));
-  const nativeByPid = new Map(nativeProcesses.map((process) => [process.pid, process]));
-  const metricsByPid = new Map<number, DesktopElectronProcessMetric>();
-  for (const metric of electronMetrics) {
-    const nativeProcess = nativeByPid.get(metric.pid);
-    if (!nativeProcess) {
-      nativeByPid.set(
-        metric.pid,
-        syntheticNativeSample(
-          metric,
-          Option.getOrElse(desktopSampledAtMs, () => sampledAtMs),
-          input.previous.get(processIdentityKey(metric.pid, metric.creationTimeMs)),
-        ),
-      );
-      metricsByPid.set(metric.pid, metric);
-      continue;
-    }
-    if (
-      Math.abs(metric.creationTimeMs - nativeProcess.startTimeMs) <= ELECTRON_IDENTITY_TOLERANCE_MS
-    ) {
-      metricsByPid.set(metric.pid, metric);
-    }
-  }
-  const processes = [...nativeByPid.values()];
-  const processesByPid = new Map(processes.map((process) => [process.pid, process]));
-  const requestedElectronRootPids = input.electronRootPids ?? new Set<number>();
-  const explicitElectronRootPids = new Set(
-    [...requestedElectronRootPids].filter((pid) => {
-      const process = processesByPid.get(pid);
-      if (!process) return false;
-      const expectedStartTime = input.electronRootStartTimes?.get(pid);
-      if (expectedStartTime !== undefined) {
-        return Math.abs(process.startTimeMs - expectedStartTime) <= ELECTRON_IDENTITY_TOLERANCE_MS;
-      }
-      if (metricsByPid.has(pid)) return true;
-      return [...input.previous.values()].some(
-        (previous) =>
-          previous.process.category === "electron-main" &&
-          previous.process.identity.pid === pid &&
-          previous.process.identity.startTimeMs === process.startTimeMs,
-      );
-    }),
-  );
-  const electronPids = new Set([...metricsByPid.keys(), ...explicitElectronRootPids]);
-  const electronRootPids = [
-    ...explicitElectronRootPids,
-    ...[...electronPids]
-      .filter((pid) => {
-        if (explicitElectronRootPids.has(pid)) return false;
-        const process = processesByPid.get(pid);
-        return process === undefined
-          ? true
-          : !hasElectronAncestor(process, processesByPid, electronPids);
-      })
-      .toSorted((left, right) => left - right),
-  ].filter((pid, index, values) => values.indexOf(pid) === index);
-  const rootPids = [input.serverPid, ...electronRootPids];
+  const processes = nativeProcesses;
+  const rootPids = [input.serverPid];
   const roots = new Set(rootPids);
   const depths = processDepths(processes, roots);
   const childrenByParent = new Map<number, number[]>();
@@ -471,9 +277,7 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
   const normalized = processes.map((process): ResourceTelemetryProcess => {
     const identityKey = processIdentityKey(process.pid, process.startTimeMs);
     const previous = input.previous.get(identityKey);
-    const counterSampledAtMs = nativeProcessPids.has(process.pid)
-      ? Option.getOrElse(nativeSampledAtMs, () => sampledAtMs)
-      : Option.getOrElse(desktopSampledAtMs, () => sampledAtMs);
+    const counterSampledAtMs = sampledAtMs;
     const elapsedMs = previous ? counterSampledAtMs - previous.sampledAtMs : 0;
     const cpuTimeDelta = previous
       ? delta({
@@ -496,19 +300,12 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
           elapsedMs,
         })
       : 0;
-    const electronMetric = matchElectronMetric(process, metricsByPid);
     const category: ResourceTelemetryProcessCategory =
       process.pid === input.serverPid
         ? "server"
         : Option.contains(input.sidecarPid, process.pid)
           ? "resource-monitor"
-          : explicitElectronRootPids.has(process.pid)
-            ? "electron-main"
-            : electronMetric
-              ? electronCategory(electronMetric)
-              : isElectronDescendant(process.pid, processesByPid, electronPids)
-                ? inferredElectronCategory(process)
-                : "server-child";
+          : "server-child";
     const firstSeenAt = previous?.process.firstSeenAt ?? DateTime.makeUnsafe(sampledAtMs);
     const preservePreviousRates = !input.updatePrevious && previous !== undefined;
     const cpuPercent = preservePreviousRates
@@ -530,16 +327,10 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
       command: process.command,
       status: process.status,
       category,
-      ...(electronMetric ? { electronType: electronMetric.type } : {}),
-      ...(electronMetric?.serviceName ? { electronServiceName: electronMetric.serviceName } : {}),
       cpuPercent: finiteNonNegative(cpuPercent),
       cpuTimeMs: process.cpuTimeMs,
       residentBytes: process.residentBytes,
-      peakResidentBytes: Math.max(
-        process.residentBytes,
-        electronMetric?.peakWorkingSetBytes ?? 0,
-        previous?.process.peakResidentBytes ?? 0,
-      ),
+      peakResidentBytes: Math.max(process.residentBytes, previous?.process.peakResidentBytes ?? 0),
       virtualBytes: process.virtualBytes,
       ioReadBytes: process.ioReadBytes,
       ioWriteBytes: process.ioWriteBytes,
@@ -554,7 +345,6 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
           ? finiteNonNegative((ioWriteDelta * 1_000) / elapsedMs)
           : 0,
       ioSemantics: process.ioSemantics,
-      ...(electronMetric ? { idleWakeupsPerSecond: electronMetric.idleWakeupsPerSecond } : {}),
       runTimeMs: process.runTimeMs,
       firstSeenAt,
       lastSeenAt: DateTime.makeUnsafe(sampledAtMs),
@@ -585,9 +375,6 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
   const backendProcesses = ordered.filter(
     (process) => categoryGroup(process.category) === "backend",
   );
-  const electronProcesses = ordered.filter(
-    (process) => categoryGroup(process.category) === "electron",
-  );
   const monitorProcesses = ordered.filter(
     (process) => categoryGroup(process.category) === "monitor",
   );
@@ -599,7 +386,6 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
     counters,
     groups: {
       backend: aggregate(backendProcesses, counters.backend),
-      electron: aggregate(electronProcesses, counters.electron),
       monitor: aggregate(monitorProcesses, counters.monitor),
       allT3: aggregate(ordered, counters.allT3),
     },

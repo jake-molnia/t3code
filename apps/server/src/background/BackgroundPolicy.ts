@@ -4,7 +4,6 @@ import {
   type BackgroundScope,
   type ClientActivityLease,
   type ClientActivityReportInput,
-  type HostPowerSnapshot,
   type RpcClientId,
 } from "@t3tools/contracts";
 import {
@@ -24,7 +23,6 @@ import * as Stream from "effect/Stream";
 
 import * as ServerSettings from "../serverSettings.ts";
 import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
-import * as HostPowerMonitor from "./HostPowerMonitor.ts";
 
 export class BackgroundPolicy extends Context.Service<
   BackgroundPolicy,
@@ -38,7 +36,6 @@ export class BackgroundPolicy extends Context.Service<
       sessionId: AuthSessionId,
       rpcClientId: RpcClientId,
     ) => Effect.Effect<void>;
-    readonly reportHostPowerState: (snapshot: HostPowerSnapshot) => Effect.Effect<void>;
     readonly snapshot: Effect.Effect<BackgroundPolicySnapshot>;
     readonly streamChanges: Stream.Stream<BackgroundPolicySnapshot>;
     readonly subscribe: Effect.Effect<
@@ -134,26 +131,6 @@ function leaseHasScope(lease: ClientActivityLease, scope: BackgroundScope): bool
   return lease.scopes.some((leaseScope) => scopeKey(leaseScope) === key);
 }
 
-function hasThermalPressure(hostPower: HostPowerSnapshot): boolean {
-  return hostPower.thermalState === "serious" || hostPower.thermalState === "critical";
-}
-
-function isHostConstrained(
-  hostPower: HostPowerSnapshot,
-  settings: ResolvedBackgroundActivitySettings,
-): boolean {
-  if (hostPower.stale) return false;
-  if (
-    hostPower.suspended ||
-    (settings.pauseWhenHostLocked && hostPower.locked === "true") ||
-    hasThermalPressure(hostPower)
-  ) {
-    return true;
-  }
-  if (settings.pauseWhenHostLowPower && hostPower.lowPowerMode === "true") return true;
-  return settings.pauseWhenOnBattery && hostPower.onBattery === "true";
-}
-
 function isClientConstrained(
   lease: ClientActivityLease,
   settings: ResolvedBackgroundActivitySettings,
@@ -179,7 +156,6 @@ function leaseMayRunScopedWork(
 }
 
 function computeSnapshot(input: {
-  readonly hostPower: HostPowerSnapshot;
   readonly leases: ReadonlyMap<string, ClientActivityLease>;
   readonly now: DateTime.Utc;
   readonly settings: ResolvedBackgroundActivitySettings;
@@ -197,20 +173,18 @@ function computeSnapshot(input: {
   }
 
   return {
-    hostPower: input.hostPower,
     leases: activeLeases,
     activeForegroundLeaseCount: foregroundLeases.length,
     activeScopeKeys: [...activeScopeKeys].toSorted(),
-    shouldRunOpportunisticWork:
-      foregroundLeases.some((lease) => !isClientConstrained(lease, input.settings)) &&
-      !isHostConstrained(input.hostPower, input.settings),
+    shouldRunOpportunisticWork: foregroundLeases.some(
+      (lease) => !isClientConstrained(lease, input.settings),
+    ),
     updatedAt: input.updatedAt,
   };
 }
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("background.policy.make")(function* () {
-  const hostPowerMonitor = yield* HostPowerMonitor.HostPowerMonitor;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const leasesRef = yield* Ref.make(new Map<string, ClientActivityLease>());
   const changes = yield* PubSub.sliding<BackgroundPolicySnapshot>(1);
@@ -222,13 +196,12 @@ export const make = Effect.fn("background.policy.make")(function* () {
   );
 
   const snapshot = Effect.gen(function* () {
-    const [hostPower, leases, now, settings] = yield* Effect.all([
-      hostPowerMonitor.snapshot,
+    const [leases, now, settings] = yield* Effect.all([
       Ref.get(leasesRef),
       DateTime.now,
       backgroundActivitySettings,
     ]);
-    return computeSnapshot({ hostPower, leases, now, settings, updatedAt: now });
+    return computeSnapshot({ leases, now, settings, updatedAt: now });
   });
 
   const publishSnapshotUnlocked = snapshot.pipe(
@@ -292,9 +265,6 @@ export const make = Effect.fn("background.policy.make")(function* () {
   const shouldRunScopeWork: BackgroundPolicy["Service"]["shouldRunScopeWork"] = (scope) =>
     Effect.gen(function* () {
       const [current, settings] = yield* Effect.all([snapshot, backgroundActivitySettings]);
-      if (isHostConstrained(current.hostPower, settings)) {
-        return false;
-      }
       return current.leases.some((lease) =>
         leaseMayRunScopedWork(lease, scope, current.updatedAt, settings),
       );
@@ -305,9 +275,6 @@ export const make = Effect.fn("background.policy.make")(function* () {
     (current) => current.shouldRunOpportunisticWork,
   );
 
-  yield* Stream.runForEach(hostPowerMonitor.streamChanges, () => publishSnapshot).pipe(
-    Effect.forkScoped,
-  );
   yield* Stream.runForEach(serverSettings.streamChanges, () => publishSnapshot).pipe(
     Effect.forkScoped,
   );
@@ -337,7 +304,6 @@ export const make = Effect.fn("background.policy.make")(function* () {
   return BackgroundPolicy.of({
     reportClientActivity,
     removeRpcClient,
-    reportHostPowerState: hostPowerMonitor.report,
     snapshot,
     streamChanges: Stream.fromPubSub(changes),
     subscribe: subscribeBeforeSnapshot(changes, snapshot, publishMutex),

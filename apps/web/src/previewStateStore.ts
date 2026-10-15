@@ -1,10 +1,3 @@
-/**
- * Per-thread preview UI state.
- *
- * Each thread owns an independent atom. Most consumers read exactly one
- * thread; the desktop browser host uses the aggregate session atom because it
- * is the one place that must enumerate every live preview tab.
- */
 import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
@@ -75,39 +68,7 @@ export const previewStateAtom = Atom.family((threadKey: string) =>
   ),
 );
 
-// Only the Electron browser host needs a cross-thread view. Keep that index
-// separate so thread-local readers never subscribe to unrelated previews.
-interface ActivePreviewThreadIndex {
-  readonly keys: ReadonlySet<string>;
-}
-
-const activePreviewThreadKeysAtom = Atom.make<ActivePreviewThreadIndex>({
-  keys: new Set<string>(),
-}).pipe(Atom.keepAlive, Atom.withLabel("preview:active-thread-keys"));
-
-const activePreviewSessionsAtom = Atom.make((get) => {
-  const byThreadKey: Record<string, ThreadPreviewState> = {};
-  for (const threadKey of get(activePreviewThreadKeysAtom).keys) {
-    const state = get(previewStateAtom(threadKey));
-    if (Object.keys(state.sessions).length > 0) {
-      byThreadKey[threadKey] = state;
-    }
-  }
-  return byThreadKey;
-}).pipe(Atom.withLabel("preview:active-sessions"));
-
 const changedPreviewThreadKeys = new Set<string>();
-
-function syncActivePreviewThread(threadKey: string, state: ThreadPreviewState): void {
-  const active = Object.keys(state.sessions).length > 0;
-  appAtomRegistry.update(activePreviewThreadKeysAtom, (current) => {
-    if (current.keys.has(threadKey) === active) return current;
-    const next = new Set(current.keys);
-    if (active) next.add(threadKey);
-    else next.delete(threadKey);
-    return { keys: next };
-  });
-}
 
 function updateThreadPreviewState(
   ref: ScopedThreadRef,
@@ -115,14 +76,12 @@ function updateThreadPreviewState(
 ): void {
   const threadKey = scopedThreadKey(ref);
   const atom = previewStateAtom(threadKey);
-  let nextState = appAtomRegistry.get(atom);
   const changed = appAtomRegistry.modify(atom, (current) => {
-    nextState = update(current);
+    const nextState = update(current);
     return [nextState !== current, nextState];
   });
   if (!changed) return;
   changedPreviewThreadKeys.add(threadKey);
-  syncActivePreviewThread(threadKey, nextState);
 }
 
 const dedupeRecentUrls = (existing: string[], url: string): string[] => {
@@ -166,10 +125,6 @@ const removeSession = (current: ThreadPreviewState, tabId: string): ThreadPrevie
 export function useThreadPreviewState(ref: ScopedThreadRef | null | undefined): ThreadPreviewState {
   const atom = ref ? previewStateAtom(scopedThreadKey(ref)) : emptyPreviewStateAtom;
   return useAtomValue(atom);
-}
-
-export function useActivePreviewSessions(): Record<string, ThreadPreviewState> {
-  return useAtomValue(activePreviewSessionsAtom);
 }
 
 export function readThreadPreviewState(ref: ScopedThreadRef): ThreadPreviewState {
@@ -501,8 +456,7 @@ export function isPreviewSupportedInRuntime(): boolean {
 }
 
 /**
- * Forgets a deleted thread's previews. The server closes their sessions too,
- * but the desktop host keeps a page for every session held here.
+ * Forgets a deleted thread's previews. The server closes their sessions too.
  */
 export function clearThreadPreviewState(ref: ScopedThreadRef): void {
   updateThreadPreviewState(ref, (current) =>
@@ -515,7 +469,6 @@ export function resetPreviewStateForTests(): void {
     appAtomRegistry.set(previewStateAtom(threadKey), EMPTY_THREAD_PREVIEW_STATE);
   }
   changedPreviewThreadKeys.clear();
-  appAtomRegistry.set(activePreviewThreadKeysAtom, { keys: new Set<string>() });
 }
 
 export const __testing = {
