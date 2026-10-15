@@ -790,9 +790,14 @@ it.effect(
     }).pipe(Effect.scoped),
 );
 
-it.effect.each(["idle", "busy", "newer-revision", "new-settlement"] as const)(
-  "reconciles failed stops only after policy rechecks: %s",
-  (scenario) =>
+it.effect.each(
+  (["idle", "busy", "newer-revision", "new-settlement"] as const).flatMap((scenario) => [
+    { scenario, queued: false },
+    { scenario, queued: true },
+  ]),
+)(
+  "reconciles recoverable stops only after policy rechecks: $scenario queued=$queued",
+  ({ scenario, queued }) =>
     Effect.gen(function* () {
       const h = harness();
       const view = snapshot();
@@ -800,7 +805,7 @@ it.effect.each(["idle", "busy", "newer-revision", "new-settlement"] as const)(
       if (scenario === "busy") view.pendingEffects = true;
       if (scenario === "newer-revision") view.revision = 11;
       h.setSnapshot(view);
-      const failure = new RuntimeClient.RuntimeStopFailed({
+      const failure = new RuntimeClient.RuntimeStopRetry({
         receipt: {
           operationId: "release:workspace:1000",
           revision: 10,
@@ -809,11 +814,13 @@ it.effect.each(["idle", "busy", "newer-revision", "new-settlement"] as const)(
           version: "before",
           acceptedVersion: "accepted",
         },
-        error: { code: "worker_busy", message: "Worker still busy", retryable: true },
+        error: queued
+          ? null
+          : { code: "worker_busy", message: "Worker still busy", retryable: true },
       });
       const policy = yield* Policy.makePolicy({
         ...h.ports,
-        observe: () => Effect.succeed({ kind: "failed-stop", failure }),
+        observe: () => Effect.succeed({ kind: "retryable-stop", failure }),
       });
       expect(yield* policy.reconcileThread(root)).toBe(
         scenario === "idle" ? "release-submitted" : scenario === "busy" ? "busy" : "stale",

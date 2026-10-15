@@ -20,10 +20,14 @@ export const migrate = Effect.gen(function* () {
     yield* sql`ALTER TABLE agent_runtime_workspaces ADD COLUMN pool_id TEXT`;
   if (!columns.some((column) => column.name === "profile_id"))
     yield* sql`ALTER TABLE agent_runtime_workspaces ADD COLUMN profile_id TEXT`;
-  // Old command receipts cannot be replayed against the resource API. Keep those
-  // workspaces enrolled so policy rechecks activity and obtains a fresh version.
-  yield* sql`UPDATE agent_runtime_workspaces SET lifecycle_request_json=NULL, execution_requested=1
-    WHERE lifecycle_request_json IS NOT NULL AND json_type(lifecycle_request_json,'$.version') IS NULL`;
+  // Preserve local completion and settlement evidence, but discard the old
+  // controller payload so a legacy receipt can never be submitted again.
+  yield* sql`UPDATE agent_runtime_workspaces SET lifecycle_request_json=json_object(
+      'legacy',json('true'),'operationId',json_extract(lifecycle_request_json,'$.operationId'),
+      'revision',json_extract(lifecycle_request_json,'$.revision'),'action',json_extract(lifecycle_request_json,'$.action')),
+      execution_requested=1
+    WHERE lifecycle_request_json IS NOT NULL AND json_type(lifecycle_request_json,'$.version') IS NULL
+      AND json_type(lifecycle_request_json,'$.legacy') IS NULL`;
   yield* sql`CREATE TABLE IF NOT EXISTS agent_runtime_thread_bindings (
     thread_id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES agent_runtime_workspaces(workspace_id)

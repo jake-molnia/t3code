@@ -101,7 +101,7 @@ export type RuntimeObservation =
     };
 
 /** Local policy receipt. Only desiredState and the opaque version cross the runtime boundary. */
-export const LifecycleStopReceipt = Schema.Struct({
+const SubmittedStopReceipt = Schema.Struct({
   operationId: Schema.String,
   revision: Schema.Number,
   action: Schema.Literals(["suspend", "release_compute"]),
@@ -109,23 +109,30 @@ export const LifecycleStopReceipt = Schema.Struct({
   version: Schema.String,
   acceptedVersion: Schema.NullOr(Schema.String),
 });
+const LegacyStopReceipt = Schema.Struct({
+  legacy: Schema.Literal(true),
+  operationId: Schema.String,
+  revision: Schema.Number,
+  action: Schema.Literals(["suspend", "release_compute"]),
+});
+export const LifecycleStopReceipt = Schema.Union([SubmittedStopReceipt, LegacyStopReceipt]);
 const decodeStopReceipt = Schema.decodeUnknownEffect(Schema.fromJsonString(LifecycleStopReceipt));
 const encodeStopReceipt = Schema.encodeEffect(Schema.fromJsonString(LifecycleStopReceipt));
 const decodeWorkspace = Schema.decodeUnknownEffect(WorkspaceResource);
 const decodeRuntimeFailure = Schema.decodeUnknownEffect(Schema.Struct({ error: RuntimeFailure }));
 
-export class RuntimeStopFailed extends Schema.TaggedError<RuntimeStopFailed>()(
-  "AgentRuntimeStopFailed",
+export class RuntimeStopRetry extends Schema.TaggedError<RuntimeStopRetry>()(
+  "AgentRuntimeStopRetry",
   {
-    receipt: LifecycleStopReceipt,
-    error: RuntimeFailure,
+    receipt: SubmittedStopReceipt,
+    error: Schema.NullOr(RuntimeFailure),
   },
 ) {}
-const isRuntimeStopFailed = Schema.is(RuntimeStopFailed);
-export function failedStop(error: RuntimeClientError): RuntimeStopFailed | null {
+const isRuntimeStopRetry = Schema.is(RuntimeStopRetry);
+export function retryableStop(error: RuntimeClientError): RuntimeStopRetry | null {
   let cause: unknown = error;
   while (isRuntimeClientError(cause)) cause = cause.cause;
-  return isRuntimeStopFailed(cause) ? cause : null;
+  return isRuntimeStopRetry(cause) ? cause : null;
 }
 
 export type LifecycleStopOptions = {
@@ -417,6 +424,7 @@ export const layer = Layer.effect(
             if (row.receipt !== null) {
               const previous = yield* decodeStopReceipt(row.receipt);
               if (
+                "version" in previous &&
                 previous.operationId === options.operationId &&
                 previous.revision === row.revision &&
                 previous.action === action &&
@@ -451,7 +459,8 @@ export const layer = Layer.effect(
           receipt.acceptedVersion !== null &&
           current.version === receipt.acceptedVersion &&
           current.desiredState === desiredState &&
-          current.state !== "failed"
+          current.state !== "failed" &&
+          current.progress?.step !== "queued"
         )
           return;
         const latest = yield* sql<{
@@ -467,6 +476,7 @@ export const layer = Layer.effect(
         const accepted =
           current.desiredState === desiredState &&
           current.state !== "failed" &&
+          current.progress?.step !== "queued" &&
           ((current.identity === null && current.state === "released") ||
             (current.identity !== null && sameIdentity(current.identity, receipt.expectedIdentity)))
             ? current
@@ -474,7 +484,7 @@ export const layer = Layer.effect(
                 pool,
                 `${pathFor(workspaceId)}/state`,
                 { desiredState },
-                current.state === "failed" &&
+                (current.state === "failed" || current.progress?.step === "queued") &&
                   current.desiredState === desiredState &&
                   current.identity !== null &&
                   sameIdentity(current.identity, receipt.expectedIdentity) &&
@@ -521,16 +531,17 @@ export const layer = Layer.effect(
     const observeWorkspace = (workspaceId: string) =>
       Effect.gen(function* () {
         const pool = yield* placement(workspaceId);
+        const rows = yield* sql<{
+          receipt: string | null;
+          revision: number;
+        }>`SELECT lifecycle_request_json AS receipt, admission_revision AS revision FROM agent_runtime_workspaces WHERE workspace_id=${workspaceId}`;
+        const row = rows[0];
+        const receipt = row?.receipt ? yield* decodeStopReceipt(row.receipt) : null;
         const access = yield* readWorkspace(pool, workspaceId);
         if (
           (access.state === "released" || access.state === "suspended") &&
           access.desiredState === access.state
         ) {
-          const rows = yield* sql<{
-            receipt: string | null;
-          }>`SELECT lifecycle_request_json AS receipt FROM agent_runtime_workspaces WHERE workspace_id=${workspaceId}`;
-          const encoded = rows[0]?.receipt;
-          const receipt = encoded ? yield* decodeStopReceipt(encoded) : null;
           const action = access.state === "released" ? "release_compute" : "suspend";
           return {
             kind: "stopped",
@@ -538,8 +549,10 @@ export const layer = Layer.effect(
             identity: access.identity,
             ...(receipt !== null &&
             receipt.action === action &&
+            row?.revision === receipt.revision &&
             access.desiredState === access.state &&
-            (receipt.acceptedVersion === access.version ||
+            ("legacy" in receipt ||
+              receipt.acceptedVersion === access.version ||
               (receipt.acceptedVersion === null &&
                 access.version !== receipt.version &&
                 (access.state === "released" ||
@@ -556,19 +569,14 @@ export const layer = Layer.effect(
           } as const;
         }
         if (
-          access.state === "failed" &&
+          (access.progress?.step === "queued" ||
+            (access.state === "failed" && access.error?.retryable)) &&
           access.desiredState !== "running" &&
-          access.identity &&
-          access.error?.retryable
+          access.identity
         ) {
-          const rows = yield* sql<{
-            receipt: string | null;
-            revision: number;
-          }>`SELECT lifecycle_request_json AS receipt, admission_revision AS revision FROM agent_runtime_workspaces WHERE workspace_id=${workspaceId}`;
-          const row = rows[0];
-          const receipt = row?.receipt ? yield* decodeStopReceipt(row.receipt) : null;
           if (
             receipt &&
+            "version" in receipt &&
             row?.revision === receipt.revision &&
             sameIdentity(receipt.expectedIdentity, access.identity) &&
             (receipt.action === "suspend" ? "suspended" : "released") === access.desiredState &&
@@ -577,7 +585,7 @@ export const layer = Layer.effect(
           )
             return yield* new RuntimeClientError({
               operation: "observe",
-              cause: new RuntimeStopFailed({ receipt, error: access.error }),
+              cause: new RuntimeStopRetry({ receipt, error: access.error }),
             });
         }
         if (access.state !== "running" || !access.execution)

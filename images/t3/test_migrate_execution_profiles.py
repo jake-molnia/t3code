@@ -134,6 +134,48 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1),7)
         self.assertEqual(writes,['observed','accepted'])
 
+    def test_queued_release_replays_after_submission_failure_and_ledger_reload(self):
+        entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
+        current = self.resource()
+        versions = []
+        submission_available = False
+        def request(pool, path, body=None, **kwargs):
+            if path.endswith('/state'):
+                versions.append(kwargs['version'])
+                self.assertEqual(body, {'desiredState':'released'})
+                if not submission_available:
+                    current.update(desiredState='released',version='queued-version',progress={'step':'queued'},execution=None)
+                    return 503, None
+                current.update(state='released',desiredState='released',version='queued-version',identity=None,progress=None)
+                return 202, dict(current)
+            if path.endswith('/migration'):
+                return 200, {'profile':current['profile'],'profileHash':'hash','revision':11,'epoch':4,'state':'released'}
+            if path == '/v1/profile-migrations':
+                current['profile']='v2'
+                return 200, {}
+            return 200, dict(current)
+        saved = None
+        def persist():
+            nonlocal saved
+            saved = json.dumps(entry)
+        with patch.object(migration, 'request', request), patch.object(migration.time, 'sleep', side_effect=AssertionError('Queued submission must be replayed before waiting')):
+            with self.assertRaisesRegex(migration.MigrationError, '503'):
+                migration.migrate_controller({'id':'pool'},entry,persist,'v1','v2',1)
+            entry = json.loads(saved)
+            submission_available = True
+            self.assertEqual(migration.migrate_controller({'id':'pool'},entry,persist,'v1','v2',1),7)
+        self.assertEqual(versions,['observed','queued-version'])
+
+    def test_failed_release_with_null_error_fails_with_migration_error(self):
+        entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
+        current = self.resource()
+        current.update(state='failed',desiredState='released',error=None)
+        with patch.object(migration, 'request', return_value=(200,current)) as request:
+            with self.assertRaisesRegex(migration.MigrationError, 'not retryable'):
+                migration.migrate_controller({'id':'pool'},entry,lambda:None,'v1','v2',1)
+        self.assertEqual(request.call_args_list[0].args[1], '/v1/workspaces/workspace')
+        self.assertTrue(all(call.kwargs.get('method') != 'PUT' for call in request.call_args_list))
+
     def test_failed_release_is_reported_without_polling_internal_tasks(self):
         entry = {'before': {'workspace_id':'workspace','admission_revision':7}}
         current = self.resource()

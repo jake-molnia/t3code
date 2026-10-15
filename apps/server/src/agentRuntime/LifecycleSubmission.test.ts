@@ -12,6 +12,8 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
 import * as RuntimeSchema from "./Schema.ts";
+import * as Enrollment from "./LifecycleEnrollment.ts";
+import * as Policy from "./LifecyclePolicy.ts";
 
 const identity = Schema.decodeUnknownSync(ExecutionIdentity)({
   workspaceId: "utility-workspace",
@@ -45,7 +47,13 @@ const fixture = Effect.gen(function* () {
     identity,
     execution: { identity, endpoint: "http://worker.test", token: "worker-token" },
   };
-  const control = { fail: false, loseResponse: false, race: false, failAccepted: false };
+  const control = {
+    fail: false,
+    loseResponse: false,
+    race: false,
+    failAccepted: false,
+    failSubmission: false,
+  };
   const http = HttpClient.make((request) =>
     Effect.gen(function* () {
       if (request.method === "PUT" && request.url.endsWith("/state")) {
@@ -77,9 +85,20 @@ const fixture = Effect.gen(function* () {
               { status: 412 },
             ),
           );
+        if (control.failSubmission) {
+          resource = {
+            ...resource,
+            desiredState: update.desiredState,
+            version: "queued-version",
+            progress: { step: "queued", startedAt: "2026-10-15T00:00:00Z" },
+            execution: null,
+          };
+          return HttpClientResponse.fromWeb(request, Response.json({}, { status: 503 }));
+        }
         resource = {
           ...resource,
           desiredState: update.desiredState,
+          progress: null,
           state: control.failAccepted ? "failed" : update.desiredState,
           error: control.failAccepted
             ? { code: "worker_busy", message: "Worker is busy", retryable: true }
@@ -118,6 +137,9 @@ const fixture = Effect.gen(function* () {
     requests,
     control,
     construct,
+    setResource: (next: Partial<typeof resource>) => {
+      resource = { ...resource, ...next };
+    },
     replaceWorker: () => {
       const replacement = {
         ...identity,
@@ -208,7 +230,7 @@ it.layer(services, { excludeTestServices: true })("durable workspace state submi
       f.control.failAccepted = true;
       yield* runtime.stop(f.owner, "suspend", f.options);
       const failed = yield* runtime.observeWorkspace(identity.workspaceId).pipe(Effect.flip);
-      expect(RuntimeClient.failedStop(failed)?.error.code).toBe("worker_busy");
+      expect(RuntimeClient.retryableStop(failed)?.error?.code).toBe("worker_busy");
       f.control.failAccepted = false;
       yield* runtime.stop(f.owner, "suspend", { ...f.options, expectedRevision: 11 });
       expect(f.requests).toEqual([
@@ -233,14 +255,101 @@ it.layer(services, { excludeTestServices: true })("durable workspace state submi
         expect(f.requests).toHaveLength(0);
       }),
   );
-  it.effect("drops legacy command receipts without replaying them", () =>
+  it.effect.each(["suspended", "released"] as const)(
+    "retires an upgraded %s workspace and fences its proof from a later wake",
+    (state) =>
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        const action = state === "suspended" ? "suspend" : "release_compute";
+        const operationId =
+          state === "suspended" ? "idle:legacy" : "release:utility-workspace:1000:legacy";
+        const legacy = JSON.stringify({
+          operationId,
+          revision: 10,
+          action,
+          profile: "old",
+          expectedIncarnation: "old-worker",
+        });
+        yield* f.sql`UPDATE agent_runtime_workspaces SET lifecycle_request_json=${legacy},execution_requested=0`;
+        yield* RuntimeSchema.migrate;
+        f.setResource({ state, desiredState: state, execution: null });
+        const runtime = yield* f.construct();
+        const observed = yield* runtime.observeWorkspace(identity.workspaceId);
+        if (observed.kind !== "stopped" || !observed.completedStop)
+          throw new Error("Missing legacy completion proof");
+        expect(observed.completedStop).toEqual({ operationId, revision: 10, action });
+        yield* Enrollment.retire(identity.workspaceId, 10, observed.completedStop);
+        expect(yield* Enrollment.roots).toEqual([]);
+        yield* RuntimeSchema.migrate;
+        expect(yield* Enrollment.roots).toEqual([]);
+        yield* runtime.forWorkspace(identity.workspaceId);
+        yield* Enrollment.retire(identity.workspaceId, 10, observed.completedStop);
+        expect(yield* Enrollment.roots).toEqual([f.owner]);
+        expect(f.requests).toEqual([{ version: '"initial"', desiredState: "running" }]);
+      }),
+  );
+  it.effect("replays a queued stop after submission failed and central service restarted", () =>
     Effect.gen(function* () {
       const f = yield* fixture;
-      yield* f.sql`UPDATE agent_runtime_workspaces SET lifecycle_request_json='{"operationId":"legacy","revision":10,"action":"suspend"}',execution_requested=0`;
-      yield* RuntimeSchema.migrate;
-      expect(
-        yield* f.sql`SELECT lifecycle_request_json,execution_requested FROM agent_runtime_workspaces`,
-      ).toEqual([{ lifecycle_request_json: null, execution_requested: 1 }]);
-    }),
+      const runtime = yield* f.construct();
+      f.control.failSubmission = true;
+      yield* runtime.stop(f.owner, "suspend", f.options).pipe(Effect.flip);
+      const restarted = yield* f.construct();
+      const observationError = yield* restarted
+        .observeWorkspace(identity.workspaceId)
+        .pipe(Effect.flip);
+      const retry = RuntimeClient.retryableStop(observationError);
+      expect(retry?.error).toBeNull();
+      const read = Effect.gen(function* () {
+        const rows = yield* f.sql<{
+          revision: number;
+        }>`SELECT admission_revision AS revision FROM agent_runtime_workspaces WHERE workspace_id=${identity.workspaceId}`;
+        return {
+          ownerThreadId: f.owner,
+          workspaceId: identity.workspaceId,
+          revision: rows[0]!.revision,
+          kind: "utility" as const,
+          members: [],
+          pendingEffects: false,
+          settleScript: null,
+        };
+      });
+      const policy = yield* Policy.makePolicy({
+        enabled: true,
+        idleMs: 0,
+        roots: Effect.succeed([f.owner]),
+        recoverSettlements: Effect.void,
+        enroll: () => Effect.void,
+        retire: () => Effect.void,
+        read: () => read.pipe(Effect.orDie),
+        observe: () =>
+          restarted.observeWorkspace(identity.workspaceId).pipe(
+            Effect.catchTags({
+              AgentRuntimeClientError: (error) => {
+                const failure = RuntimeClient.retryableStop(error);
+                return failure
+                  ? Effect.succeed({ kind: "retryable-stop" as const, failure })
+                  : Effect.die(error);
+              },
+            }),
+          ),
+        resume: () => Effect.die("Recovery must not wake execution"),
+        collectUsage: () => Effect.die("No worker credentials during queued stop"),
+        stop: (snapshot, action, operationId, expectedIdentity) =>
+          restarted
+            .stop(f.owner, action, {
+              operationId,
+              expectedIdentity,
+              expectedRevision: snapshot.revision,
+            })
+            .pipe(Effect.orDie),
+      });
+      f.control.failSubmission = false;
+      expect(yield* policy.reconcileThread(f.owner)).toBe("suspend-submitted");
+      expect(f.requests).toEqual([
+        { version: '"initial"', desiredState: "suspended" },
+        { version: '"queued-version"', desiredState: "suspended" },
+      ]);
+    }).pipe(Effect.scoped),
   );
 });

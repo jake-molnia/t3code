@@ -93,13 +93,14 @@ def migrate_controller(pool, entry, persist, source, target, timeout):
         if current['version'] not in (receipt['version'], receipt.get('acceptedVersion')):
             raise MigrationError('workspace release superseded')
         if current['state'] == 'failed':
-            if not current.get('error', {}).get('retryable'):
+            if not (current.get('error') or {}).get('retryable'):
                 raise MigrationError('workspace release failed and is not retryable')
             receipt['version'] = current['version']
             receipt.pop('acceptedVersion', None)
             persist()
-        if current['desiredState'] != 'released' or current['state'] == 'failed':
-            code, accepted = request(pool, path + '/state', {'desiredState': 'released'}, method='PUT', version=receipt['version'])
+        if (current['desiredState'] != 'released' or current['state'] == 'failed'
+                or (current.get('progress') or {}).get('step') == 'queued'):
+            code, accepted = request(pool, path + '/state', {'desiredState': 'released'}, method='PUT', version=current['version'])
             if code not in (200, 202):
                 raise MigrationError('release admission rejected (HTTP %s)' % code)
             receipt['acceptedVersion'] = accepted['version']

@@ -153,7 +153,7 @@ export interface LifecyclePolicyPorts {
     workspaceId: string,
   ) => Effect.Effect<
     | RuntimeClient.RuntimeObservation
-    | { kind: "failed-stop"; failure: RuntimeClient.RuntimeStopFailed },
+    | { kind: "retryable-stop"; failure: RuntimeClient.RuntimeStopRetry },
     LifecyclePolicyError
   >;
   readonly resume: (workspaceId: string) => Effect.Effect<ExecutionClient, LifecyclePolicyError>;
@@ -252,7 +252,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
         );
     const initialActivity = yield* activityGuard(snapshot);
     if (initialActivity !== null) return initialActivity;
-    if (observed.kind === "failed-stop") {
+    if (observed.kind === "retryable-stop") {
       if (deferredDecision) return deferredDecision;
       const { receipt } = observed.failure;
       const fresh = yield* ports.read(threadId);
@@ -415,7 +415,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
       return "stale" as const;
     const latest = yield* ports.observe(snapshot.workspaceId);
     if (latest.kind === "stopped") return "stopped" as const;
-    if (latest.kind === "failed-stop") return "stale" as const;
+    if (latest.kind === "retryable-stop") return "stale" as const;
     if (!sameIdentity(client.identity, latest.client.identity)) return "stale" as const;
     const action = settledAt === null ? "suspend" : "release_compute";
     const operationId =
@@ -655,9 +655,9 @@ export const make = Effect.gen(function* () {
       runtime.observeWorkspace(workspaceId).pipe(
         Effect.catchTags({
           AgentRuntimeClientError: (error) => {
-            const failed = RuntimeClient.failedStop(error);
+            const failed = RuntimeClient.retryableStop(error);
             return failed
-              ? Effect.succeed({ kind: "failed-stop" as const, failure: failed })
+              ? Effect.succeed({ kind: "retryable-stop" as const, failure: failed })
               : Effect.fail(error);
           },
         }),
