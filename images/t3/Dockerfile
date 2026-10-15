@@ -54,7 +54,9 @@ RUN mv /usr/local/bin/opencode /usr/local/bin/opencode2 \
     && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
     && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs
+ARG T3_SOURCE_REVISION
 ENV PATH=/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_modules/.bin:/opt/native/bin:$PATH \
+    T3_SOURCE_REVISION=${T3_SOURCE_REVISION} \
     AZURE_EXTENSION_DIR=/opt/azure/extensions AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no AZURE_CORE_COLLECT_TELEMETRY=no \
     T3_WORKSPACE_ROOT=/workspace T3_WORKER_STATE_DIR=/workspace/.t3-worker \
     T3_WORKER_PORT=8083 T3_BROWSER_EXECUTABLE=/usr/bin/chromium \

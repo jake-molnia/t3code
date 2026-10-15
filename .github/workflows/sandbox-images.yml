@@ -78,8 +78,7 @@ jobs:
               labels = config["Labels"]
           assert labels["org.opencontainers.image.revision"] == os.environ["T3_SHA"]
           assert labels["org.opencontainers.image.source"] == "https://github.com/" + os.environ["GITHUB_REPOSITORY"]
-          if os.environ["TARGET"] == "t3-web":
-              assert "T3_SOURCE_REVISION=" + os.environ["T3_SHA"] in config["Env"]
+          assert "T3_SOURCE_REVISION=" + os.environ["T3_SHA"] in config["Env"]
           PYLABEL
           printf 't3=%s\n' "$T3_SHA" > "$RUNNER_TEMP/$TARGET.sources.txt"
           awk '/^FROM ghcr.io\/jake-molnia\/agent-runtime-sandbox@/ {print "runtime_base=" $2}' images/t3/Dockerfile >> "$RUNNER_TEMP/$TARGET.sources.txt"
