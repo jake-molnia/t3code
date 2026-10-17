@@ -244,7 +244,15 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
       at: nowBeforeObservation,
     });
     let observed = yield* ports.observe(snapshot.workspaceId);
-    if (observed.kind === "running")
+    if (observed.kind === "running") {
+      if (snapshot.kind === "utility") {
+        const previous = utilities.get(snapshot.workspaceId);
+        if (!previous || previous.incarnation !== observed.client.identity.incarnation)
+          utilities.set(snapshot.workspaceId, {
+            incarnation: observed.client.identity.incarnation,
+            since: yield* Clock.currentTimeMillis,
+          });
+      }
       yield* ports
         .collectUsage(observed.client, false)
         .pipe(
@@ -252,6 +260,7 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
             Effect.logWarning("Periodic sandbox usage collection failed", { cause }),
           ),
         );
+    }
     const initialActivity = yield* activityGuard(snapshot);
     if (initialActivity !== null) return initialActivity;
     if (observed.kind === "retryable-stop") {
@@ -332,16 +341,10 @@ export const makePolicy = Effect.fn("LifecyclePolicy.makePolicy")(function* (
     }
     const client = observed.client;
     const now = yield* Clock.currentTimeMillis;
-    let activityAt = lastActivity(snapshot);
-    if (snapshot.kind === "utility") {
-      const previous = utilities.get(snapshot.workspaceId);
-      if (!previous || previous.incarnation !== client.identity.incarnation)
-        utilities.set(snapshot.workspaceId, {
-          incarnation: client.identity.incarnation,
-          since: now,
-        });
-      activityAt = utilities.get(snapshot.workspaceId)?.since ?? now;
-    }
+    const activityAt =
+      snapshot.kind === "utility"
+        ? (utilities.get(snapshot.workspaceId)?.since ?? now)
+        : lastActivity(snapshot);
     if (snapshot.pendingEffects || snapshot.members.some(memberIsBusy)) return "busy" as const;
     const settledAt = settlementAt(snapshot);
     if (settledAt === null && now - activityAt < ports.idleMs) return "grace" as const;
