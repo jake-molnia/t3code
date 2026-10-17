@@ -11,4 +11,5 @@ for directory in "$HOME/.agents" "$HOME/.claude"; do
     fi
 done
 /usr/local/bin/t3-configure-git
+python3 /opt/t3/configure-editor.py "$T3_WORKER_STATE_DIR" /opt/code-server/lib/vscode/extensions/t3-sandbox-defaults/package.json
 exec agent-runtime t3-session

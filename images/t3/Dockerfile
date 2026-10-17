@@ -83,10 +83,12 @@ COPY --chmod=755 images/t3/entrypoint.sh /usr/local/bin/t3-worker-entrypoint
 COPY --chmod=755 images/t3/git-credential.py /usr/local/bin/t3-git-credential
 COPY --chmod=755 images/t3/gh-wrapper.py /opt/t3/bin/gh
 COPY --chmod=755 images/t3/configure-git.sh /usr/local/bin/t3-configure-git
+COPY images/t3/configure-editor.py images/t3/test_configure_editor.py /opt/t3/
 COPY images/t3/probe-antigravity.py images/t3/verify-image.mjs images/t3/smoke-worker.py images/t3/smoke-session.py images/t3/test_git_credential.py images/t3/git-credential.py images/t3/configure-git.sh images/t3/gh-wrapper.py images/t3/test_gh_wrapper.py /opt/t3/
 USER 0:0
 WORKDIR /workspace
 RUN mkdir -p "$HOME" "$CODEX_HOME" "$T3_WORKER_STATE_DIR" \
+    && python3 /opt/t3/test_configure_editor.py \
     && python3 /opt/t3/test_git_credential.py && python3 /opt/t3/test_gh_wrapper.py \
     && node /opt/t3/verify-image.mjs && python3 /opt/t3/smoke-worker.py /opt/t3
 EXPOSE 8083
