@@ -824,6 +824,13 @@ it.live.each([
   "configure-gone",
   "configure-unauthorized",
   "configure-malformed",
+  "queued-stop",
+  "queued-stop-receipt",
+  "snapshot-stopped-401",
+  "snapshot-stopping-401",
+  "snapshot-suspending-401",
+  "snapshot-not-ready-401",
+  "snapshot-controller-401",
 ] as const)(
   "handles %s during passive gateway provider polling without waking a utility",
   (scenario) =>
@@ -854,6 +861,7 @@ it.live.each([
       let stage: "ready" | "transition" | "stopped" = "ready";
       let allocations = 0;
       let snapshots = 0;
+      let rejected = false;
       const makeClient = (generation: number) =>
         createExecutionClient({
           identity: {
@@ -888,6 +896,11 @@ it.live.each([
             }
             snapshots++;
             if (stage === "transition") {
+              if (scenario.startsWith("snapshot-") && scenario.endsWith("-401")) {
+                rejected = true;
+                if (scenario === "snapshot-stopped-401") stage = "stopped";
+                return new Response(null, { status: 401 });
+              }
               if (scenario === "malformed-json" || scenario === "malformed-envelope") {
                 stage = "stopped";
                 return scenario === "malformed-json"
@@ -937,7 +950,12 @@ it.live.each([
           scenario === "stale-identity" ||
           scenario === "worker-gone" ||
           scenario === "configure-quiescent" ||
-          scenario === "configure-gone"
+          scenario === "configure-gone" ||
+          scenario === "queued-stop" ||
+          scenario === "queued-stop-receipt" ||
+          scenario === "snapshot-stopped-401" ||
+          scenario === "snapshot-stopping-401" ||
+          scenario === "snapshot-suspending-401"
         ) {
           expect(transition).toEqual(initial);
           expect(stopped).toEqual(initial);
@@ -950,6 +968,7 @@ it.live.each([
           scenario === "not-ready" ||
             scenario === "status-503" ||
             scenario === "unauthorized" ||
+            scenario.startsWith("queued-stop") ||
             scenario.startsWith("configure-")
             ? 1
             : 2,
@@ -959,7 +978,10 @@ it.live.each([
           scenario === "stale-identity" ||
           scenario === "worker-gone" ||
           scenario === "configure-quiescent" ||
-          scenario === "configure-gone"
+          scenario === "configure-gone" ||
+          scenario === "snapshot-stopped-401" ||
+          scenario === "snapshot-stopping-401" ||
+          scenario === "snapshot-suspending-401"
         ) {
           stage = "transition";
           const refreshed = yield* instance.snapshot.refresh;
@@ -984,6 +1006,56 @@ it.live.each([
                 Effect.suspend(
                   (): Effect.Effect<Runtime.RuntimeObservation, Runtime.RuntimeClientError> => {
                     if (stage === "stopped") return Effect.succeed({ kind: "stopped" as const });
+                    if (stage === "transition") {
+                      if (rejected && scenario === "snapshot-suspending-401")
+                        return Effect.fail(
+                          new Runtime.RuntimeClientError({
+                            operation: "observe",
+                            cause: new Runtime.WorkerNotReady({ desiredState: "suspended" }),
+                          }),
+                        );
+                      if (
+                        scenario.startsWith("queued-stop") ||
+                        (rejected && scenario === "snapshot-stopping-401")
+                      )
+                        return Effect.fail(
+                          new Runtime.RuntimeClientError({
+                            operation: "observe",
+                            cause:
+                              scenario === "queued-stop-receipt"
+                                ? new Runtime.RuntimeStopRetry({
+                                    receipt: {
+                                      operationId: "stop",
+                                      revision: 1,
+                                      action: "suspend",
+                                      expectedIdentity: client.identity,
+                                      version: "before",
+                                      acceptedVersion: "queued",
+                                    },
+                                    error: null,
+                                  })
+                                : new Runtime.WorkerStopping(),
+                          }),
+                        );
+                      if (
+                        rejected &&
+                        (scenario === "snapshot-not-ready-401" ||
+                          scenario === "snapshot-controller-401")
+                      )
+                        return Effect.fail(
+                          new Runtime.RuntimeClientError({
+                            operation: "observe",
+                            cause:
+                              scenario === "snapshot-not-ready-401"
+                                ? new Runtime.WorkerNotReady()
+                                : new Runtime.RuntimeClientError({
+                                    operation: "request",
+                                    httpStatus: 401,
+                                    cause: "Controller unauthorized",
+                                  }),
+                          }),
+                        );
+                    }
                     if (stage === "transition" && scenario.startsWith("configure-"))
                       return Effect.succeed({ kind: "running" as const, client: replacement });
                     if (
