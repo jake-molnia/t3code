@@ -24,7 +24,7 @@ export async function readT3ProjectFile(
 ): Promise<T3ProjectFile | null> {
   const result = await executeAtomQuery(
     appAtomRegistry,
-    getProjectFileQueryAtom(environmentId, workspaceRoot, T3_PROJECT_FILE_NAME),
+    getProjectFileQueryAtom(environmentId, workspaceRoot, T3_PROJECT_FILE_NAME, { passive: true }),
     { reportDefect: false, reportFailure: false },
   );
   const data = resolveProjectFileQueryData(
