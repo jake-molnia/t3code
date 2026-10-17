@@ -530,12 +530,13 @@ export const layer = Layer.effect(
       }).pipe(Effect.mapError(failure("remember-session")));
     const observeWorkspace = (workspaceId: string) =>
       Effect.gen(function* () {
-        const pool = yield* placement(workspaceId);
         const rows = yield* sql<{
           receipt: string | null;
           revision: number;
         }>`SELECT lifecycle_request_json AS receipt, admission_revision AS revision FROM agent_runtime_workspaces WHERE workspace_id=${workspaceId}`;
         const row = rows[0];
+        if (!row) return { kind: "stopped" } as const;
+        const pool = yield* placement(workspaceId);
         const receipt = row?.receipt ? yield* decodeStopReceipt(row.receipt) : null;
         const access = yield* readWorkspace(pool, workspaceId);
         if (

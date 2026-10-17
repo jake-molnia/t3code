@@ -162,3 +162,47 @@ it.live.each([
     }
   }).pipe(Effect.scoped, Effect.provide(services)),
 );
+
+it.live(
+  "observing an unregistered workspace does not allocate, register, or call the controller",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* RuntimeSchema.migrate;
+      let requests = 0;
+      const controller = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          listenWorker({
+            host: "127.0.0.1",
+            port: 0,
+            handle: async () => {
+              requests++;
+              return new Response(null, { status: 503 });
+            },
+          }),
+        ),
+        (server) => Effect.promise(server.close),
+      );
+      const runtime = yield* RuntimeClient.RuntimeClient.pipe(
+        Effect.provide(
+          RuntimeClient.layer.pipe(
+            Layer.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown({
+                  AGENT_RUNTIME_URL: `http://127.0.0.1:${controller.port}`,
+                  AGENT_RUNTIME_TOKEN: "test-controller-token",
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+      const before = yield* sql`SELECT total_changes() AS writes`;
+      expect(yield* runtime.observeWorkspace("t3:utility:never-started")).toEqual({
+        kind: "stopped",
+      });
+      expect(yield* sql`SELECT total_changes() AS writes`).toEqual(before);
+      expect(yield* sql`SELECT workspace_id FROM agent_runtime_workspaces`).toEqual([]);
+      expect(requests).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+);
