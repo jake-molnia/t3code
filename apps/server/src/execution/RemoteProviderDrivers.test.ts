@@ -671,24 +671,46 @@ it.live("gateway deployment does not expose or copy native managed account contr
 
 it.live.each([
   {
+    resume: false,
     scenario: "retryable lifecycle failure",
     cause: { code: "lifecycle_failed", message: "private endpoint and token", retryable: true },
     message: "Sandbox startup failed before the execution worker became ready. Retry the turn.",
   },
   {
+    resume: false,
     scenario: "non-retryable lifecycle failure",
     cause: { code: "lifecycle_failed", message: "private endpoint and token", retryable: false },
     message:
       "Sandbox startup failed before the execution worker became ready. Check the execution runtime.",
   },
   {
+    resume: false,
     scenario: "readiness timeout",
     cause: new Cause.TimeoutError(),
     message:
       "Sandbox startup timed out waiting for the execution worker to become ready. Retry the turn.",
   },
   {
+    resume: false,
     scenario: "unknown controller failure",
+    cause: { code: "private", message: "private endpoint and token", retryable: true },
+    message: undefined,
+  },
+  {
+    resume: true,
+    scenario: "retryable lifecycle failure observed during resume",
+    cause: { code: "lifecycle_failed", message: "private endpoint and token", retryable: true },
+    message: "The sandbox reports a failed lifecycle operation. Retry the turn.",
+  },
+  {
+    resume: true,
+    scenario: "non-retryable lifecycle failure observed during resume",
+    cause: { code: "lifecycle_failed", message: "private endpoint and token", retryable: false },
+    message: "The sandbox reports a failed lifecycle operation. Check the execution runtime.",
+  },
+  {
+    resume: true,
+    scenario: "unknown controller failure observed during resume",
     cause: { code: "private", message: "private endpoint and token", retryable: true },
     message: undefined,
   },
@@ -710,10 +732,27 @@ it.live.each([
       config: driver.defaultConfig(),
     });
     const threadId = C.ThreadId.make("failed-startup");
+    const providerSessionId = C.ProviderSessionId.make("failed-session");
     const error = yield* instance.orchestrationAdapter
       .openSession({
         threadId,
-        providerSessionId: C.ProviderSessionId.make("failed-session"),
+        providerSessionId,
+        ...(testCase.resume
+          ? {
+              resumeFromSession: {
+                id: providerSessionId,
+                driver: C.ProviderDriverKind.make("codex"),
+                providerInstanceId: instanceId,
+                status: "ready" as const,
+                cwd: "/workspace/repo",
+                model: "test",
+                capabilities: CodexProviderCapabilitiesV2,
+                createdAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+                updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+                lastError: null,
+              },
+            }
+          : {}),
         modelSelection: { instanceId, model: "test" },
         runtimePolicy: {
           cwd: "/workspace/repo",
@@ -736,16 +775,31 @@ it.live.each([
         Settings.layerTest(),
         Layer.mock(Runtime.RuntimeClient)({
           enabled: true,
-          forThread: () =>
+          observeThread: () =>
             Effect.fail(
               new Runtime.RuntimeClientError({
-                operation: "ensure-running",
+                operation: "observe-thread",
                 cause: new Runtime.RuntimeClientError({
-                  operation: "ensure-running",
-                  cause: testCase.cause,
+                  operation: "observe",
+                  cause: new Runtime.RuntimeClientError({
+                    operation: "observe",
+                    cause: testCase.cause,
+                  }),
                 }),
               }),
             ),
+          forThread: () =>
+            testCase.resume
+              ? Effect.die("Failed observations must not acquire a replacement worker")
+              : Effect.fail(
+                  new Runtime.RuntimeClientError({
+                    operation: "ensure-running",
+                    cause: new Runtime.RuntimeClientError({
+                      operation: "ensure-running",
+                      cause: testCase.cause,
+                    }),
+                  }),
+                ),
         }),
       ),
     ),
