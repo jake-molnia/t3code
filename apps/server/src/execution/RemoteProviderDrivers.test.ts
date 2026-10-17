@@ -808,7 +808,23 @@ it.live.each([
   ),
 );
 
-it.live.each(["not-ready", "status-503", "unauthorized", "gateway-error"] as const)(
+it.live.each([
+  "not-ready",
+  "status-503",
+  "unauthorized",
+  "gateway-error",
+  "gateway-unavailable",
+  "worker-quiescent",
+  "stale-identity",
+  "worker-gone",
+  "snapshot-unauthorized",
+  "malformed-json",
+  "malformed-envelope",
+  "configure-quiescent",
+  "configure-gone",
+  "configure-unauthorized",
+  "configure-malformed",
+] as const)(
   "handles %s during passive gateway provider polling without waking a utility",
   (scenario) =>
     Effect.gen(function* () {
@@ -828,29 +844,75 @@ it.live.each(["not-ready", "status-503", "unauthorized", "gateway-error"] as con
         availability: "available",
       };
       const encoded = yield* encodeProviderSnapshot(available);
+      const unavailable = yield* encodeProviderSnapshot({
+        ...available,
+        status: "error",
+        availability: "unavailable",
+        unavailableReason: "Gateway account revoked",
+        models: [],
+      });
       let stage: "ready" | "transition" | "stopped" = "ready";
       let allocations = 0;
       let snapshots = 0;
-      const client = createExecutionClient({
-        identity: {
-          workspaceId: `t3:utility:${instanceId}`,
-          allocationId: "allocation",
-          generation: 1,
-          incarnation: "worker",
-          podUid: "worker",
-          protocolVersion: 1,
-        },
-        endpoint: "http://worker.test",
-        token: "test-token",
-        fetch: async (_url, init) => {
-          const { method } = decodePollingRequest(init?.body);
-          if (method === "configureProvider") return Response.json({ ok: true, value: null });
-          snapshots++;
-          if (scenario === "gateway-error" && stage === "transition")
-            throw new Error("Gateway account unavailable");
-          return Response.json({ ok: true, value: encoded });
-        },
-      });
+      const makeClient = (generation: number) =>
+        createExecutionClient({
+          identity: {
+            workspaceId: `t3:utility:${instanceId}`,
+            allocationId: "allocation",
+            generation,
+            incarnation: `worker-${generation}`,
+            podUid: "worker",
+            protocolVersion: 1,
+          },
+          endpoint: "http://worker.test",
+          token: "test-token",
+          fetch: async (_url, init) => {
+            const { method } = decodePollingRequest(init?.body);
+            if (method === "configureProvider") {
+              if (stage === "transition") {
+                if (scenario === "configure-quiescent")
+                  return Response.json(
+                    { ok: false, code: "worker_not_admitting" },
+                    { status: 409 },
+                  );
+                if (scenario === "configure-unauthorized")
+                  return new Response(null, { status: 403 });
+                if (scenario === "configure-gone" || scenario === "configure-malformed") {
+                  stage = "stopped";
+                  if (scenario === "configure-malformed")
+                    return Response.json({ unexpected: true });
+                  throw new Error("Worker connection closed");
+                }
+              }
+              return Response.json({ ok: true, value: null });
+            }
+            snapshots++;
+            if (stage === "transition") {
+              if (scenario === "malformed-json" || scenario === "malformed-envelope") {
+                stage = "stopped";
+                return scenario === "malformed-json"
+                  ? new Response("private malformed JSON")
+                  : Response.json({ unexpected: true });
+              }
+              if (scenario === "gateway-unavailable")
+                return Response.json({ ok: true, value: unavailable });
+              if (scenario === "worker-quiescent")
+                return Response.json({ ok: false, code: "worker_quiescent" });
+              if (scenario === "stale-identity")
+                return Response.json({ ok: false, code: "stale_identity" });
+              if (scenario === "snapshot-unauthorized") return new Response(null, { status: 401 });
+              if (scenario === "worker-gone") {
+                stage = "stopped";
+                throw new Error("Worker connection closed");
+              }
+            }
+            if (scenario === "gateway-error" && stage === "transition")
+              throw new Error("Gateway account unavailable");
+            return Response.json({ ok: true, value: encoded });
+          },
+        });
+      const client = makeClient(1);
+      const replacement = makeClient(2);
       yield* Effect.gen(function* () {
         const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
         const driver = drivers.find((entry) => entry.driverKind === "codex");
@@ -868,7 +930,15 @@ it.live.each(["not-ready", "status-503", "unauthorized", "gateway-error"] as con
         const transition = yield* instance.snapshot.getSnapshot;
         stage = "stopped";
         const stopped = yield* instance.snapshot.getSnapshot;
-        if (scenario === "not-ready" || scenario === "status-503") {
+        if (
+          scenario === "not-ready" ||
+          scenario === "status-503" ||
+          scenario === "worker-quiescent" ||
+          scenario === "stale-identity" ||
+          scenario === "worker-gone" ||
+          scenario === "configure-quiescent" ||
+          scenario === "configure-gone"
+        ) {
           expect(transition).toEqual(initial);
           expect(stopped).toEqual(initial);
         } else {
@@ -876,7 +946,26 @@ it.live.each(["not-ready", "status-503", "unauthorized", "gateway-error"] as con
           expect(stopped.availability).toBe("unavailable");
         }
         expect(allocations).toBe(1);
-        expect(snapshots).toBe(scenario === "gateway-error" ? 2 : 1);
+        expect(snapshots).toBe(
+          scenario === "not-ready" ||
+            scenario === "status-503" ||
+            scenario === "unauthorized" ||
+            scenario.startsWith("configure-")
+            ? 1
+            : 2,
+        );
+        if (
+          scenario === "worker-quiescent" ||
+          scenario === "stale-identity" ||
+          scenario === "worker-gone" ||
+          scenario === "configure-quiescent" ||
+          scenario === "configure-gone"
+        ) {
+          stage = "transition";
+          const refreshed = yield* instance.snapshot.refresh;
+          expect(refreshed.availability).toBe("unavailable");
+          expect(allocations).toBe(2);
+        }
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -887,13 +976,20 @@ it.live.each(["not-ready", "status-503", "unauthorized", "gateway-error"] as con
               forUtility: () =>
                 Effect.sync(() => {
                   allocations++;
-                  return client;
+                  return stage === "transition" && scenario.startsWith("configure-")
+                    ? replacement
+                    : client;
                 }),
               observeWorkspace: () =>
                 Effect.suspend(
                   (): Effect.Effect<Runtime.RuntimeObservation, Runtime.RuntimeClientError> => {
                     if (stage === "stopped") return Effect.succeed({ kind: "stopped" as const });
-                    if (stage !== "transition" || scenario === "gateway-error")
+                    if (stage === "transition" && scenario.startsWith("configure-"))
+                      return Effect.succeed({ kind: "running" as const, client: replacement });
+                    if (
+                      stage !== "transition" ||
+                      !["not-ready", "status-503", "unauthorized"].includes(scenario)
+                    )
                       return Effect.succeed({ kind: "running" as const, client });
                     return Effect.fail(
                       new Runtime.RuntimeClientError({

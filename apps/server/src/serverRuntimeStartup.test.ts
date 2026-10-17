@@ -1,3 +1,11 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as WorkspaceRouting from "./agentRuntime/WorkspaceRouting.ts";
+import * as RuntimeClient from "./agentRuntime/RuntimeClient.ts";
+import * as RuntimeSchema from "./agentRuntime/Schema.ts";
+import { createExecutionClient } from "./execution/ExecutionClient.ts";
 import { assert, it } from "@effect/vitest";
 import { DEFAULT_SERVER_SETTINGS, ProjectId } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -181,4 +189,120 @@ it.effect("automatic pull only updates enabled, behind, clean default-branch che
     ).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, git));
     assert.deepStrictEqual(pulled, ["/inherited"]);
   }),
+);
+
+it.live("startup auto-pull observes remote projects without starting their stopped workers", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* RuntimeSchema.migrate;
+    const projects = [
+      ...Array.from({ length: 10 }, (_, i) => `stopped-${i}`),
+      "running",
+      "unavailable",
+    ].map((id) => ({
+      id: ProjectId.make(id),
+      workspaceRoot: `/workspace/${id}/repo`,
+      autoPull: false,
+    }));
+    for (const project of projects) {
+      yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id, owner_thread_id) VALUES (${project.id}, ${project.id})`;
+      yield* sql`INSERT INTO agent_runtime_workspace_paths(virtual_cwd, workspace_id, relative_cwd, utility_key)
+        VALUES (${project.workspaceRoot}, ${project.id}, ${`${project.id}/repo`}, ${`project:${project.id}`})`;
+    }
+    let acquisitions = 0;
+    const observations: string[] = [];
+    const checked: string[] = [];
+    const pulled: string[] = [];
+    const client = createExecutionClient({
+      identity: {
+        workspaceId: "running",
+        allocationId: "allocation",
+        generation: 1,
+        incarnation: "worker",
+        podUid: "pod",
+        protocolVersion: 1,
+      },
+      endpoint: "http://worker.invalid",
+      token: "fixture-token",
+    });
+    const routes = yield* WorkspaceRouting.WorkspaceRouting.pipe(
+      Effect.provide(
+        WorkspaceRouting.layer.pipe(
+          Layer.provide(
+            Layer.mock(RuntimeClient.RuntimeClient)({
+              enabled: true,
+              forWorkspace: () =>
+                Effect.sync(() => {
+                  acquisitions++;
+                  return client;
+                }),
+              observeWorkspace: (id) =>
+                Effect.suspend(() => {
+                  observations.push(id);
+                  if (id === "unavailable")
+                    return Effect.fail(
+                      new RuntimeClient.RuntimeClientError({
+                        operation: "observe",
+                        cause: "fixture unavailable",
+                      }),
+                    );
+                  return Effect.succeed(
+                    id === "running"
+                      ? { kind: "running" as const, client }
+                      : { kind: "stopped" as const },
+                  );
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    yield* ServerRuntimeStartup.autoPullProjects(projects, {
+      ...DEFAULT_SERVER_SETTINGS,
+      defaultAutoPull: true,
+    }).pipe(
+      Effect.provideService(WorkspaceRouting.WorkspaceRouting, routes),
+      Effect.provide(
+        Layer.mock(GitVcsDriver.GitVcsDriver)({
+          statusDetails: (cwd) =>
+            routes.clientForCwd(cwd).pipe(
+              Effect.orDie,
+              Effect.map(() => {
+                checked.push(cwd);
+                return {
+                  isRepo: true,
+                  hasOriginRemote: true,
+                  isDefaultBranch: true,
+                  branch: "main",
+                  upstreamRef: "origin/main",
+                  hasWorkingTreeChanges: false,
+                  workingTree: { files: [], insertions: 0, deletions: 0 },
+                  hasUpstream: true,
+                  aheadCount: 0,
+                  behindCount: 1,
+                  aheadOfDefaultCount: 0,
+                };
+              }),
+            ),
+          pullCurrentBranch: (cwd) =>
+            routes.clientForCwd(cwd).pipe(
+              Effect.orDie,
+              Effect.map(() => {
+                pulled.push(cwd);
+                return { status: "pulled" as const, refName: "main", upstreamRef: "origin/main" };
+              }),
+            ),
+        }),
+      ),
+    );
+    assert.equal(acquisitions, 0);
+    assert.deepStrictEqual(new Set(observations), new Set(projects.map((p) => p.id)));
+    assert.deepStrictEqual(checked, ["/workspace/running/repo"]);
+    assert.deepStrictEqual(pulled, ["/workspace/running/repo"]);
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      NodeSqliteClient.layer({ filename: ":memory:" }).pipe(Layer.provideMerge(NodeServices.layer)),
+    ),
+  ),
 );
