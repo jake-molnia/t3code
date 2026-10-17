@@ -69,6 +69,43 @@ function settingsWithProviderInstances(): UnifiedSettings {
 
 describe("instance-scoped model selection", () => {
   it.each(["pi", "opencode"])(
+    "keeps a hidden gateway model hidden when a saved %s prefix is retired",
+    (driverName) => {
+      const instanceId = ProviderInstanceId.make(`${driverName}_work`);
+      const driver = ProviderDriverKind.make(driverName);
+      const settings: UnifiedSettings = {
+        ...settingsWithProviderInstances(),
+        providerModelPreferences: {
+          [instanceId]: { hiddenModels: ["gateway/gpt-6-luna"], modelOrder: [] },
+        },
+      };
+      for (const prefix of ["aperture", "aperture-chat", "aperture-anthropic"]) {
+        const selection = `${prefix}/gpt-6-luna`;
+        const unavailable = [provider({ provider: driver, instanceId, models: [] })];
+        expect(
+          getAppModelOptionsForInstance(
+            settings,
+            deriveProviderInstanceEntries(unavailable)[0]!,
+            selection,
+          ),
+        ).toEqual([]);
+        expect(
+          resolveAppModelSelectionForInstance(instanceId, settings, unavailable, selection, {
+            preserveUnavailableSelection: true,
+          }),
+        ).toBeNull();
+
+        const native = [provider({ provider: driver, instanceId, models: [selection] })];
+        expect(
+          resolveAppModelSelectionForInstance(instanceId, settings, native, selection, {
+            preserveUnavailableSelection: true,
+          }),
+        ).toBe(selection);
+      }
+    },
+  );
+
+  it.each(["pi", "opencode"])(
     "keeps the saved %s model when its catalog moves to the gateway",
     (driverName) => {
       const instanceId = ProviderInstanceId.make(`${driverName}_work`);
