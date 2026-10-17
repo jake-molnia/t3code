@@ -10,6 +10,7 @@ import { trackRemoteSessionSetup } from "./RemoteSessionSetup.ts";
 import * as AttachmentStaging from "../agentRuntime/AttachmentStaging.ts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as Config from "effect/Config";
+import * as Cause from "effect/Cause";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
@@ -42,7 +43,11 @@ import {
   ConfigureProvider,
 } from "./WorkerProviders.ts";
 import { sameIdentity } from "./ExecutionWorker.ts";
-import type { ExecutionClient } from "./ExecutionClient.ts";
+import {
+  type ExecutionClient,
+  ExecutionOperationError,
+  ExecutionTransportError,
+} from "./ExecutionClient.ts";
 
 const decodeSnapshot = Schema.decodeUnknownEffect(Schema.toCodecJson(C.ServerProvider));
 const isCodexSettings = Schema.is(C.CodexSettings);
@@ -55,6 +60,14 @@ const encodeRpcValueSync = Schema.encodeUnknownSync(Schema.toCodecJson(CommitInp
 const encodeRpcValueSync2 = Schema.encodeUnknownSync(Schema.toCodecJson(PrInput));
 const encodeRpcValueSync3 = Schema.encodeUnknownSync(Schema.toCodecJson(BranchInput));
 const encodeRpcValueSync4 = Schema.encodeUnknownSync(Schema.toCodecJson(TitleInput));
+const isProviderDriverError = Schema.is(ProviderDriverError);
+
+function snapshotExecutionFailure(cause: unknown) {
+  while (Cause.isUnknownError(cause) || isProviderDriverError(cause)) cause = cause.cause;
+  return cause instanceof ExecutionOperationError || cause instanceof ExecutionTransportError
+    ? cause
+    : undefined;
+}
 
 /** Keep upstream driver schemas and metadata; replace only their execution factory. */
 export const makeRemoteDrivers = Effect.gen(function* () {
@@ -363,15 +376,54 @@ export const makeRemoteDrivers = Effect.gen(function* () {
                 );
               if (observation === null || observation.kind === "stopped") return lastSnapshot;
               client = observation.client;
+            }
+            return yield* Effect.gen(function* () {
               if (!configuredUtility || !sameIdentity(configuredUtility, client.identity)) {
                 yield* configure(client, false);
                 configuredUtility = client.identity;
               }
-            }
-            const raw = yield* Effect.tryPromise(() =>
-              client.call(method, { instanceId, input: null }),
+              const raw = yield* Effect.tryPromise(() =>
+                client.call(method, { instanceId, input: null }),
+              );
+              return yield* decodeSnapshot(raw);
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.gen(function* () {
+                  if (wake || lastSnapshot === undefined) return yield* Effect.fail(error);
+                  const executionFailure = snapshotExecutionFailure(error);
+                  if (
+                    (executionFailure instanceof ExecutionOperationError &&
+                      (executionFailure.code === "worker_quiescent" ||
+                        executionFailure.code === "worker_not_admitting" ||
+                        executionFailure.code === "stale_identity")) ||
+                    (executionFailure instanceof ExecutionTransportError &&
+                      executionFailure.code === "identity_changed")
+                  )
+                    return lastSnapshot;
+                  if (
+                    executionFailure instanceof ExecutionTransportError &&
+                    (executionFailure.code === "unavailable" || executionFailure.code === "timeout")
+                  ) {
+                    const latest = yield* runtime
+                      .observeWorkspace(`t3:utility:${instanceId}`)
+                      .pipe(
+                        Effect.catch((cause) =>
+                          Runtime.isWorkerObservationPending(cause)
+                            ? Effect.succeed(null)
+                            : Effect.fail(cause),
+                        ),
+                      );
+                    if (
+                      latest === null ||
+                      latest.kind === "stopped" ||
+                      !sameIdentity(client.identity, latest.client.identity)
+                    )
+                      return lastSnapshot;
+                  }
+                  return yield* Effect.fail(error);
+                }),
+              ),
             );
-            return yield* decodeSnapshot(raw);
           }).pipe(
             Effect.catch(() =>
               lastSnapshot !== undefined && !gatewayManaged

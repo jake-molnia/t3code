@@ -1,11 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Exercise the actual HTTP transport boundary.
 import * as NodeHttp from "node:http";
 import { afterEach, expect, test } from "@effect/vitest";
-import {
-  createExecutionClient,
-  ExecutionOperationError,
-  ExecutionTransportError,
-} from "./ExecutionClient.ts";
+import { createExecutionClient, ExecutionOperationError } from "./ExecutionClient.ts";
 import type { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 
 const identity: ExecutionIdentity = {
@@ -76,13 +72,28 @@ test("worker structured failures retain their operation code without retrying mu
   expect(requests).toBe(2);
 });
 
-test("invalid JSON and authorization responses are bounded transport failures", async () => {
-  const client = await fixture((request, response) => {
-    response.writeHead(request.url === "/v1/transient" ? 403 : 200);
-    response.end("private invalid response");
+test.each(["private invalid response", JSON.stringify({ unexpected: "private body" })])(
+  "invalid response %s stays distinct from availability and authorization failures",
+  async (body) => {
+    const client = await fixture((request, response) => {
+      response.writeHead(request.url === "/v1/transient" ? 403 : 200);
+      response.end(body);
+    });
+    await expect(client.call("preview.start", {})).rejects.toMatchObject({
+      code: "protocol",
+      message: "Worker transport protocol",
+    });
+    await expect(client.transient("fs.read", {})).rejects.toMatchObject({ code: "authorization" });
+  },
+);
+
+test("a disconnected response body remains a transport availability failure", async () => {
+  const client = await fixture((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.write('{"ok":true,"value":');
+    setImmediate(() => response.destroy());
   });
-  await expect(client.call("preview.start", {})).rejects.toBeInstanceOf(ExecutionTransportError);
-  await expect(client.transient("fs.read", {})).rejects.toMatchObject({ code: "authorization" });
+  await expect(client.call("provider.snapshot", {})).rejects.toMatchObject({ code: "unavailable" });
 });
 
 test.each([false, true])(

@@ -26,8 +26,8 @@ export class ExecutionOperationError extends Error {
 }
 
 export class ExecutionTransportError extends Error {
-  readonly code: "unavailable" | "identity_changed" | "authorization" | "timeout";
-  constructor(code: "unavailable" | "identity_changed" | "authorization" | "timeout") {
+  readonly code: "unavailable" | "identity_changed" | "authorization" | "timeout" | "protocol";
+  constructor(code: "unavailable" | "identity_changed" | "authorization" | "timeout" | "protocol") {
     super(`Worker transport ${code}`);
     this.code = code;
   }
@@ -69,6 +69,8 @@ export function createExecutionClient(options: {
     } catch (error) {
       if (error instanceof ExecutionOperationError || error instanceof ExecutionTransportError)
         throw error;
+      if (error instanceof SyntaxError || Schema.isSchemaError(error))
+        throw new ExecutionTransportError("protocol");
       throw new ExecutionTransportError(deadline.signal.aborted ? "timeout" : "unavailable");
     } finally {
       clearTimeout(timer);
