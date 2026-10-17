@@ -818,6 +818,26 @@ export function resolveSendEnvMode(input: {
   return input.isGitRepo ? input.requestedEnvMode : "local";
 }
 
+export function resolveWorktreeBootstrap(input: {
+  isFirstMessage: boolean;
+  envMode: DraftThreadEnvMode;
+  worktreePath: string | null;
+  branch: string | null;
+  projectCwd: string;
+  startFromOrigin: boolean;
+}) {
+  if (!input.isFirstMessage || input.envMode !== "worktree" || input.worktreePath || !input.branch)
+    return null;
+  return {
+    prepareWorktree: {
+      projectCwd: input.projectCwd,
+      baseBranch: input.branch,
+      ...(input.startFromOrigin ? { startFromOrigin: true } : {}),
+    },
+    runSetupScript: true,
+  };
+}
+
 export function resolveBackgroundDraftWorkspaceOptions(input: {
   envMode: DraftThreadEnvMode;
   branch: string | null;

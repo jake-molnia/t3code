@@ -29,6 +29,21 @@ afterEach(() => {
 });
 
 describe("new chat project defaults", () => {
+  it("cancels an abandoned defaults wait without cancelling another reader", async () => {
+    mocks.optimisticFile.mockReturnValue(Atom.make(null));
+    const pending = Atom.make<AsyncResult.AsyncResult<ProjectReadFileResult>>(
+      AsyncResult.initial(true),
+    );
+    mocks.readFile.mockReturnValue(pending);
+    const controller = new AbortController();
+    const abandoned = readT3ProjectFile(environmentId, "/repo", { signal: controller.signal });
+    const current = readT3ProjectFile(environmentId, "/repo");
+    controller.abort();
+    expect(await abandoned).toBeNull();
+    appAtomRegistry.set(pending, AsyncResult.success(projectFile));
+    expect(await current).toEqual({ defaultThreadEnvMode: "worktree" });
+  });
+
   it("reuses warm passive defaults and honors a shared query refresh", async () => {
     mocks.optimisticFile.mockReturnValue(Atom.make(null));
     let file = projectFile;

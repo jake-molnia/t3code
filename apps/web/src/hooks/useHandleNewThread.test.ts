@@ -199,20 +199,23 @@ describe.each([
     },
   ],
 ])("useNewThreadHandler with a %s draft", (_, draft) => {
-  it("keeps navigation pending until uncached project defaults settle", async () => {
+  it("opens the draft with pending defaults without awaiting the project file", async () => {
     testState.reset(draft, { envMode: null, startFromOrigin: false });
-    const pendingOpen = useNewThreadHandler()({
+    const opening = useNewThreadHandler()({
       environmentId: "environment-ssh",
       projectId: "project-remote",
     } as never);
-
-    await Promise.resolve();
-    expect(testState.router.navigate).not.toHaveBeenCalled();
-    expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
-
+    const hrefBeforeDefaults = testState.router.state.location.href;
     testState.completeProjectFileRead(null);
-    const opened = await pendingOpen;
-    expect(testState.router.state.location.href).toBe(`/draft/${opened!.draftId}`);
+    const opened = await opening;
+
+    expect(hrefBeforeDefaults).toBe(`/draft/${opened!.draftId}`);
+    expect(testState.draftStore.setLogicalProjectDraftThreadId).toHaveBeenCalledWith(
+      "remote-project",
+      expect.anything(),
+      opened!.draftId,
+      expect.objectContaining({ pendingWorkspaceDefaults: {} }),
+    );
   });
 
   it("opens with configured defaults while the project file is unavailable", async () => {
@@ -247,21 +250,18 @@ describe.each([
     },
   );
 
-  it("abandons a delayed draft open when the user navigates elsewhere", async () => {
-    testState.reset(draft);
-    const openThread = useNewThreadHandler();
-    const pendingOpen = openThread(
+  it("does not navigate again when the old project file read settles", async () => {
+    testState.reset(draft, { envMode: null, startFromOrigin: false });
+    await useNewThreadHandler()(
       { environmentId: "environment-ssh", projectId: "project-remote" } as never,
       { replace: true },
     );
-
+    testState.router.navigate.mockClear();
     testState.router.state.location.href = "/usage";
     testState.completeProjectFileRead(null);
-    await pendingOpen;
-
+    await Promise.resolve();
     expect(testState.router.state.location.href).toBe("/usage");
     expect(testState.router.navigate).not.toHaveBeenCalled();
-    expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
   });
 
   it.each([true, false])(

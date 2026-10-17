@@ -15,7 +15,7 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
  * Imperative counterpart to `useT3ProjectFileState` for the new-thread path,
  * which resolves defaults at call time rather than render time. The passive
  * file query shares the render-time cache and never starts a worker.
- * Cold or revalidating reads still wait for observation before navigation. Optimistic
+ * Cold or revalidating reads wait for observation. Optimistic
  * in-app writes are available immediately and overlay any in-flight result,
  * matching what `useProjectFileQuery` renders. Missing, truncated, or invalid
  * files resolve to null.
@@ -23,6 +23,7 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
 export async function readT3ProjectFile(
   environmentId: EnvironmentId,
   workspaceRoot: string,
+  options?: { signal?: AbortSignal },
 ): Promise<T3ProjectFile | null> {
   const optimistic = getOptimisticProjectFileQueryData(
     environmentId,
@@ -35,7 +36,7 @@ export async function readT3ProjectFile(
   const result = await executeAtomQuery(
     appAtomRegistry,
     getProjectFileQueryAtom(environmentId, workspaceRoot, T3_PROJECT_FILE_NAME, { passive: true }),
-    { reportDefect: false, reportFailure: false },
+    { reportDefect: false, reportFailure: false, ...options },
   );
   const data = resolveProjectFileQueryData(
     environmentId,
