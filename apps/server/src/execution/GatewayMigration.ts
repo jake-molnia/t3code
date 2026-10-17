@@ -4,13 +4,7 @@ import {
   type ServerSettings,
   type ModelSelection,
 } from "@t3tools/contracts";
-
-/** Retired provider prefixes name the same gateway models. */
-export function migrateGatewayModelId(driver: string, model: string): string {
-  return driver === "opencode" || driver === "pi"
-    ? model.replace(/^aperture(?:-chat|-anthropic)?\//, "gateway/")
-    : model;
-}
+import { migrateGatewayModelId } from "@t3tools/shared/model";
 
 /** Translate saved selections at execution time; historical events retain their original IDs. */
 export function migrateGatewayModelSelection(

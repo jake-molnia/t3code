@@ -68,6 +68,64 @@ function settingsWithProviderInstances(): UnifiedSettings {
 }
 
 describe("instance-scoped model selection", () => {
+  it.each(["pi", "opencode"])(
+    "keeps the saved %s model when its catalog moves to the gateway",
+    (driverName) => {
+      const instanceId = ProviderInstanceId.make(`${driverName}_work`);
+      const driver = ProviderDriverKind.make(driverName);
+      const providers = [
+        provider({
+          provider: driver,
+          instanceId,
+          models: ["gateway/gpt-5.5", "gateway/gpt-6-luna"],
+        }),
+      ];
+      for (const prefix of ["aperture", "aperture-chat", "aperture-anthropic"]) {
+        const selection = createModelSelection(instanceId, `${prefix}/gpt-6-luna`);
+        for (const draft of [
+          undefined,
+          { activeProvider: instanceId, modelSelectionByProvider: { [instanceId]: selection } },
+        ]) {
+          const state = deriveEffectiveComposerModelState({
+            draft,
+            providers,
+            selectedProvider: driver,
+            selectedInstanceId: instanceId,
+            threadModelSelection: selection,
+            projectModelSelection: null,
+            settings: settingsWithProviderInstances(),
+          });
+          expect(state.selectedModel).toBe("gateway/gpt-6-luna");
+          const entry = deriveProviderInstanceEntries(providers)[0]!;
+          expect(
+            getAppModelOptionsForInstance(settingsWithProviderInstances(), entry, selection.model),
+          ).not.toContainEqual(expect.objectContaining({ isUnavailable: true }));
+        }
+        const missingProviders = [
+          provider({ provider: driver, instanceId, models: ["gateway/gpt-5.5"] }),
+        ];
+        expect(
+          deriveEffectiveComposerModelState({
+            draft: undefined,
+            providers: missingProviders,
+            selectedProvider: driver,
+            selectedInstanceId: instanceId,
+            threadModelSelection: selection,
+            projectModelSelection: null,
+            settings: settingsWithProviderInstances(),
+          }).selectedModel,
+        ).toBe(selection.model);
+        expect(
+          getAppModelOptionsForInstance(
+            settingsWithProviderInstances(),
+            deriveProviderInstanceEntries(missingProviders)[0]!,
+            selection.model,
+          ),
+        ).toContainEqual(expect.objectContaining({ slug: selection.model, isUnavailable: true }));
+      }
+    },
+  );
+
   it("preserves server-provided legacy model metadata", () => {
     const baseProvider = provider({
       instanceId: "claudeAgent",

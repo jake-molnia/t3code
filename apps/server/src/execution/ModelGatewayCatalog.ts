@@ -12,7 +12,8 @@ import type {
   ServerProvider,
   ServerProviderModel,
 } from "@t3tools/contracts";
-import { migrateGatewayModelId, migrateGatewayModelSelection } from "./GatewayMigration.ts";
+import { migrateGatewayModelId } from "@t3tools/shared/model";
+import { migrateGatewayModelSelection } from "./GatewayMigration.ts";
 
 // The pinned proxy patch preserves known input modalities alongside model identities.
 export const Catalog = Schema.Struct({
