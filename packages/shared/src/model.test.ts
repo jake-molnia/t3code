@@ -20,6 +20,7 @@ import {
   normalizeCustomModelSlug,
   normalizeModelSlug,
   modelSelectionsEqual,
+  resolveSelectableModel,
 } from "./model.ts";
 
 it("keeps the Codex catalog display formatting", () => {
@@ -62,6 +63,23 @@ const codexCaps: ModelCapabilities = createModelCapabilities({
 });
 
 describe("model slug normalization", () => {
+  it.each(["pi", "opencode"])(
+    "resolves retired prefixes only against the %s catalog",
+    (driverName) => {
+      const driver = ProviderDriverKind.make(driverName);
+      const gateway = { slug: "gateway/gpt-6-luna", name: "gpt-6-luna" };
+      for (const prefix of ["aperture", "aperture-chat", "aperture-anthropic"]) {
+        const legacy = { slug: `${prefix}/gpt-6-luna`, name: "Legacy model" };
+        expect(resolveSelectableModel(driver, legacy.slug, [gateway])).toBe(gateway.slug);
+        expect(resolveSelectableModel(driver, legacy.slug, [legacy, gateway])).toBe(legacy.slug);
+        expect(resolveSelectableModel(driver, legacy.slug, [])).toBeNull();
+        expect(
+          resolveSelectableModel(ProviderDriverKind.make("codex"), legacy.slug, [gateway]),
+        ).toBeNull();
+      }
+    },
+  );
+
   it("preserves exact custom slugs instead of expanding provider aliases", () => {
     // Claude aliases now resolve through the model catalog (#9084), so the
     // provider alias table passes unknown slugs through unchanged.

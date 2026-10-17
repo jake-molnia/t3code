@@ -81,16 +81,20 @@ const isRuntimeFailure = Schema.is(RuntimeFailure);
 export function runtimeStartupMessage(error: unknown): string | undefined {
   let cause = error;
   let starting = false;
+  let observing = false;
   while (isRuntimeClientError(cause)) {
     starting ||= cause.operation === "ensure-running";
+    observing ||= cause.operation === "observe";
     cause = cause.cause;
   }
-  if (!starting) return undefined;
-  if (Cause.isTimeoutError(cause))
+  if (!starting && !observing) return undefined;
+  if (starting && Cause.isTimeoutError(cause))
     return "Sandbox startup timed out waiting for the execution worker to become ready. Retry the turn.";
   if (isRuntimeFailure(cause) && cause.code === "lifecycle_failed")
     return (
-      "Sandbox startup failed before the execution worker became ready." +
+      (starting
+        ? "Sandbox startup failed before the execution worker became ready."
+        : "The sandbox reports a failed lifecycle operation.") +
       (cause.retryable ? " Retry the turn." : " Check the execution runtime.")
     );
   return undefined;

@@ -11,6 +11,7 @@ import {
 import {
   type CustomModelDefinition,
   createModelSelection,
+  migrateGatewayModelId,
   normalizeCustomModelSlug,
   readCustomModelEntries,
   resolveSelectableModel,
@@ -82,6 +83,15 @@ export interface AppModelOption {
   isUnavailable?: boolean;
 }
 
+function isHiddenDynamicModelSelection(
+  provider: ProviderDriverKind,
+  slug: string,
+  hiddenModels: ReadonlyArray<string>,
+): boolean {
+  const migrated = migrateGatewayModelId(provider, slug);
+  return hiddenModels.some((hidden) => migrateGatewayModelId(provider, hidden) === migrated);
+}
+
 function appendUnavailableDynamicModelSelection(
   options: AppModelOption[],
   rawModels: ReadonlyArray<ServerProvider["models"][number]>,
@@ -89,7 +99,7 @@ function appendUnavailableDynamicModelSelection(
   selectedModel: string | null | undefined,
   hiddenModels: ReadonlyArray<string>,
 ): AppModelOption[] {
-  if (provider !== "opencode" && provider !== "antigravity") return options;
+  if (provider !== "opencode" && provider !== "pi" && provider !== "antigravity") return options;
   const slug = normalizeCustomModelSlug(selectedModel);
   if (!slug) return options;
   if (provider === "antigravity" && slug === ANTIGRAVITY_DEFAULT_MODEL) return options;
@@ -97,7 +107,7 @@ function appendUnavailableDynamicModelSelection(
   // A model that exists in the raw catalog can be absent from `options`
   // because the user hid it. Keep that preference authoritative.
   if (resolveSelectableModel(provider, slug, rawModels) !== null) return options;
-  if (hiddenModels.includes(slug)) return options;
+  if (isHiddenDynamicModelSelection(provider, slug, hiddenModels)) return options;
   if (options.some((option) => option.slug === slug)) return options;
 
   return [...options, { slug, name: slug, isCustom: false, isUnavailable: true }];
@@ -296,13 +306,15 @@ export function resolveAppModelSelectionForInstance(
   }
   if (
     resolutionOptions?.preserveUnavailableSelection &&
-    (entry.driverKind === "opencode" || entry.driverKind === "antigravity")
+    (entry.driverKind === "opencode" ||
+      entry.driverKind === "pi" ||
+      entry.driverKind === "antigravity")
   ) {
     const unavailableSelection = normalizeCustomModelSlug(selectedModel);
     const hiddenModels = readInstanceModelPreferences(settings, entry.instanceId).hiddenModels;
     if (
       unavailableSelection &&
-      !hiddenModels.includes(unavailableSelection) &&
+      !isHiddenDynamicModelSelection(entry.driverKind, unavailableSelection, hiddenModels) &&
       resolveSelectableModel(entry.driverKind, selectedModel, entry.models) === null &&
       (entry.driverKind !== "antigravity" || unavailableSelection !== ANTIGRAVITY_DEFAULT_MODEL)
     ) {

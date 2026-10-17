@@ -344,6 +344,13 @@ export function normalizeModelSlug(
   return typeof aliased === "string" ? aliased : trimmed;
 }
 
+/** Retired provider prefixes name the same gateway models. */
+export function migrateGatewayModelId(driver: string, model: string): string {
+  return driver === "opencode" || driver === "pi"
+    ? model.replace(/^aperture(?:-chat|-anthropic)?\//, "gateway/")
+    : model;
+}
+
 /** Custom model identifiers are provider-owned, so only trim them; never expand aliases. */
 export function normalizeCustomModelSlug(model: string | null | undefined): string | null {
   if (typeof model !== "string") {
@@ -455,7 +462,8 @@ export function resolveSelectableModel(
   }
 
   const resolved = options.find((option) => option.slug === normalized);
-  return resolved ? resolved.slug : null;
+  const migrated = migrateGatewayModelId(provider, normalized);
+  return resolved?.slug ?? options.find((option) => option.slug === migrated)?.slug ?? null;
 }
 
 /** Trim a string, returning null for empty/missing values. */

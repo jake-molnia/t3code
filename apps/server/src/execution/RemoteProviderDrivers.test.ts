@@ -20,6 +20,8 @@ import { makeRemoteDrivers } from "./RemoteProviderDrivers.ts";
 import { makeProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
 import { harnessDefaults } from "./HarnessDefaults.ts";
 
+const encodeProviderSnapshot = Schema.encodeEffect(Schema.toCodecJson(C.ServerProvider));
+
 const decodePollingRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ method: Schema.String })),
 );
@@ -671,24 +673,46 @@ it.live("gateway deployment does not expose or copy native managed account contr
 
 it.live.each([
   {
+    resume: false,
     scenario: "retryable lifecycle failure",
     cause: { code: "lifecycle_failed", message: "private endpoint and token", retryable: true },
     message: "Sandbox startup failed before the execution worker became ready. Retry the turn.",
   },
   {
+    resume: false,
     scenario: "non-retryable lifecycle failure",
     cause: { code: "lifecycle_failed", message: "private endpoint and token", retryable: false },
     message:
       "Sandbox startup failed before the execution worker became ready. Check the execution runtime.",
   },
   {
+    resume: false,
     scenario: "readiness timeout",
     cause: new Cause.TimeoutError(),
     message:
       "Sandbox startup timed out waiting for the execution worker to become ready. Retry the turn.",
   },
   {
+    resume: false,
     scenario: "unknown controller failure",
+    cause: { code: "private", message: "private endpoint and token", retryable: true },
+    message: undefined,
+  },
+  {
+    resume: true,
+    scenario: "retryable lifecycle failure observed during resume",
+    cause: { code: "lifecycle_failed", message: "private endpoint and token", retryable: true },
+    message: "The sandbox reports a failed lifecycle operation. Retry the turn.",
+  },
+  {
+    resume: true,
+    scenario: "non-retryable lifecycle failure observed during resume",
+    cause: { code: "lifecycle_failed", message: "private endpoint and token", retryable: false },
+    message: "The sandbox reports a failed lifecycle operation. Check the execution runtime.",
+  },
+  {
+    resume: true,
+    scenario: "unknown controller failure observed during resume",
     cause: { code: "private", message: "private endpoint and token", retryable: true },
     message: undefined,
   },
@@ -710,10 +734,27 @@ it.live.each([
       config: driver.defaultConfig(),
     });
     const threadId = C.ThreadId.make("failed-startup");
+    const providerSessionId = C.ProviderSessionId.make("failed-session");
     const error = yield* instance.orchestrationAdapter
       .openSession({
         threadId,
-        providerSessionId: C.ProviderSessionId.make("failed-session"),
+        providerSessionId,
+        ...(testCase.resume
+          ? {
+              resumeFromSession: {
+                id: providerSessionId,
+                driver: C.ProviderDriverKind.make("codex"),
+                providerInstanceId: instanceId,
+                status: "ready" as const,
+                cwd: "/workspace/repo",
+                model: "test",
+                capabilities: CodexProviderCapabilitiesV2,
+                createdAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+                updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+                lastError: null,
+              },
+            }
+          : {}),
         modelSelection: { instanceId, model: "test" },
         runtimePolicy: {
           cwd: "/workspace/repo",
@@ -736,18 +777,142 @@ it.live.each([
         Settings.layerTest(),
         Layer.mock(Runtime.RuntimeClient)({
           enabled: true,
-          forThread: () =>
+          observeThread: () =>
             Effect.fail(
               new Runtime.RuntimeClientError({
-                operation: "ensure-running",
+                operation: "observe-thread",
                 cause: new Runtime.RuntimeClientError({
-                  operation: "ensure-running",
-                  cause: testCase.cause,
+                  operation: "observe",
+                  cause: new Runtime.RuntimeClientError({
+                    operation: "observe",
+                    cause: testCase.cause,
+                  }),
                 }),
               }),
             ),
+          forThread: () =>
+            testCase.resume
+              ? Effect.die("Failed observations must not acquire a replacement worker")
+              : Effect.fail(
+                  new Runtime.RuntimeClientError({
+                    operation: "ensure-running",
+                    cause: new Runtime.RuntimeClientError({
+                      operation: "ensure-running",
+                      cause: testCase.cause,
+                    }),
+                  }),
+                ),
         }),
       ),
     ),
   ),
+);
+
+it.live.each(["not-ready", "status-503", "unauthorized", "gateway-error"] as const)(
+  "handles %s during passive gateway provider polling without waking a utility",
+  (scenario) =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("gateway-idle");
+      const available: C.ServerProvider = {
+        instanceId,
+        driver: C.ProviderDriverKind.make("codex"),
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-10-17T00:00:00.000Z",
+        models: [{ slug: "gateway/gpt", name: "GPT", isCustom: false, capabilities: null }],
+        slashCommands: [],
+        skills: [],
+        availability: "available",
+      };
+      const encoded = yield* encodeProviderSnapshot(available);
+      let stage: "ready" | "transition" | "stopped" = "ready";
+      let allocations = 0;
+      let snapshots = 0;
+      const client = createExecutionClient({
+        identity: {
+          workspaceId: `t3:utility:${instanceId}`,
+          allocationId: "allocation",
+          generation: 1,
+          incarnation: "worker",
+          podUid: "worker",
+          protocolVersion: 1,
+        },
+        endpoint: "http://worker.test",
+        token: "test-token",
+        fetch: async (_url, init) => {
+          const { method } = decodePollingRequest(init?.body);
+          if (method === "configureProvider") return Response.json({ ok: true, value: null });
+          snapshots++;
+          if (scenario === "gateway-error" && stage === "transition")
+            throw new Error("Gateway account unavailable");
+          return Response.json({ ok: true, value: encoded });
+        },
+      });
+      yield* Effect.gen(function* () {
+        const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
+        const driver = drivers.find((entry) => entry.driverKind === "codex");
+        if (!driver) throw new Error("Missing Codex");
+        const instance = yield* driver.create({
+          instanceId,
+          displayName: undefined,
+          environment: [],
+          enabled: true,
+          config: driver.defaultConfig(),
+        });
+        const initial = yield* instance.snapshot.getSnapshot;
+        expect(initial.availability).toBe("available");
+        stage = "transition";
+        const transition = yield* instance.snapshot.getSnapshot;
+        stage = "stopped";
+        const stopped = yield* instance.snapshot.getSnapshot;
+        if (scenario === "not-ready" || scenario === "status-503") {
+          expect(transition).toEqual(initial);
+          expect(stopped).toEqual(initial);
+        } else {
+          expect(transition.availability).toBe("unavailable");
+          expect(stopped.availability).toBe("unavailable");
+        }
+        expect(allocations).toBe(1);
+        expect(snapshots).toBe(scenario === "gateway-error" ? 2 : 1);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Settings.layerTest(),
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ T3_GATEWAY_API_KEY: "gateway-key" })),
+            Layer.mock(Runtime.RuntimeClient)({
+              enabled: true,
+              forUtility: () =>
+                Effect.sync(() => {
+                  allocations++;
+                  return client;
+                }),
+              observeWorkspace: () =>
+                Effect.suspend(
+                  (): Effect.Effect<Runtime.RuntimeObservation, Runtime.RuntimeClientError> => {
+                    if (stage === "stopped") return Effect.succeed({ kind: "stopped" as const });
+                    if (stage !== "transition" || scenario === "gateway-error")
+                      return Effect.succeed({ kind: "running" as const, client });
+                    return Effect.fail(
+                      new Runtime.RuntimeClientError({
+                        operation: "observe-workspace",
+                        cause:
+                          scenario === "not-ready"
+                            ? new Runtime.WorkerNotReady()
+                            : new Runtime.RuntimeClientError({
+                                operation: "request",
+                                httpStatus: scenario === "status-503" ? 503 : 401,
+                                cause: "Controller unavailable",
+                              }),
+                      }),
+                    );
+                  },
+                ),
+            }),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped),
 );
