@@ -108,7 +108,9 @@ export const makeRemoteDrivers = Effect.gen(function* () {
         const adapterFailure = (cause: unknown) =>
           new A.ProviderAdapterProtocolError({
             driver: driver.driverKind,
-            detail: "Remote provider unavailable",
+            detail:
+              Runtime.runtimeStartupMessage(cause)?.replace(/\.$/, "") ??
+              "Remote provider unavailable",
             cause,
           });
         const configure = (

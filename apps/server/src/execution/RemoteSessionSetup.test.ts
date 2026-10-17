@@ -158,4 +158,23 @@ describe("resumed sandbox setup", () => {
       expect(snapshot?.error).toBe("Sandbox execution could not start. Retry the turn.");
     }),
   );
+  it.effect(
+    "identifies agent startup failure after sandbox readiness without leaking details",
+    () =>
+      Effect.gen(function* () {
+        const tracker = yield* WorktreeSetupTracker.make;
+        yield* trackRemoteSessionSetup({
+          tracker,
+          threadId,
+          acquire: Effect.void,
+          open: () => Effect.fail("private credentials"),
+        }).pipe(Effect.flip);
+        const snapshot = yield* tracker.get(threadId);
+        expect(snapshot?.phase).toBe("failed");
+        expect(snapshot?.stages.map((stage) => stage.status)).toEqual(["done", "failed"]);
+        expect(snapshot?.error).toBe(
+          "The sandbox is ready, but the agent could not start. Retry the turn.",
+        );
+      }),
+  );
 });
