@@ -44,6 +44,7 @@ import {
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolvePendingHandoff } from "@t3tools/client-runtime/handoff";
+import { resolveLatestWorktreeSetup } from "@t3tools/client-runtime/worktree-setup";
 import { HandoffRow } from "./chat/V2LifecycleRow";
 import {
   codexFeedbackMessage,
@@ -3788,10 +3789,7 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     if (!latestWorktreeSetup) return;
     setHeldWorktreeSetup((current) =>
-      current?.threadId === latestWorktreeSetup.threadId &&
-      current.sequence > latestWorktreeSetup.sequence
-        ? current
-        : latestWorktreeSetup,
+      resolveLatestWorktreeSetup({ latest: latestWorktreeSetup, previous: current }),
     );
   }, [latestWorktreeSetup]);
   useEffect(() => {

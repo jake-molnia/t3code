@@ -25,7 +25,10 @@ import {
   type RunId,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
-import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import {
+  resolveLatestWorktreeSetup,
+  worktreeSetupAgentStarted,
+} from "@t3tools/client-runtime/worktree-setup";
 import * as DateTime from "effect/DateTime";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
@@ -270,7 +273,7 @@ export function resolveWorktreeSetupProgress(input: {
 }) {
   const latest = input.latest?.threadId === input.threadId ? input.latest : null;
   const held = input.held?.threadId === input.threadId ? input.held : null;
-  const snapshot = latest && (!held || latest.sequence >= held.sequence) ? latest : held;
+  const snapshot = resolveLatestWorktreeSetup({ latest, previous: held });
   return {
     snapshot,
     isPreparingWorktree:
