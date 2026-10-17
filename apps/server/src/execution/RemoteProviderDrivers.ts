@@ -369,7 +369,8 @@ export const makeRemoteDrivers = Effect.gen(function* () {
                 .observeWorkspace(`t3:utility:${instanceId}`)
                 .pipe(
                   Effect.catch((error) =>
-                    Runtime.isWorkerObservationPending(error)
+                    Runtime.isWorkerObservationPending(error) ||
+                    Runtime.isWorkerObservationStopping(error)
                       ? Effect.succeed(null)
                       : Effect.fail(error),
                   ),
@@ -402,13 +403,17 @@ export const makeRemoteDrivers = Effect.gen(function* () {
                     return lastSnapshot;
                   if (
                     executionFailure instanceof ExecutionTransportError &&
-                    (executionFailure.code === "unavailable" || executionFailure.code === "timeout")
+                    (executionFailure.code === "unavailable" ||
+                      executionFailure.code === "timeout" ||
+                      executionFailure.code === "authorization")
                   ) {
+                    const requiresStop = executionFailure.code === "authorization";
                     const latest = yield* runtime
                       .observeWorkspace(`t3:utility:${instanceId}`)
                       .pipe(
                         Effect.catch((cause) =>
-                          Runtime.isWorkerObservationPending(cause)
+                          Runtime.isWorkerObservationStopping(cause) ||
+                          (!requiresStop && Runtime.isWorkerObservationPending(cause))
                             ? Effect.succeed(null)
                             : Effect.fail(cause),
                         ),
@@ -416,7 +421,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
                     if (
                       latest === null ||
                       latest.kind === "stopped" ||
-                      !sameIdentity(client.identity, latest.client.identity)
+                      (!requiresStop && !sameIdentity(client.identity, latest.client.identity))
                     )
                       return lastSnapshot;
                   }
