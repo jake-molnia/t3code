@@ -130,7 +130,15 @@ export const layer = HttpRouter.use((router) =>
               ].includes(key),
           ),
         );
-        responseHeaders["cache-control"] = "no-store";
+        // Only shipped, versioned editor assets may outlive an authorized request.
+        // HTML, extension resources and workspace files can contain session or user data.
+        const staticAsset =
+          request.method === "GET" &&
+          response.status === 200 &&
+          /^stable-[a-f0-9]{40}\/static\//.test(relative.slice(separator + 1));
+        responseHeaders["cache-control"] = staticAsset
+          ? "private, max-age=31536000, immutable"
+          : "no-store";
         responseHeaders["referrer-policy"] = "no-referrer";
         delete responseHeaders["access-control-allow-origin"];
         delete responseHeaders["access-control-allow-credentials"];

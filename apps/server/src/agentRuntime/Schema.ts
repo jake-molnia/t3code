@@ -47,6 +47,21 @@ export const migrate = Effect.gen(function* () {
     thread_id TEXT NOT NULL,
     identity_json TEXT NOT NULL
   )`;
+  yield* sql`CREATE TABLE IF NOT EXISTS agent_runtime_ide_sessions (
+    session_id TEXT PRIMARY KEY,
+    session_json TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+  )`;
+  yield* sql`CREATE INDEX IF NOT EXISTS agent_runtime_ide_sessions_expiry
+    ON agent_runtime_ide_sessions(expires_at)`;
+  yield* sql`CREATE TABLE IF NOT EXISTS agent_runtime_ide_tickets (
+    ticket TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    session_id TEXT NOT NULL REFERENCES agent_runtime_ide_sessions(session_id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL
+  )`;
+  yield* sql`CREATE INDEX IF NOT EXISTS agent_runtime_ide_tickets_expiry
+    ON agent_runtime_ide_tickets(expires_at)`;
   yield* sql`CREATE TABLE IF NOT EXISTS agent_runtime_usage_history (
     workspace_id TEXT PRIMARY KEY,
     sources_json TEXT NOT NULL,
