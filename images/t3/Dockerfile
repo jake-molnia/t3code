@@ -54,6 +54,7 @@ RUN test "$TARGETARCH" = amd64 \
     && npm install --global --ignore-scripts pnpm@11.10.0 \
     && mkdir -p /workspace && chown node:node /workspace
 COPY --from=desktop-tools /opt/code-server /opt/code-server
+COPY images/t3/editor-defaults /opt/code-server/lib/vscode/extensions/t3-sandbox-defaults
 COPY --from=go-toolchain /usr/local/go /usr/local/go
 COPY images/t3/harness-configs/gateway.json /opt/t3/gateway-harnesses.json
 COPY --from=harnesses /opt/harnesses /opt/harnesses
