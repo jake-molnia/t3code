@@ -32,6 +32,7 @@ class EditorDefaultsTest(unittest.TestCase):
             self.assertEqual(settings["workbench.startupEditor"], "none")
             self.assertEqual(settings["workbench.secondarySideBar.defaultVisibility"], "hidden")
             self.assertTrue(settings["editor.inlineSuggest.enabled"])
+            self.assertFalse(settings["chat.tips.enabled"])
             self.assertNotIn("chat.disableAIFeatures", settings)
 
     def test_restart_preserves_existing_preferences_including_jsonc(self):

@@ -8,6 +8,8 @@ from pathlib import Path
 def configure_editor(state: Path, manifest: Path) -> None:
     settings = state / "ide" / "user-data" / "User" / "settings.json"
     defaults = json.loads(manifest.read_text())["contributes"]["configurationDefaults"]
+    # VS Code rejects extension defaults for this application-scoped preference.
+    defaults["chat.tips.enabled"] = False
     settings.parent.mkdir(parents=True, exist_ok=True)
     try:
         # User settings can contain JSONC and must remain byte-for-byte unchanged.

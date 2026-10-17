@@ -18,7 +18,6 @@
       "chat.agentsControl.enabled": "hidden",
       "chat.titleBar.signIn.enabled": false,
       "chat.titleBar.openInAgentsWindow.enabled": false,
-      "chat.tips.enabled": false,
       "editor.inlineSuggest.enabled": true
     }
   },
