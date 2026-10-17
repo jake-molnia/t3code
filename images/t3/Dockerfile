@@ -56,16 +56,16 @@ RUN test "$TARGETARCH" = amd64 \
 COPY --from=desktop-tools /opt/code-server /opt/code-server
 COPY --from=go-toolchain /usr/local/go /usr/local/go
 COPY images/t3/harness-configs/gateway.json /opt/t3/gateway-harnesses.json
-COPY --from=worker-package /out/worker /opt/t3
 COPY --from=harnesses /opt/harnesses /opt/harnesses
 COPY --from=harnesses /opt/native/bin /opt/native/bin
 COPY --from=harnesses /opt/native/az/opt/az /opt/az
 COPY --from=harnesses /opt/native/az/usr/bin/az /usr/bin/az
 COPY --from=harnesses /opt/native/extensions /opt/azure/extensions
-COPY --from=harnesses /opt/providers.lock.json /opt/t3/providers.lock.json
 RUN mv /usr/local/bin/opencode /usr/local/bin/opencode2 \
-    && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
-    && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
+    && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server
+COPY --from=worker-package /out/worker /opt/t3
+COPY --from=harnesses /opt/providers.lock.json /opt/t3/providers.lock.json
+RUN ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs
 ARG T3_SOURCE_REVISION
 ENV PATH=/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_modules/.bin:/opt/native/bin:$PATH \
@@ -118,14 +118,14 @@ FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bd
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini python3 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir /data && chown node:node /data
+COPY --from=cliproxy-build /out/cliproxyapi /usr/local/bin/cliproxyapi
+COPY --from=executor-build /src/executor/.selfhost-runtime /opt/executor
 COPY --from=worker-package /out/worker /opt/t3
 COPY --from=web-build /src/t3/apps/web/dist /opt/t3/dist/client
-COPY --from=cliproxy-build /out/cliproxyapi /usr/local/bin/cliproxyapi
 COPY --from=cliproxy-build /src/cliproxy/LICENSE /opt/t3/licenses/CLIProxyAPI/LICENSE
 COPY images/t3/head-entrypoint.py images/t3/test_head_entrypoint.py /opt/t3/
 RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_head_entrypoint.py \
     && rm /opt/t3/test_head_entrypoint.py
-COPY --from=executor-build /src/executor/.selfhost-runtime /opt/executor
 COPY images/t3/smoke-web.py images/t3/migrate-execution-profiles.py images/t3/test_migrate_execution_profiles.py /opt/t3/
 RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_migrate_execution_profiles.py \
     && rm /opt/t3/test_migrate_execution_profiles.py
