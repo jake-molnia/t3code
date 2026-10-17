@@ -15,9 +15,11 @@ export const DEV_PROXIED_PATH_PREFIXES = ["/api", "/oauth", "/.well-known", "/ws
  * derives its issuer and resource URLs from the request, and a client
  * rejects metadata naming a different origin than the one it fetched. The
  * server accepts a cookie session on `/ws` only when the page's Origin matches
- * the Host it sees, so whatever origin the page was opened on keeps working.
+ * the Host it sees. Sandbox IDE sessions opened through that socket use the
+ * same origin on `/api`, including editor WebSockets.
  */
 export const DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES: ReadonlySet<string> = new Set([
+  "/api",
   "/oauth",
   "/.well-known",
   "/mcp",
