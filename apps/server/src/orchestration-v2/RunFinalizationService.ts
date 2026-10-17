@@ -2,8 +2,10 @@ import { CheckpointScopeId, ProjectId, RunId, ThreadId } from "@t3tools/contract
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
@@ -16,7 +18,7 @@ export class RunFinalizationError extends Schema.TaggedError<RunFinalizationErro
     threadId: ThreadId,
     runId: RunId,
     scopeId: CheckpointScopeId,
-    operation: Schema.Literals(["capture-checkpoint", "refresh-workspace"]),
+    operation: Schema.Literals(["capture-checkpoint", "refresh-workspace", "acquire-workspace"]),
     cause: Schema.Defect(),
   },
 ) {}
@@ -52,17 +54,11 @@ const make = Effect.gen(function* () {
   const checkpointCapture = yield* CheckpointCapture.CheckpointCaptureServiceV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const observer = yield* RunFinalizationObserver;
+  const routes = yield* Effect.serviceOption(WorkspaceRouting.WorkspaceRouting);
 
   const finalize: RunFinalizationService["Service"]["finalize"] = Effect.fn(
     "RunFinalizationService.finalize",
   )(function* (input) {
-    yield* checkpointCapture
-      .execute(input)
-      .pipe(
-        Effect.mapError(
-          (cause) => new RunFinalizationError({ ...input, operation: "capture-checkpoint", cause }),
-        ),
-      );
     const projection = yield* projections
       .getCheckpointContext(input.threadId)
       .pipe(
@@ -71,16 +67,36 @@ const make = Effect.gen(function* () {
         ),
       );
     const cwd = projection.checkpointScopes.find((scope) => scope.id === input.scopeId)?.cwd;
-    if (cwd !== undefined) {
-      yield* observer
-        .refresh({ cwd, threadId: input.threadId, runId: input.runId })
+    const complete = Effect.gen(function* () {
+      yield* checkpointCapture
+        .execute(input)
         .pipe(
           Effect.mapError(
             (cause) =>
-              new RunFinalizationError({ ...input, operation: "refresh-workspace", cause }),
+              new RunFinalizationError({ ...input, operation: "capture-checkpoint", cause }),
           ),
         );
-    }
+      if (cwd !== undefined) {
+        yield* observer
+          .refresh({ cwd, threadId: input.threadId, runId: input.runId })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new RunFinalizationError({ ...input, operation: "refresh-workspace", cause }),
+            ),
+          );
+      }
+    });
+    return yield* cwd !== undefined && Option.isSome(routes) && routes.value.enabled
+      ? routes.value.execute(cwd, complete).pipe(
+          Effect.catchTags({
+            WorkspaceRoutingError: (cause) =>
+              Effect.fail(
+                new RunFinalizationError({ ...input, operation: "acquire-workspace", cause }),
+              ),
+          }),
+        )
+      : complete;
   });
   return RunFinalizationService.of({ finalize });
 });

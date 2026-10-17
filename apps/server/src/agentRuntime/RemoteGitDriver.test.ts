@@ -3,6 +3,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as C from "@t3tools/contracts";
+import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
+import * as CheckpointService from "../orchestration-v2/CheckpointService.ts";
+import * as CheckpointCapture from "../orchestration-v2/CheckpointCaptureService.ts";
+import * as RunFinalization from "../orchestration-v2/RunFinalizationService.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Cache from "effect/Cache";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -23,6 +31,11 @@ import { WorkspaceActivity, WorkspaceRecentActivity } from "./WorkspaceActivity.
 import * as RuntimeSchema from "./Schema.ts";
 import * as RemoteProcess from "./RemoteVcsProcess.ts";
 import * as Remote from "./RemoteGitDriver.ts";
+import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import * as WorkspaceFileSystem from "../workspace/WorkspaceFileSystem.ts";
+import { fileSystemLayer } from "./RemoteWorkspaceServices.ts";
+import { makeWorkspaceExecutor } from "./worker/WorkspaceExecutor.ts";
 import { makeGitDriverExecutor } from "./worker/GitDriverExecutor.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
 import { captureRunPromise } from "../execution/EffectHttpBoundary.ts";
@@ -31,13 +44,19 @@ import { createExecutionWorker } from "../execution/ExecutionWorker.ts";
 import { createExecutionClient } from "../execution/ExecutionClient.ts";
 import { listenWorker } from "../execution/WorkerHttpServer.ts";
 
+const workspaceEntries = WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer));
 const services = Layer.mergeAll(
+  workspaceEntries,
+  WorkspaceFileSystem.layer.pipe(
+    Layer.provide(Layer.merge(WorkspacePaths.layer, workspaceEntries)),
+  ),
+  CheckpointStore.layer.pipe(Layer.provide(Registry.layer.pipe(Layer.provide(VcsProcess.layer)))),
   Git.layer,
   Registry.layer,
   ProcessRunner.layer,
   NodeSqliteClient.layer({ filename: ":memory:" }),
 ).pipe(
-  Layer.provide(ProjectFile.layer),
+  Layer.provideMerge(ProjectFile.layer),
   Layer.provideMerge(VcsProcess.layer),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "remote-git-test-" })),
   Layer.provideMerge(NodeServices.layer),
@@ -100,16 +119,32 @@ it.layer(services, { excludeTestServices: true })("remote Git HTTP", (it) => {
           publish: (id, event) =>
             Effect.promise(() => publish(`git:${id}`, event)).pipe(Effect.asVoid),
         });
-        const worker = createExecutionWorker({
-          identity,
-          token,
-          journal,
-          execute: (method, input) => runPromise(executor.execute(method, input)),
+        const workspaceExecutor = yield* makeWorkspaceExecutor({
+          root,
+          incarnation: identity.incarnation,
         });
+        const makeWorker = (workerIdentity: ExecutionClient["identity"]) =>
+          createExecutionWorker({
+            identity: workerIdentity,
+            token,
+            journal,
+            execute: (method, input) =>
+              runPromise(
+                method.startsWith("git.driver.") || method.startsWith("vcs.")
+                  ? executor.execute(method, input)
+                  : workspaceExecutor.execute(method, input),
+              ),
+          });
+        const worker = makeWorker(identity);
+        let servingWorker = worker;
         publish = worker.publish;
         const server = yield* Effect.acquireRelease(
           Effect.tryPromise(() =>
-            listenWorker({ host: "127.0.0.1", port: 0, handle: worker.handle }),
+            listenWorker({
+              host: "127.0.0.1",
+              port: 0,
+              handle: (request) => servingWorker.handle(request),
+            }),
           ),
           (value) => Effect.promise(() => value.close()),
         );
@@ -118,7 +153,9 @@ it.layer(services, { excludeTestServices: true })("remote Git HTTP", (it) => {
           token,
           endpoint: `http://127.0.0.1:${server.port}`,
         });
+        let activeClient = client;
         let ensureCalls = 0;
+        let observeCalls = 0;
         let observedRunning = true;
         const runtime = RuntimeClient.RuntimeClient.of({
           enabled: true,
@@ -126,7 +163,8 @@ it.layer(services, { excludeTestServices: true })("remote Git HTTP", (it) => {
           forWorkspace: () =>
             Effect.sync(() => {
               ensureCalls++;
-              return client;
+              observedRunning = true;
+              return activeClient;
             }),
           forUtility: () =>
             Effect.sync(() => {
@@ -135,7 +173,12 @@ it.layer(services, { excludeTestServices: true })("remote Git HTTP", (it) => {
             }),
           observeThread: () => Effect.succeed({ kind: "running", client }),
           observeWorkspace: () =>
-            Effect.succeed(observedRunning ? { kind: "running", client } : { kind: "stopped" }),
+            Effect.sync(() => {
+              observeCalls++;
+              return observedRunning
+                ? { kind: "running" as const, client: activeClient }
+                : { kind: "stopped" as const };
+            }),
           sessionResidency: () => Effect.succeed(identity),
           rememberSession: () => Effect.void,
           getEventCursor: () => Effect.succeed(0),
@@ -285,6 +328,193 @@ it.layer(services, { excludeTestServices: true })("remote Git HTTP", (it) => {
         expect(ensureCalls).toBe(beforeEnsure);
         yield* git.statusDetailsLocal(cwd, { includeBranchChanges: true });
         expect(ensureCalls).toBeGreaterThan(beforeEnsure);
+        const checkpoints = yield* CheckpointService.CheckpointServiceV2.pipe(
+          Effect.provide(
+            CheckpointService.layer.pipe(
+              Layer.provide(Layer.fresh(CheckpointStore.layer)),
+              Layer.provide(IdAllocator.layer),
+              Layer.provide(Layer.succeedContext(central)),
+            ),
+          ),
+        );
+        const checkpointScope: C.OrchestrationV2CheckpointScope = {
+          id: C.CheckpointScopeId.make("remote-finalization"),
+          threadId: C.ThreadId.make("owner"),
+          runId: C.RunId.make("finalizing-run"),
+          nodeId: C.NodeId.make("finalizing-node"),
+          parentScopeId: null,
+          providerThreadId: C.ProviderThreadId.make("provider-thread"),
+          kind: "root_run",
+          ordinalWithinParent: 0,
+          advancesAppRunCount: true,
+          cwd,
+          createdAt: yield* DateTime.now,
+        };
+        const remoteFiles = yield* WorkspaceFileSystem.WorkspaceFileSystem.pipe(
+          Effect.provide(fileSystemLayer),
+          Effect.provide(central),
+        );
+        let captures = 0;
+        let refreshes = 0;
+        let captureActive = false;
+        let refreshActive = false;
+        const finalizationDependencies = Layer.mergeAll(
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getCheckpointContext: () =>
+              Effect.succeed({
+                runs: [],
+                checkpoints: [],
+                checkpointScopes: [checkpointScope],
+              }),
+          }),
+          Layer.mock(CheckpointCapture.CheckpointCaptureServiceV2)({
+            execute: (input) =>
+              checkpoints
+                .capture({
+                  scope: checkpointScope,
+                  runId: input.runId,
+                  nodeId: C.NodeId.make("finalizing-node"),
+                  ordinalWithinScope: 1,
+                  appRunOrdinal: 1,
+                  capturedAt: checkpointScope.createdAt,
+                })
+                .pipe(
+                  Effect.tap((checkpoint) =>
+                    Effect.sync(() => {
+                      expect(checkpoint.status).toBe("ready");
+                      captureActive = (active.get(identity.workspaceId) ?? 0) > 0;
+                      captures++;
+                    }),
+                  ),
+                  Effect.asVoid,
+                  Effect.mapError(
+                    (cause) =>
+                      new CheckpointCapture.CheckpointCaptureExecutionError({
+                        ...input,
+                        cause,
+                      }),
+                  ),
+                ),
+          }),
+          Layer.succeed(RunFinalization.RunFinalizationObserver, {
+            refreshAfterTurn: () => Effect.void,
+            refresh: () =>
+              Effect.gen(function* () {
+                refreshActive = (active.get(identity.workspaceId) ?? 0) > 0;
+                const status = yield* routes.observe(
+                  cwd,
+                  routes.execute(cwd, Cache.get(statusCache, cwd)),
+                );
+                expect(status?.isRepo).toBe(true);
+                expect(
+                  yield* Context.get(central, RepositoryFiles.RepositoryFiles).readInstructions(
+                    cwd,
+                    "AGENTS.md",
+                  ),
+                ).toBe("Keep this worker instruction.");
+                expect(
+                  (yield* remoteFiles.readFile({
+                    cwd,
+                    relativePath: "AGENTS.md",
+                    passive: true,
+                  })).contents,
+                ).toBe("Keep this worker instruction.\n");
+                refreshes++;
+              }).pipe(
+                Effect.mapError(
+                  (cause) => new RunFinalization.RunFinalizationRefreshError({ cwd, cause }),
+                ),
+              ),
+          }),
+        );
+        const finalizer = yield* RunFinalization.RunFinalizationService.pipe(
+          Effect.provide(
+            RunFinalization.layer.pipe(
+              Layer.provide(finalizationDependencies),
+              Layer.provide(Layer.succeedContext(central)),
+            ),
+          ),
+        );
+        const beforeFinalization = ensureCalls;
+        yield* finalizer.finalize({
+          threadId: checkpointScope.threadId,
+          runId: C.RunId.make("finalizing-run"),
+          scopeId: checkpointScope.id,
+        });
+        expect(captures).toBe(1);
+        expect(refreshes).toBe(1);
+        expect(ensureCalls - beforeFinalization).toBe(1);
+        expect(captureActive).toBe(true);
+        expect(refreshActive).toBe(true);
+        expect(active.has(identity.workspaceId)).toBe(false);
+        yield* sql`INSERT INTO agent_runtime_thread_bindings(thread_id,workspace_id) VALUES ('owner','git-workspace'),('other-owner','other-workspace')`;
+        const beforeNested = ensureCalls;
+        const beforeNestedObservations = observeCalls;
+        const read = { cwd, method: "files.read", input: { relativePath: "AGENTS.md" } };
+        yield* routes.execute(
+          cwd,
+          Effect.gen(function* () {
+            expect(yield* routes.observeCall(read)).toMatchObject({
+              contents: "Keep this worker instruction.\n",
+            });
+            expect(
+              yield* routes.callThread(C.ThreadId.make("owner"), "files.read", {
+                cwd,
+                relativePath: "AGENTS.md",
+              }),
+            ).toMatchObject({ contents: "Keep this worker instruction.\n" });
+            for (const action of [
+              routes.execute("/workspace/other/repo", Effect.void),
+              routes.observeCall({ ...read, cwd: "/workspace/other/repo" }),
+              routes.callThread(C.ThreadId.make("other-owner"), "files.read", {
+                cwd: "/workspace/other/repo",
+                relativePath: "AGENTS.md",
+              }),
+            ])
+              expect((yield* action.pipe(Effect.exit))._tag).toBe("Failure");
+            expect(active.has("other-workspace")).toBe(false);
+          }),
+        );
+        expect(ensureCalls - beforeNested).toBe(1);
+        expect(observeCalls).toBe(beforeNestedObservations);
+        expect(active.has(identity.workspaceId)).toBe(false);
+        const beforePassiveExecute = ensureCalls;
+        const beforePassiveRecent = recent.get(identity.workspaceId);
+        yield* routes.observe(cwd, routes.execute(cwd, routes.observeCall(read)));
+        expect(ensureCalls).toBe(beforePassiveExecute);
+        expect(recent.get(identity.workspaceId)).toBe(beforePassiveRecent);
+        const beforeReplacement = ensureCalls;
+        const replacementIdentity = {
+          ...identity,
+          generation: 2,
+          incarnation: "replacement",
+          podUid: "replacement",
+        };
+        const failed = yield* routes
+          .execute(
+            cwd,
+            Effect.gen(function* () {
+              servingWorker = makeWorker(replacementIdentity);
+              activeClient = createExecutionClient({
+                identity: replacementIdentity,
+                token,
+                endpoint: `http://127.0.0.1:${server.port}`,
+              });
+              return yield* routes.call(read);
+            }),
+          )
+          .pipe(Effect.exit);
+        expect(failed._tag).toBe("Failure");
+        expect(ensureCalls - beforeReplacement).toBe(1);
+        expect(active.has(identity.workspaceId)).toBe(false);
+        const replacementRoutes = Context.get(yield* build, Routing.WorkspaceRouting);
+        expect(yield* replacementRoutes.execute(cwd, replacementRoutes.call(read))).toMatchObject({
+          contents: "Keep this worker instruction.\n",
+        });
+        expect(ensureCalls - beforeReplacement).toBe(2);
+        expect(active.has(identity.workspaceId)).toBe(false);
+        servingWorker = worker;
+        activeClient = client;
         observedRunning = true;
         yield* fs.remove(path.join(repo, "untracked.txt"));
         // Review guides need concurrent detached copies of the same commit in

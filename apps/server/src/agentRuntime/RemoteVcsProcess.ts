@@ -38,7 +38,7 @@ export const layer = Layer.effect(
     return VcsProcess.VcsProcess.of({
       run: (input) =>
         Effect.gen(function* () {
-          const observation = yield* Routing.WorkspaceObservation;
+          const observation = yield* Routing.WorkspaceClient;
           const scope = yield* GitActionScope;
           const key = `vcs:${input.operation}:${input.cwd}`;
           const ordinal = scope?.counters.get(key) ?? 0;
