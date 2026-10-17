@@ -2,6 +2,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -46,6 +48,14 @@ it.live.each([
     reads: 0,
   },
   {
+    scenario: "lifecycle failure",
+    postStatus: 202,
+    firstReadStatus: 200,
+    superseded: false,
+    succeeds: false,
+    reads: 1,
+  },
+  {
     scenario: "superseded wake",
     postStatus: 202,
     firstReadStatus: 200,
@@ -87,10 +97,22 @@ it.live.each([
                   pool: "local",
                   profile: "t3",
                   desiredState: superseded ? "released" : running ? "running" : "released",
-                  state: running ? "running" : "released",
+                  state:
+                    running && testCase.scenario === "lifecycle failure"
+                      ? "failed"
+                      : running
+                        ? "running"
+                        : "released",
                   version: running ? "active" : "registered",
                   progress: null,
-                  error: null,
+                  error:
+                    running && testCase.scenario === "lifecycle failure"
+                      ? {
+                          code: "lifecycle_failed",
+                          message: "private controller diagnostics",
+                          retryable: true,
+                        }
+                      : null,
                   identity: running ? identity : null,
                   execution: running
                     ? { identity, endpoint: "http://worker.test", token: "test-worker-token" }
@@ -152,6 +174,17 @@ it.live.each([
     yield* Deferred.succeed(allowAdmission, undefined);
     const results = yield* Fiber.join(waitingCallers);
     expect(results.map(Exit.isSuccess)).toEqual([testCase.succeeds, testCase.succeeds]);
+    if (testCase.scenario === "lifecycle failure") {
+      for (const result of results) {
+        expect(Exit.isFailure(result)).toBe(true);
+        if (Exit.isFailure(result)) {
+          const error = Option.getOrThrow(Cause.findErrorOption(result.cause));
+          expect(RuntimeClient.runtimeStartupMessage(error)).toBe(
+            "Sandbox startup failed before the execution worker became ready. Retry the turn.",
+          );
+        }
+      }
+    }
     expect(posts).toBe(1);
     expect(reads).toBe(testCase.reads);
     expect(activity.has("readiness-workspace")).toBe(false);

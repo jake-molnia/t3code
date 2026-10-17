@@ -7,6 +7,7 @@ import * as Pools from "./ExecutionPools.ts";
 import { sameIdentity } from "../execution/ExecutionWorker.ts";
 import { ThreadId, type ProviderDriverKind } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Cache from "effect/Cache";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -75,6 +76,25 @@ export class WorkerNotReady extends Schema.TaggedError<WorkerNotReady>()(
 
 const isRuntimeClientError = Schema.is(RuntimeClientError);
 const isWorkerNotReady = Schema.is(WorkerNotReady);
+const isRuntimeFailure = Schema.is(RuntimeFailure);
+
+export function runtimeStartupMessage(error: unknown): string | undefined {
+  let cause = error;
+  let starting = false;
+  while (isRuntimeClientError(cause)) {
+    starting ||= cause.operation === "ensure-running";
+    cause = cause.cause;
+  }
+  if (!starting) return undefined;
+  if (Cause.isTimeoutError(cause))
+    return "Sandbox startup timed out waiting for the execution worker to become ready. Retry the turn.";
+  if (isRuntimeFailure(cause) && cause.code === "lifecycle_failed")
+    return (
+      "Sandbox startup failed before the execution worker became ready." +
+      (cause.retryable ? " Retry the turn." : " Check the execution runtime.")
+    );
+  return undefined;
+}
 
 /** Only controller readiness failures permit acquisition after an observation. */
 export function isWorkerObservationPending(error: RuntimeClientError): boolean {

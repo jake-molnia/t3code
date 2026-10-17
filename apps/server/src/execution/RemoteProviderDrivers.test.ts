@@ -1,5 +1,6 @@
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as Schema from "effect/Schema";
@@ -14,6 +15,7 @@ import * as Layer from "effect/Layer";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import * as Runtime from "../agentRuntime/RuntimeClient.ts";
 import * as Settings from "../serverSettings.ts";
+import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import { makeRemoteDrivers } from "./RemoteProviderDrivers.ts";
 import { makeProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
 import { harnessDefaults } from "./HarnessDefaults.ts";
@@ -662,6 +664,89 @@ it.live("gateway deployment does not expose or copy native managed account contr
         unavailableRuntime,
         Settings.layerTest(),
         ConfigProvider.layer(ConfigProvider.fromUnknown({ T3_GATEWAY_API_KEY: "inference-key" })),
+      ),
+    ),
+  ),
+);
+
+it.live.each([
+  {
+    scenario: "retryable lifecycle failure",
+    cause: { code: "lifecycle_failed", message: "private endpoint and token", retryable: true },
+    message: "Sandbox startup failed before the execution worker became ready. Retry the turn.",
+  },
+  {
+    scenario: "non-retryable lifecycle failure",
+    cause: { code: "lifecycle_failed", message: "private endpoint and token", retryable: false },
+    message:
+      "Sandbox startup failed before the execution worker became ready. Check the execution runtime.",
+  },
+  {
+    scenario: "readiness timeout",
+    cause: new Cause.TimeoutError(),
+    message:
+      "Sandbox startup timed out waiting for the execution worker to become ready. Retry the turn.",
+  },
+  {
+    scenario: "unknown controller failure",
+    cause: { code: "private", message: "private endpoint and token", retryable: true },
+    message: undefined,
+  },
+])("preserves safe $scenario in the provider error and progress", (testCase) =>
+  Effect.gen(function* () {
+    const tracker = yield* WorktreeSetupTracker.make;
+    const drivers = yield* makeRemoteDrivers.pipe(
+      Effect.provide(McpProviderSessions.layer),
+      Effect.provideService(WorktreeSetupTracker.WorktreeSetupTracker, tracker),
+    );
+    const driver = drivers.find((driver) => driver.driverKind === "codex");
+    if (!driver) return yield* Effect.die("Missing Codex");
+    const instanceId = C.ProviderInstanceId.make("codex");
+    const instance = yield* driver.create({
+      instanceId,
+      displayName: undefined,
+      environment: [],
+      enabled: true,
+      config: driver.defaultConfig(),
+    });
+    const threadId = C.ThreadId.make("failed-startup");
+    const error = yield* instance.orchestrationAdapter
+      .openSession({
+        threadId,
+        providerSessionId: C.ProviderSessionId.make("failed-session"),
+        modelSelection: { instanceId, model: "test" },
+        runtimePolicy: {
+          cwd: "/workspace/repo",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        },
+      })
+      .pipe(Effect.flip);
+    expect(error.message).toBe(
+      `codex provider protocol error: ${testCase.message ?? "Remote provider unavailable."}`,
+    );
+    expect((yield* tracker.get(threadId))?.error).toBe(
+      testCase.message ?? "Sandbox execution could not start. Retry the turn.",
+    );
+    expect(error.message).not.toContain("private");
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(
+        Settings.layerTest(),
+        Layer.mock(Runtime.RuntimeClient)({
+          enabled: true,
+          forThread: () =>
+            Effect.fail(
+              new Runtime.RuntimeClientError({
+                operation: "ensure-running",
+                cause: new Runtime.RuntimeClientError({
+                  operation: "ensure-running",
+                  cause: testCase.cause,
+                }),
+              }),
+            ),
+        }),
       ),
     ),
   ),
