@@ -151,7 +151,7 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (method === "configureProvider") {
         const input = yield* decodeRpcValue(raw);
-        yield* refreshGateway;
+        if (input.config.driver !== "antigravity") yield* refreshGateway;
         yield* lock.withPermits(1)(
           Effect.gen(function* () {
             yield* settings.updateSettings({
@@ -290,7 +290,7 @@ export const make = Effect.gen(function* () {
         }
         return yield* new WorkerProviderError({ operation: "invalid_auth_request" });
       }
-      if (method.startsWith("provider."))
+      if (method.startsWith("provider.") && instance.driverKind !== "antigravity")
         yield* Effect.tryPromise(() => gateway.refreshInstance(command.instanceId));
       if (method.startsWith("text.")) {
         const selection = yield* decodeInferenceSelection(command.input);
