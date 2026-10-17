@@ -613,6 +613,7 @@ export function EnvironmentProviderSettings({
 
   const visibleProviderSettings = PROVIDER_SETTINGS.filter(
     (providerSettings) =>
+      gatewayManaged ||
       providerSettings.provider !== "cursor" ||
       serverProviders.some(
         (provider) =>
@@ -700,7 +701,8 @@ export function EnvironmentProviderSettings({
     const hasDefaultSlot = providerSettings.hasDefaultInstance || explicitInstance !== undefined;
     if (
       hasDefaultSlot &&
-      (driver === "codex" ||
+      (gatewayManaged ||
+        driver === "codex" ||
         driver === "claudeAgent" ||
         isDirty ||
         resolveProviderInstanceEnabled(effectiveInstance) ||
@@ -872,7 +874,7 @@ export function EnvironmentProviderSettings({
         }
         canWriteSettings={canWriteSettings}
         setup={
-          gatewayManaged ? null : mode === "editor" &&
+          gatewayManaged && row.driver !== "antigravity" ? null : mode === "editor" &&
             row.driver === "codex" &&
             readCodexSetupMode(row.instance.config) === "managed" ? (
             <CodexSetupSection
@@ -1043,8 +1045,8 @@ export function EnvironmentProviderSettings({
         }
       >
         <p className="px-3 text-xs text-muted-foreground sm:px-4">
-          Provider versions are supplied by the sandbox image. Contact your deployment administrator
-          to install or upgrade a provider.
+          Harnesses are bundled with the sandbox image. Select a harness to configure it. Accounts,
+          authentication, and compatibility determine which models you can use.
         </p>
         {deviceTabs ? (
           <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 sm:px-4">{deviceTabs}</div>
