@@ -5,7 +5,7 @@ const testState = vi.hoisted(() => {
   let completeProjectFileRead: (value: null) => void = () => undefined;
   let projectFileRead = Promise.resolve<null>(null);
   let targetSettings = {
-    defaultThreadEnvMode: "local" as "local" | "worktree",
+    defaultThreadEnvMode: "local" as "local" | "worktree" | null,
     newWorktreesStartFromOrigin: false,
     defaultModelSelection: null,
     defaultRuntimeMode: "full-access" as RuntimeMode,
@@ -48,7 +48,7 @@ const testState = vi.hoisted(() => {
     reset(
       nextStoredDraft: typeof storedDraft,
       workspaceDefaults = {
-        envMode: "local" as "local" | "worktree",
+        envMode: "local" as "local" | "worktree" | null,
         startFromOrigin: false,
       },
     ) {
@@ -199,6 +199,32 @@ describe.each([
     },
   ],
 ])("useNewThreadHandler with a %s draft", (_, draft) => {
+  it("keeps navigation pending until uncached project defaults settle", async () => {
+    testState.reset(draft, { envMode: null, startFromOrigin: false });
+    const pendingOpen = useNewThreadHandler()({
+      environmentId: "environment-ssh",
+      projectId: "project-remote",
+    } as never);
+
+    await Promise.resolve();
+    expect(testState.router.navigate).not.toHaveBeenCalled();
+    expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
+
+    testState.completeProjectFileRead(null);
+    const opened = await pendingOpen;
+    expect(testState.router.state.location.href).toBe(`/draft/${opened!.draftId}`);
+  });
+
+  it("opens with configured defaults while the project file is unavailable", async () => {
+    testState.reset(draft, { envMode: "worktree", startFromOrigin: false });
+    const opened = await useNewThreadHandler()({
+      environmentId: "environment-ssh",
+      projectId: "project-remote",
+    } as never);
+
+    expect(testState.router.state.location.href).toBe(`/draft/${opened!.draftId}`);
+  });
+
   it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
     "uses the target environment's %s permissions for new threads",
     async (runtimeMode) => {
