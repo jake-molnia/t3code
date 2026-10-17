@@ -10,6 +10,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import { buildServerProvider } from "@t3tools/provider-core/server/snapshotProbe";
 import {
   createModelGatewayCatalog,
+  createGatewayCatalogReader,
   nativeGatewayConfigs,
   projectGatewaySnapshot,
 } from "./ModelGatewayCatalog.ts";
@@ -38,6 +39,75 @@ const snapshot = (driver: string) => ({
   }),
   instanceId: ProviderInstanceId.make(driver),
   driver: ProviderDriverKind.make(driver),
+});
+
+test("concurrent discovery shares a request and the next read fetches fresh models", async () => {
+  const response = Promise.withResolvers<Response>();
+  let requests = 0;
+  const read = createGatewayCatalogReader("http://gateway", "key", async () => {
+    requests++;
+    return requests === 1 ? response.promise : Response.json({ data: [{ id: "new" }] });
+  });
+  const first = read();
+  const concurrent = read();
+  expect(requests).toBe(1);
+  response.resolve(Response.json({ data: [{ id: "old" }, { id: "old" }] }));
+  const expected = { kind: "ready", catalog: { data: [{ id: "old" }] } };
+  expect(await first).toEqual(expected);
+  expect(await concurrent).toEqual(expected);
+  expect(await read()).toEqual({ kind: "ready", catalog: { data: [{ id: "new" }] } });
+  expect(requests).toBe(2);
+});
+
+test("discovery excludes explicit non-text output while keeping mixed and unknown models", async () => {
+  const catalog = {
+    data: [
+      { id: "coding", supported_output_modalities: ["TEXT"] },
+      { id: "mixed", supported_output_modalities: ["text", "image"] },
+      { id: "images", supported_output_modalities: ["image"] },
+      { id: "speech", supported_output_modalities: ["audio"] },
+      { id: "unknown" },
+      { id: "empty-metadata", supported_output_modalities: [] },
+    ],
+  };
+  const read = createGatewayCatalogReader("http://gateway", "key", async () =>
+    Response.json(catalog),
+  );
+  const state = await read();
+  if (state.kind !== "ready") throw new Error("Expected ready discovery");
+  expect(state.catalog.data.map((model) => model.id)).toEqual([
+    "coding",
+    "mixed",
+    "unknown",
+    "empty-metadata",
+  ]);
+  const directory = await NodeFSP.mkdtemp(`${NodeOS.tmpdir()}/t3-gateway-output-`);
+  const gateway = createModelGatewayCatalog({
+    directory,
+    environment: { T3_GATEWAY_URL: "http://gateway", T3_GATEWAY_API_KEY: "key" },
+    request: async () => Response.json(catalog),
+  });
+  try {
+    const config = await gateway.configure("opencode", {
+      driver: ProviderDriverKind.make("opencode"),
+    });
+    const path = config.environment?.find((entry) => entry.name === "OPENCODE_CONFIG")?.value;
+    if (!path) throw new Error("Missing native config");
+    const native = JSON.parse(await NodeFSP.readFile(path, "utf8"));
+    expect(Object.keys(native.providers.gateway.models)).toEqual(
+      state.catalog.data.map((model) => model.id),
+    );
+    expect(gateway.snapshot(snapshot("opencode")).models.map((model) => model.slug)).toEqual(
+      state.catalog.data.map((model) => `gateway/${model.id}`),
+    );
+    await expect(gateway.prepareInference("opencode", "gateway/images")).rejects.toThrow(
+      "no longer available",
+    );
+    await gateway.prepareInference("opencode", "gateway/mixed");
+    await gateway.prepareInference("opencode", "gateway/unknown");
+  } finally {
+    await NodeFSP.rm(directory, { recursive: true, force: true });
+  }
 });
 
 test.each(["codex", "claudeAgent", "grok", "opencode", "pi"])(

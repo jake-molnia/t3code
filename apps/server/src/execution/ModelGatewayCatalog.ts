@@ -15,13 +15,14 @@ import type {
 import { migrateGatewayModelId } from "@t3tools/shared/model";
 import { migrateGatewayModelSelection } from "./GatewayMigration.ts";
 
-// The pinned proxy patch preserves known input modalities alongside model identities.
+// The pinned proxy patch preserves known modalities alongside model identities.
 export const Catalog = Schema.Struct({
   data: Schema.Array(
     Schema.Struct({
       id: Schema.String.check(Schema.isMinLength(1)),
       owned_by: Schema.optionalKey(Schema.String),
       supported_input_modalities: Schema.optionalKey(Schema.Array(Schema.String)),
+      supported_output_modalities: Schema.optionalKey(Schema.Array(Schema.String)),
     }),
   ),
 });
@@ -49,7 +50,11 @@ export function createGatewayCatalogReader(base: string, apiKey: string, request
         return {
           kind: "ready",
           catalog: {
-            data: [...new Map(decoded.data.map((model) => [model.id, model])).values()],
+            data: [...new Map(decoded.data.map((model) => [model.id, model])).values()].filter(
+              (model) =>
+                !model.supported_output_modalities?.length ||
+                model.supported_output_modalities.some((value) => value.toLowerCase() === "text"),
+            ),
           },
         };
       } catch {

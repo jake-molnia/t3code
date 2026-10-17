@@ -8,6 +8,7 @@ RUN tar -xzf /tmp/cliproxy.tar.gz --strip-components=1 && rm /tmp/cliproxy.tar.g
 COPY images/t3/cliproxy-device.patch /tmp/cliproxy-device.patch
 RUN git apply /tmp/cliproxy-device.patch \
     && go test ./sdk/auth ./internal/api/handlers/management -run 'Test(OAuthSaveCancellationIsAtomic|CodexDeviceManagement|DeviceCompletionAndCancellationAreExclusive|CancelOAuthSession|RequestCodexToken|Devin)' -count=1 \
+    && go test ./sdk/api/handlers/openai ./internal/registry -run 'Test(T3ModelsPreserveKnownModalities|WithCodexBuiltinsIncludesImage25Models)' -count=1 \
     && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.Version=bf9341629ef2300ac9d846a2e80fe2756f63a671-t3' -o /out/cliproxyapi ./cmd/server
 
 FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bdcd73c103b096988922d7 AS worker-build

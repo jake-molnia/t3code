@@ -1197,12 +1197,14 @@ it.live("passive OpenCode catalogs track account models while its utility is sus
       const restored = yield* instance.snapshot.getSnapshot;
       expect(restored.models.map((model) => model.slug)).toEqual(["gateway/restored"]);
       expect(restored.availability).not.toBe("unavailable");
+      expect(restored.unavailableReason).toBeUndefined();
       unavailable = true;
       expect((yield* instance.snapshot.getSnapshot).models).toEqual([]);
       unavailable = false;
-      expect((yield* instance.snapshot.getSnapshot).models.map((model) => model.slug)).toEqual([
-        "gateway/restored",
-      ]);
+      const recovered = yield* instance.snapshot.getSnapshot;
+      expect(recovered.models.map((model) => model.slug)).toEqual(["gateway/restored"]);
+      expect(recovered.availability).not.toBe("unavailable");
+      expect(recovered.unavailableReason).toBeUndefined();
       expect(allocations).toBe(1);
       expect(workerCalls).toBe(2);
     }).pipe(
