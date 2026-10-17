@@ -32,18 +32,51 @@ export type GatewayCatalogState =
   | { readonly kind: "unavailable" }
   | { readonly kind: "ready"; readonly catalog: Catalog };
 
+/** Read only inference discovery; the same catalog serves central snapshots and workers. */
+export function createGatewayCatalogReader(base: string, apiKey: string, request = fetch) {
+  let pending: Promise<GatewayCatalogState> | undefined;
+  return async (): Promise<GatewayCatalogState> => {
+    if (pending) return pending;
+    pending = (async (): Promise<GatewayCatalogState> => {
+      try {
+        const response = await request(`${base.replace(/\/$/, "")}/v1/models`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(15_000),
+          redirect: "error",
+        });
+        if (!response.ok) throw new Error("Model gateway catalog unavailable");
+        const decoded = decodeCatalog(await response.json());
+        return {
+          kind: "ready",
+          catalog: {
+            data: [...new Map(decoded.data.map((model) => [model.id, model])).values()],
+          },
+        };
+      } catch {
+        return { kind: "unavailable" };
+      }
+    })();
+    try {
+      return await pending;
+    } finally {
+      pending = undefined;
+    }
+  };
+}
+
 const supported = new Set(["codex", "claudeAgent", "grok", "opencode", "pi"]);
 function gatewayModelSlug(driver: string, id: string) {
   return driver === "opencode" || driver === "pi" ? `gateway/${id}` : id;
 }
 
+const gatewayUnavailable = "The model gateway is unavailable. Reconnect before starting a turn.";
+const gatewayDisconnected = "Connect an account in Settings to make models available.";
+
 function gatewayUnavailableReason(state: GatewayCatalogState, driver: string) {
   if (state.kind === "disabled") return undefined;
   if (!supported.has(driver)) return `${driver} does not support model gateway credentials.`;
-  if (state.kind === "unavailable")
-    return "The model gateway is unavailable. Reconnect before starting a turn.";
-  if (state.catalog.data.length === 0)
-    return "Connect an account in Settings to make models available.";
+  if (state.kind === "unavailable") return gatewayUnavailable;
+  if (state.catalog.data.length === 0) return gatewayDisconnected;
   return undefined;
 }
 
@@ -87,8 +120,17 @@ export function projectGatewaySnapshot(
     snapshot.auth.status === "unauthenticated" &&
     snapshot.compatibilityAdvisory?.status !== "unsupported" &&
     snapshot.compatibilityAdvisory?.status !== "broken";
+  const { availability, unavailableReason, ...nativeSnapshot } = snapshot;
+  const gatewayWasUnavailable =
+    unavailableReason === gatewayUnavailable || unavailableReason === gatewayDisconnected;
   return {
-    ...snapshot,
+    ...nativeSnapshot,
+    ...(gatewayWasUnavailable
+      ? { availability: "available" as const }
+      : {
+          ...(availability === undefined ? {} : { availability }),
+          ...(unavailableReason === undefined ? {} : { unavailableReason }),
+        }),
     ...(nativeAuthWarning ? { status: "ready", message: undefined } : {}),
     auth: { status: "authenticated", type: "apiKey", label: "Model gateway", canLogout: false },
     setup,
@@ -252,7 +294,7 @@ export function createModelGatewayCatalog(options: {
     if (!apiKey) throw new Error("Model gateway requires T3_GATEWAY_API_KEY");
   }
   let state: GatewayCatalogState = base ? { kind: "unavailable" } : { kind: "disabled" };
-  let pending: Promise<GatewayCatalogState> | undefined;
+  const readCatalog = base ? createGatewayCatalogReader(base, apiKey, request) : undefined;
   const instances = new Map<string, NativeConfiguration>();
   const normalizeSelection = (driver: string, selection: ModelSelection) => {
     if (!base) return selection;
@@ -267,32 +309,8 @@ export function createModelGatewayCatalog(options: {
     return migrateGatewayModelSelection(driver, selection);
   };
   const refresh = async (): Promise<GatewayCatalogState> => {
-    if (!base) return state;
-    if (pending) return pending;
-    pending = (async () => {
-      try {
-        const response = await request(`${base}/v1/models`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-          signal: AbortSignal.timeout(15_000),
-          redirect: "error",
-        });
-        if (!response.ok) throw new Error("Model gateway catalog unavailable");
-        const decoded = decodeCatalog(await response.json());
-        const catalog = {
-          data: [...new Map(decoded.data.map((model) => [model.id, model])).values()],
-        };
-        state = { kind: "ready", catalog };
-      } catch {
-        // Do not retain a ready catalog after an outage or malformed response.
-        state = { kind: "unavailable" };
-      }
-      return state;
-    })();
-    try {
-      return await pending;
-    } finally {
-      pending = undefined;
-    }
+    if (readCatalog) state = await readCatalog();
+    return state;
   };
   const writeNativeConfiguration = async (
     native: NativeConfiguration | undefined,

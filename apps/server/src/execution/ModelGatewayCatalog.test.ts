@@ -468,3 +468,32 @@ test("OpenCode preserves explicit JSONC, inline configuration and native executi
     await NodeFSP.rm(directory, { recursive: true, force: true });
   }
 });
+
+test.each(["unavailable", "empty"])(
+  "rechecks a cached %s gateway catalog without masking harness failures",
+  (kind) => {
+    const disconnected = projectGatewaySnapshot(
+      snapshot("opencode"),
+      kind === "empty" ? { kind: "ready", catalog: { data: [] } } : { kind: "unavailable" },
+    );
+    const reconnected = projectGatewaySnapshot(disconnected, {
+      kind: "ready",
+      catalog: { data: [{ id: "returned" }] },
+    });
+    expect(reconnected.availability).not.toBe("unavailable");
+    expect(reconnected.unavailableReason).toBeUndefined();
+    const broken = projectGatewaySnapshot(
+      {
+        ...snapshot("opencode"),
+        availability: "unavailable",
+        unavailableReason: "Execution worker failed",
+      },
+      {
+        kind: "ready",
+        catalog: { data: [{ id: "returned" }] },
+      },
+    );
+    expect(broken.availability).toBe("unavailable");
+    expect(broken.unavailableReason).toBe("Execution worker failed");
+  },
+);
