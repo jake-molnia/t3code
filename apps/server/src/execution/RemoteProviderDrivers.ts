@@ -1,3 +1,4 @@
+import { createGatewayCatalogReader, projectGatewaySnapshot } from "./ModelGatewayCatalog.ts";
 import { isAntigravityLogoutPrompt } from "../provider/AntigravityAuth.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import {
@@ -94,13 +95,19 @@ export const makeRemoteDrivers = Effect.gen(function* () {
   const setupTracker = yield* Effect.serviceOption(WorktreeSetupTracker.WorktreeSetupTracker);
   const attachments = yield* Effect.serviceOption(AttachmentStaging.AttachmentStaging);
   const advertisedMcp = yield* Config.option(Config.String("T3_MCP_ADVERTISED_URL"));
-  const gatewayManaged = Option.isSome(yield* Config.option(Config.String("T3_GATEWAY_API_KEY")));
+  const gatewayKey = yield* Config.option(Config.String("T3_GATEWAY_API_KEY"));
+  const gatewayUrl = yield* Config.option(Config.String("T3_GATEWAY_MANAGEMENT_URL"));
+  const readGatewayCatalog =
+    Option.isSome(gatewayKey) && Option.isSome(gatewayUrl)
+      ? createGatewayCatalogReader(gatewayUrl.value, gatewayKey.value)
+      : undefined;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   return BUILT_IN_DRIVERS.map((driver): AnyProviderDriver => ({
     ...driver,
     create: (input) =>
       Effect.gen(function* () {
         const instanceId = input.instanceId;
+        const gatewayManaged = Option.isSome(gatewayKey) && driver.driverKind !== "antigravity";
         const credentialRecipients = new Map<string, ExecutionClient>();
         let configuredUtility: ExecutionClient["identity"] | undefined;
         const authPolicy = gatewayManaged
@@ -445,6 +452,13 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               Effect.sync(() => {
                 lastSnapshot = value;
               }),
+            ),
+            Effect.flatMap((value) =>
+              gatewayManaged && readGatewayCatalog && input.enabled
+                ? Effect.promise(readGatewayCatalog).pipe(
+                    Effect.map((catalog) => projectGatewaySnapshot(value, catalog)),
+                  )
+                : Effect.succeed(value),
             ),
           );
         const getSnapshot = snapshot("provider.snapshot", false);

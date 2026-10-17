@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import {
+  MessageId,
+  ProviderDriverKind,
+  ProviderSessionId,
+  ProviderThreadId,
+  RunId,
+  type OrchestrationV2ThreadProjection,
+} from "@t3tools/contracts";
+import { v2Now, v2Projection } from "./orchestrationV2TestFixtures.ts";
 
 import {
   canDetachThreadProviderSession,
@@ -15,6 +23,7 @@ const capabilities = (input?: {
   readonly restartSteer?: boolean;
   readonly nativeFork?: boolean;
   readonly portableFork?: boolean;
+  readonly handoff?: boolean;
 }) =>
   ({
     turns: {
@@ -28,9 +37,116 @@ const capabilities = (input?: {
     },
     identity: { nativeThreadIds: input?.nativeFork ? "strong" : "none" },
     context: { supportsFullThreadHandoff: input?.portableFork ?? false },
+    sessions: { supportsProviderSwitchingViaHandoff: input?.handoff ?? false },
   }) as never;
 
+function failedStartupProjection(): OrchestrationV2ThreadProjection {
+  const providerThreadId = ProviderThreadId.make("provider-thread-startup");
+  return {
+    ...v2Projection,
+    thread: { ...v2Projection.thread, activeProviderThreadId: providerThreadId },
+    runs: [
+      {
+        id: RunId.make("run-startup"),
+        threadId: v2Projection.thread.id,
+        ordinal: 1,
+        providerInstanceId: v2Projection.thread.providerInstanceId,
+        modelSelection: v2Projection.thread.modelSelection,
+        providerThreadId,
+        userMessageId: MessageId.make("message-startup"),
+        rootNodeId: null,
+        activeAttemptId: null,
+        status: "failed",
+        requestedAt: v2Now,
+        startedAt: null,
+        completedAt: v2Now,
+        checkpointId: null,
+        contextHandoffId: null,
+      },
+    ],
+    providerThreads: [
+      {
+        id: providerThreadId,
+        driver: ProviderDriverKind.make("codex"),
+        providerInstanceId: v2Projection.thread.providerInstanceId,
+        providerSessionId: null,
+        appThreadId: v2Projection.thread.id,
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "error",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: v2Now,
+        updatedAt: v2Now,
+      },
+    ],
+  };
+}
+
 describe("thread workflows", () => {
+  it("allows switching providers after startup fails before creating native history", () => {
+    expect(threadSupportsProviderHandoff(failedStartupProjection())).toBe(true);
+  });
+
+  it.each(["preparing", "starting", "running", "waiting"] as const)(
+    "keeps unknown handoff capability locked while a run is %s",
+    (status) => {
+      const projection = failedStartupProjection();
+      expect(
+        threadSupportsProviderHandoff({
+          ...projection,
+          runs: projection.runs.map((run) => ({ ...run, status })),
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("allows handoff selection while the only pending run is held in the queue", () => {
+    const projection = failedStartupProjection();
+    const queued = {
+      ...projection,
+      runs: projection.runs.map((run) => ({ ...run, status: "queued" as const, queueHeld: true })),
+    };
+    expect(threadSupportsProviderHandoff(queued)).toBe(true);
+  });
+
+  it.each([false, true])(
+    "honors negotiated handoff support (%s) for idle and active sessions",
+    (handoff) => {
+      const projection = failedStartupProjection();
+      const sessionId = ProviderSessionId.make("session-startup");
+      for (const status of ["completed", "running"] as const) {
+        expect(
+          threadSupportsProviderHandoff({
+            ...projection,
+            runs: projection.runs.map((run) => ({ ...run, status })),
+            providerThreads: projection.providerThreads.map((thread) => ({
+              ...thread,
+              providerSessionId: sessionId,
+            })),
+            providerSessions: [
+              {
+                id: sessionId,
+                driver: ProviderDriverKind.make("codex"),
+                providerInstanceId: v2Projection.thread.providerInstanceId,
+                status: "ready",
+                cwd: "/repo",
+                model: v2Projection.thread.modelSelection.model,
+                capabilities: capabilities({ handoff }),
+                createdAt: v2Now,
+                updatedAt: v2Now,
+                lastError: null,
+              },
+            ],
+          }),
+        ).toBe(handoff);
+      }
+    },
+  );
+
   it("allows a completed thread to switch providers after its session detaches", () => {
     const projection = {
       thread: {
@@ -63,7 +179,7 @@ describe("thread workflows", () => {
         ...projection,
         providerThreads: [{ ...projection.providerThreads[0]!, nativeThreadRef: null }],
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("sorts queued messages and gates reorder and promotion from capabilities", () => {

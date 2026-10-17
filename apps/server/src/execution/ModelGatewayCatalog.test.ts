@@ -10,6 +10,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import { buildServerProvider } from "@t3tools/provider-core/server/snapshotProbe";
 import {
   createModelGatewayCatalog,
+  createGatewayCatalogReader,
   nativeGatewayConfigs,
   projectGatewaySnapshot,
 } from "./ModelGatewayCatalog.ts";
@@ -40,6 +41,75 @@ const snapshot = (driver: string) => ({
   driver: ProviderDriverKind.make(driver),
 });
 
+test("concurrent discovery shares a request and the next read fetches fresh models", async () => {
+  const response = Promise.withResolvers<Response>();
+  let requests = 0;
+  const read = createGatewayCatalogReader("http://gateway", "key", async () => {
+    requests++;
+    return requests === 1 ? response.promise : Response.json({ data: [{ id: "new" }] });
+  });
+  const first = read();
+  const concurrent = read();
+  expect(requests).toBe(1);
+  response.resolve(Response.json({ data: [{ id: "old" }, { id: "old" }] }));
+  const expected = { kind: "ready", catalog: { data: [{ id: "old" }] } };
+  expect(await first).toEqual(expected);
+  expect(await concurrent).toEqual(expected);
+  expect(await read()).toEqual({ kind: "ready", catalog: { data: [{ id: "new" }] } });
+  expect(requests).toBe(2);
+});
+
+test("discovery excludes explicit non-text output while keeping mixed and unknown models", async () => {
+  const catalog = {
+    data: [
+      { id: "coding", supported_output_modalities: ["TEXT"] },
+      { id: "mixed", supported_output_modalities: ["text", "image"] },
+      { id: "images", supported_output_modalities: ["image"] },
+      { id: "speech", supported_output_modalities: ["audio"] },
+      { id: "unknown" },
+      { id: "empty-metadata", supported_output_modalities: [] },
+    ],
+  };
+  const read = createGatewayCatalogReader("http://gateway", "key", async () =>
+    Response.json(catalog),
+  );
+  const state = await read();
+  if (state.kind !== "ready") throw new Error("Expected ready discovery");
+  expect(state.catalog.data.map((model) => model.id)).toEqual([
+    "coding",
+    "mixed",
+    "unknown",
+    "empty-metadata",
+  ]);
+  const directory = await NodeFSP.mkdtemp(`${NodeOS.tmpdir()}/t3-gateway-output-`);
+  const gateway = createModelGatewayCatalog({
+    directory,
+    environment: { T3_GATEWAY_URL: "http://gateway", T3_GATEWAY_API_KEY: "key" },
+    request: async () => Response.json(catalog),
+  });
+  try {
+    const config = await gateway.configure("opencode", {
+      driver: ProviderDriverKind.make("opencode"),
+    });
+    const path = config.environment?.find((entry) => entry.name === "OPENCODE_CONFIG")?.value;
+    if (!path) throw new Error("Missing native config");
+    const native = JSON.parse(await NodeFSP.readFile(path, "utf8"));
+    expect(Object.keys(native.providers.gateway.models)).toEqual(
+      state.catalog.data.map((model) => model.id),
+    );
+    expect(gateway.snapshot(snapshot("opencode")).models.map((model) => model.slug)).toEqual(
+      state.catalog.data.map((model) => `gateway/${model.id}`),
+    );
+    await expect(gateway.prepareInference("opencode", "gateway/images")).rejects.toThrow(
+      "no longer available",
+    );
+    await gateway.prepareInference("opencode", "gateway/mixed");
+    await gateway.prepareInference("opencode", "gateway/unknown");
+  } finally {
+    await NodeFSP.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test.each(["codex", "claudeAgent", "grok", "opencode", "pi"])(
   "%s offers gateway models absent from the native catalog",
   (driver) => {
@@ -57,7 +127,7 @@ test.each(["codex", "claudeAgent", "grok", "opencode", "pi"])(
   },
 );
 
-test.each(["cursor", "muse", "antigravity"])(
+test.each(["cursor", "muse"])(
   "%s remains explicitly unsupported with gateway credentials",
   (driver) => {
     const projected = projectGatewaySnapshot(snapshot(driver), {
@@ -68,6 +138,33 @@ test.each(["cursor", "muse", "antigravity"])(
     expect(projected.models).toEqual([]);
   },
 );
+
+test("Antigravity retains native discovery and inference independently of the gateway", async () => {
+  const native = snapshot("antigravity");
+  let requests = 0;
+  for (const state of [
+    { kind: "disabled" },
+    { kind: "unavailable" },
+    { kind: "ready", catalog: { data: [] } },
+    { kind: "ready", catalog: { data: [{ id: "gateway-only" }] } },
+  ] as const) {
+    expect(projectGatewaySnapshot(native, state)).toBe(native);
+  }
+  const gateway = createModelGatewayCatalog({
+    directory: "/unused",
+    environment: { T3_GATEWAY_URL: "http://gateway.invalid", T3_GATEWAY_API_KEY: "key" },
+    request: async () => {
+      requests++;
+      throw new Error("Native Antigravity must not fetch the gateway");
+    },
+  });
+  const instance = { driver: ProviderDriverKind.make("antigravity") };
+  expect(await gateway.configure("native", instance)).toBe(instance);
+  const selection = { instanceId: ProviderInstanceId.make("native"), model: "native-model" };
+  expect(gateway.normalizeSelection("antigravity", selection)).toBe(selection);
+  await gateway.prepareInference("antigravity", "native-model", "native");
+  expect(requests).toBe(0);
+});
 
 test("gateway native files reference the inference key and contain one route per model", () => {
   const configs = nativeGatewayConfigs(
@@ -468,3 +565,32 @@ test("OpenCode preserves explicit JSONC, inline configuration and native executi
     await NodeFSP.rm(directory, { recursive: true, force: true });
   }
 });
+
+test.each(["unavailable", "empty"])(
+  "rechecks a cached %s gateway catalog without masking harness failures",
+  (kind) => {
+    const disconnected = projectGatewaySnapshot(
+      snapshot("opencode"),
+      kind === "empty" ? { kind: "ready", catalog: { data: [] } } : { kind: "unavailable" },
+    );
+    const reconnected = projectGatewaySnapshot(disconnected, {
+      kind: "ready",
+      catalog: { data: [{ id: "returned" }] },
+    });
+    expect(reconnected.availability).not.toBe("unavailable");
+    expect(reconnected.unavailableReason).toBeUndefined();
+    const broken = projectGatewaySnapshot(
+      {
+        ...snapshot("opencode"),
+        availability: "unavailable",
+        unavailableReason: "Execution worker failed",
+      },
+      {
+        kind: "ready",
+        catalog: { data: [{ id: "returned" }] },
+      },
+    );
+    expect(broken.availability).toBe("unavailable");
+    expect(broken.unavailableReason).toBe("Execution worker failed");
+  },
+);

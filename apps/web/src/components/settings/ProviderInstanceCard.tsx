@@ -33,6 +33,7 @@ import { DraftInput } from "../ui/draft-input";
 import { SecretInput } from "./SecretInput";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type {
   ProviderClientDefinition,
@@ -644,12 +645,12 @@ const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> 
  *   - Unknown drivers (`driverOption === undefined`) get a read-only
  *     notice instead of editable fields, so fork instances round-trip
  *     without accidentally destroying their config.
- *   - The enabled Switch writes to the envelope's `instance.enabled`
+ *   - The session preference control writes to the envelope's `instance.enabled`
  *     field, which is the single enabled flag: the server folds any legacy
  *     driver-specific `config.enabled` into the envelope on load and both
  *     sides resolve through `resolveProviderInstanceEnabled` (an explicit
  *     false wins, then envelope, then config, then the driver default).
- *     With `projectOverride` set, the Switch instead reads and writes
+ *     With `projectOverride` set, the control instead reads and writes
  *     that project's override, leaving the environment's `instance.enabled`
  *     untouched.
  */
@@ -681,6 +682,7 @@ export function ProviderInstanceCard({
   acpProjects = EMPTY_ACP_PROJECTS,
   projectOverride,
 }: ProviderInstanceCardProps) {
+  const usesGatewayCredentials = gatewayManaged && instance.driver !== "antigravity";
   const enabled = projectOverride?.effectiveEnabled ?? resolveProviderInstanceEnabled(instance);
   const compatibility = enabled ? liveProvider?.compatibilityAdvisory : undefined;
   // A locally disabled provider reads "Disabled" with a muted dot even if its
@@ -690,11 +692,25 @@ export function ProviderInstanceCard({
     : "disabled";
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   // `liveProvider.enabled` is machine-wide; a project override can turn it on.
-  const summary = enabled
-    ? getProviderSummary(liveProvider && { ...liveProvider, enabled: true })
-    : { headline: "Disabled", detail: null };
+  const summary = liveProvider
+    ? getProviderSummary({ ...liveProvider, enabled })
+    : enabled
+      ? getProviderSummary(undefined)
+      : {
+          headline: "Disabled",
+          detail: "Not used for new sessions. Saved configuration is retained.",
+        };
+  const statusHeadline =
+    gatewayManaged && summary.headline === "Disabled"
+      ? "Not used for new sessions"
+      : summary.headline;
   const authEmail = liveProvider?.auth.email?.trim();
-  const isAuthenticated = enabled && liveProvider?.auth.status === "authenticated";
+  const isAuthenticated =
+    enabled &&
+    liveProvider?.installed === true &&
+    liveProvider.status === "ready" &&
+    liveProvider.availability !== "unavailable" &&
+    liveProvider.auth.status === "authenticated";
   const authLabel =
     enabled && liveProvider?.auth.status === "authenticated"
       ? (liveProvider.auth.label ?? liveProvider.auth.type ?? null)
@@ -715,7 +731,7 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  const customModels = gatewayManaged ? [] : readConfigCustomModels(instance.config);
+  const customModels = usesGatewayCredentials ? [] : readConfigCustomModels(instance.config);
   // Server-returned models may lag behind settings writes. Treat server
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
@@ -861,7 +877,7 @@ export function ProviderInstanceCard({
     ) : (
       <>
         {statusDotNode}
-        <span>{summary.headline}</span>
+        <span>{statusHeadline}</span>
         {inlineStatusDetail ? (
           <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
         ) : null}
@@ -909,7 +925,7 @@ export function ProviderInstanceCard({
                   aria-live="polite"
                   className="pointer-events-auto line-clamp-2 [overflow-wrap:anywhere]"
                 >
-                  {summary.headline}
+                  {statusHeadline}
                   {needsAttention && inlineStatusDetail ? ` · ${inlineStatusDetail}` : null}
                 </span>
               </ProviderStatusDiagnostic>
@@ -931,12 +947,14 @@ export function ProviderInstanceCard({
               />
             </span>
           ) : null}
-          <Switch
-            checked={enabled}
-            disabled={readOnly || (projectOverride !== undefined && !canWriteSettings)}
-            onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-            aria-label={`Enable ${displayName}`}
-          />
+          {!gatewayManaged ? (
+            <Switch
+              checked={enabled}
+              disabled={readOnly || (projectOverride !== undefined && !canWriteSettings)}
+              onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
+              aria-label={`Enable ${displayName}`}
+            />
+          ) : null}
         </span>
       </div>
     );
@@ -975,7 +993,7 @@ export function ProviderInstanceCard({
   const runtimeFields = driverOption ? (
     <ProviderSettingsForm
       definition={driverOption}
-      fieldKeys={gatewayManaged ? HARNESS_EXECUTION_FIELDS : undefined}
+      fieldKeys={usesGatewayCredentials ? HARNESS_EXECUTION_FIELDS : undefined}
       value={instance.config}
       idPrefix={`provider-instance-${instanceId}`}
       variant="settings"
@@ -1063,7 +1081,46 @@ export function ProviderInstanceCard({
         />
       </SettingsSection>
 
-      {!gatewayManaged && (setup || environmentFields.length > 0) ? (
+      {gatewayManaged ? (
+        <SettingsSection title="Session preferences">
+          <SettingsRow
+            title="New sessions"
+            description={
+              projectOverride
+                ? "Choose whether this project can use this harness. Authentication and compatibility checks still apply."
+                : "Choose whether new sessions can use this harness. This keeps its saved configuration and does not install or authenticate it."
+            }
+            control={
+              <Select
+                value={enabled ? "use" : "exclude"}
+                disabled={readOnly || (projectOverride !== undefined && !canWriteSettings)}
+                onValueChange={(value) => {
+                  if (value === "use" || value === "exclude") updateEnabled(value === "use");
+                }}
+              >
+                <SelectTrigger size="sm" aria-label={`${displayName} for new sessions`}>
+                  <SelectValue>{enabled ? "Use for new sessions" : "Do not use"}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end">
+                  <SelectItem value="use">Use for new sessions</SelectItem>
+                  <SelectItem value="exclude">Do not use</SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+        </SettingsSection>
+      ) : null}
+
+      {gatewayManaged && instance.driver === "antigravity" ? (
+        <SettingsSection title="Antigravity account">
+          <SettingsRow
+            title="Native authentication"
+            description="Sign in to Antigravity or configure its Gemini or Vertex AI credentials below. A Google account connected to the model gateway does not sign in to this harness."
+          />
+        </SettingsSection>
+      ) : null}
+
+      {!usesGatewayCredentials && (setup || environmentFields.length > 0) ? (
         <SettingsSection title="Setup">
           {setup}
           <div
@@ -1089,7 +1146,7 @@ export function ProviderInstanceCard({
         </SettingsSection>
       ) : null}
 
-      {gatewayManaged ? (
+      {usesGatewayCredentials ? (
         <SettingsSection title="Execution" inert={readOnly} aria-disabled={readOnly || undefined}>
           {runtimeFields}
         </SettingsSection>
@@ -1119,7 +1176,7 @@ export function ProviderInstanceCard({
         </SettingsSection>
       ) : null}
 
-      {!gatewayManaged ? (
+      {!usesGatewayCredentials ? (
         <SettingsSection
           title="Environment"
           inert={readOnly}
@@ -1132,7 +1189,9 @@ export function ProviderInstanceCard({
           />
         </SettingsSection>
       ) : null}
-      {!gatewayManaged && environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
+      {!usesGatewayCredentials &&
+      environmentId !== undefined &&
+      liveProvider?.driver === "acpRegistry" ? (
         <AcpSessionManagementSection
           environmentId={environmentId}
           instanceId={instanceId}
@@ -1146,12 +1205,12 @@ export function ProviderInstanceCard({
         <SettingsSection title="Models">
           <div className="px-3 py-3 sm:px-4">
             <p className="mb-3 text-xs text-muted-foreground">
-              {gatewayManaged
+              {usesGatewayCredentials
                 ? "Models are discovered from your connected accounts. Favorites and visibility are shared across your devices."
                 : "Model preferences and custom models are saved on the selected environment and shared across connected devices."}
             </p>
             <ProviderModelsSection
-              canManageCustomModels={!readOnly && !gatewayManaged}
+              canManageCustomModels={!readOnly && !usesGatewayCredentials}
               canWritePreferences={canWriteSettings}
               instanceId={instanceId}
               driverKind={driverKind}

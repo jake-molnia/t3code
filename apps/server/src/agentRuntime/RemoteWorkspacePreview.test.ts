@@ -4,6 +4,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { expect, it } from "@effect/vitest";
 import * as C from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -28,6 +29,8 @@ import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as RemotePreview from "./RemoteWorkspacePreview.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
+import * as Bindings from "./Bindings.ts";
+import * as RuntimeSchema from "./Schema.ts";
 import { makePreviewExecutor } from "./worker/PreviewExecutor.ts";
 import { openWorkerJournal } from "../execution/WorkerJournal.ts";
 import { createExecutionWorker } from "../execution/ExecutionWorker.ts";
@@ -44,6 +47,103 @@ const layer = Layer.mergeAll(
   ServerConfig.layerTest(process.cwd(), { prefix: "remote-preview-" }),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 it.layer(layer, { excludeTestServices: true })("remote browser transport", (it) => {
+  it.effect("lists an unbound draft without observing or acquiring compute", () =>
+    Effect.gen(function* () {
+      yield* RuntimeSchema.migrate;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = C.ThreadId.make("unbound-draft");
+      const local = yield* PreviewManager.PreviewManager;
+      const expected = yield* local.list({ threadId });
+      let observations = 0;
+      const remote = yield* PreviewManager.PreviewManager.pipe(
+        Effect.provide(
+          RemotePreview.managerLayer.pipe(
+            Layer.provide(
+              Layer.mock(RuntimeClient.RuntimeClient, {
+                enabled: true,
+                observeThread: (id) => {
+                  observations++;
+                  return Bindings.read(id).pipe(
+                    Effect.provideService(SqlClient.SqlClient, sql),
+                    Effect.mapError(
+                      (cause) =>
+                        new RuntimeClient.RuntimeClientError({
+                          operation: "observe-thread",
+                          cause,
+                        }),
+                    ),
+                    Effect.andThen(Effect.die("Unexpected draft binding")),
+                  );
+                },
+              }),
+            ),
+          ),
+        ),
+      );
+      const result = yield* remote.list({ threadId });
+      expect(result.sessions).toEqual(expected.sessions);
+      expect(result.revision).toBe(0);
+      expect(result.serverEpoch).toBeTruthy();
+      expect(observations).toBe(0);
+    }),
+  );
+
+  it.effect.each(["observation", "transport"] as const)(
+    "preserves %s failures for a bound thread",
+    (failure) =>
+      Effect.gen(function* () {
+        yield* RuntimeSchema.migrate;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = C.ThreadId.make(`preview-${failure}-failure`);
+        const workspaceId = `preview-${failure}-workspace`;
+        yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id, owner_thread_id)
+        VALUES (${workspaceId}, ${threadId})`;
+        yield* sql`INSERT INTO agent_runtime_thread_bindings(thread_id, workspace_id)
+        VALUES (${threadId}, ${workspaceId})`;
+        const client = createExecutionClient({
+          identity: {
+            workspaceId,
+            allocationId: "one",
+            generation: 1,
+            incarnation: "one",
+            podUid: "one",
+            protocolVersion: 1,
+          },
+          token: "preview-test-token",
+          endpoint: "http://worker.test",
+          fetch: async () => new Response("Unauthorized", { status: 401 }),
+        });
+        const remote = yield* PreviewManager.PreviewManager.pipe(
+          Effect.provide(
+            RemotePreview.managerLayer.pipe(
+              Layer.provide(
+                Layer.mock(RuntimeClient.RuntimeClient, {
+                  enabled: true,
+                  observeThread: () =>
+                    failure === "transport"
+                      ? Effect.succeed({ kind: "running", client })
+                      : Effect.fail(
+                          new RuntimeClient.RuntimeClientError({
+                            operation: "observe-thread",
+                            cause: "Controller authorization failed",
+                          }),
+                        ),
+                }),
+              ),
+            ),
+          ),
+        );
+        const result = yield* Effect.exit(remote.list({ threadId }));
+        expect(Exit.isFailure(result)).toBe(true);
+        if (Exit.isFailure(result))
+          expect(Cause.pretty(result.cause)).toContain(
+            failure === "transport"
+              ? "Worker transport authorization"
+              : "Controller authorization failed",
+          );
+      }),
+  );
+
   it.effect(
     "preserves viewer input order across delayed HTTP without blocking dialog or another viewer",
     () =>

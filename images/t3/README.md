@@ -82,7 +82,8 @@ The web image includes `jake-molnia/CLIProxyAPI` at
 archive checksum and applies `cliproxy-device.patch` to expose the existing Codex
 device sign-in through the management API. The patch also serializes account
 persistence with cancellation for the supported sign-in flows. It also preserves known input
-modalities in model discovery so OpenCode can send images to models that accept them.
+and output modalities in model discovery so OpenCode can send images to models that accept them
+and omit image-generation-only models from coding turns.
 
 Before the first head startup, set `T3_GATEWAY_API_KEY` to a random secret shared
 with execution workers. First startup fails if this key is missing. Set each worker's `T3_GATEWAY_URL` to the head's reachable

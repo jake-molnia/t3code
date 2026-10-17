@@ -80,7 +80,7 @@ export function validateHarnessLaunch(
   if (
     instance.enabled !== false &&
     environment.T3_GATEWAY_URL &&
-    ["cursor", "muse", "antigravity"].includes(instance.driver)
+    ["cursor", "muse"].includes(instance.driver)
   ) {
     throw new Error(
       `${instance.driver} requires native provider authentication and cannot use model gateway credentials`,
@@ -92,7 +92,8 @@ export function validateHarnessLaunch(
 export function gatewayRouting(text: string, environment: NodeJS.ProcessEnv = process.env) {
   const resolve = harnessDefaults(text, environment);
   return (instance: ProviderInstanceConfig): ProviderInstanceConfig => {
-    if (instance.enabled === false) return instance;
+    // Antigravity owns its account and model API; it cannot use gateway credentials.
+    if (instance.enabled === false || instance.driver === "antigravity") return instance;
     const route = resolve({ driver: instance.driver });
     const execution = decodeConfig(instance.config ?? {});
     const routing = decodeConfig(route.config ?? {});

@@ -149,6 +149,16 @@ describe("sandbox harness defaults", () => {
       false,
     );
   });
+  it("allows native Antigravity authentication alongside the model gateway", () => {
+    const instance = {
+      driver: ProviderDriverKind.make("antigravity"),
+      enabled: true,
+      config: { authMethod: "gemini-api-key", apiKey: "native-key" },
+    };
+    const environment = { T3_GATEWAY_URL: "http://gateway", T3_GATEWAY_API_KEY: "gateway-key" };
+    expect(() => validateHarnessLaunch(instance, environment)).not.toThrow();
+    expect(gatewayRouting("{}", environment)(instance)).toEqual(instance);
+  });
   it("keeps native account configuration ahead of optional operator defaults", () => {
     const apply = harnessDefaults(
       JSON.stringify({

@@ -1,15 +1,17 @@
 # Antigravity
 
 T3 Code runs Google's official Antigravity agent in your thread's sandbox.
-It has its own sign-in, separate from the Antigravity IDE or CLI. Google controls
-which models and account access are available through this agent.
+It has its own sign-in, separate from the Antigravity IDE, CLI, or an Antigravity
+account connected under Model access. Google controls which models and account
+access are available through this agent.
 
 ## Set up Antigravity
 
-Open **Settings > Providers**, add an Antigravity instance, and enable it.
-Choose **Sign in** and complete the Google sign-in. Wait for T3 Code to confirm
-account access and load models before starting a thread. Add a separate provider
-instance for each Google account.
+Open **Settings > Harnesses** and select **Antigravity**. Under **New sessions**,
+choose **Use for new sessions**, then choose **Sign in** and complete the Google
+sign-in. Wait for T3 Code to confirm account access and load models before
+starting a thread. Connecting a Google account under **Model access** does not
+sign you into this harness.
 
 The sandbox image supplies Antigravity and its native helper. If the provider
 reports a missing or incompatible runtime, ask your administrator to update the
