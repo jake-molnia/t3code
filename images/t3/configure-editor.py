@@ -2,21 +2,38 @@
 """Seed a new code-server profile before its first browser connection."""
 import argparse
 import json
+import os
 from pathlib import Path
+import tempfile
 
 
 def configure_editor(state: Path, manifest: Path) -> None:
     settings = state / "ide" / "user-data" / "User" / "settings.json"
+    if settings.exists():
+        return
     defaults = json.loads(manifest.read_text())["contributes"]["configurationDefaults"]
+    # These choices are consumed before extension defaults load. Keep theme,
+    # completion and other live defaults in the extension so image updates apply.
+    initial = {key: defaults[key] for key in (
+        "workbench.startupEditor", "workbench.secondarySideBar.defaultVisibility"
+    )}
     # VS Code rejects extension defaults for this application-scoped preference.
-    defaults["chat.tips.enabled"] = False
+    initial["chat.tips.enabled"] = False
+    contents = json.dumps(initial, indent=2) + "\n"
     settings.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        # User settings can contain JSONC and must remain byte-for-byte unchanged.
-        with settings.open("x") as target:
-            target.write(json.dumps(defaults, indent=2) + "\n")
-    except FileExistsError:
-        pass
+    with tempfile.NamedTemporaryFile(mode="w", dir=settings.parent, prefix=".t3-settings-", delete=False) as target:
+        temporary = Path(target.name)
+        try:
+            target.write(contents)
+            target.flush()
+            os.fsync(target.fileno())
+            try:
+                # Atomic publication without replacing a user file created concurrently.
+                os.link(temporary, settings)
+            except FileExistsError:
+                pass
+        finally:
+            temporary.unlink()
 
 
 if __name__ == "__main__":
