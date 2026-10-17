@@ -2,10 +2,13 @@ import {
   SandboxIdeError,
   SandboxIdeOpenInput,
   type SandboxIdeOpenResult,
-  type AuthSessionId,
+  AuthSessionId,
+  AuthOrchestrationOperateScope,
   SandboxIdeTarget,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Option from "effect/Option";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -30,6 +33,7 @@ export const routePrefix = "/api/sandbox-ide/";
 export const cookieName = "t3_ide_session";
 
 const Session = Schema.Struct({
+  authSessionId: AuthSessionId,
   target: SandboxIdeTarget,
   identity: ExecutionIdentity,
   cookie: Schema.String,
@@ -77,6 +81,7 @@ export const layer = Layer.effect(
     const crypto = yield* Crypto.Crypto;
     const serviceScope = yield* Effect.scope;
     const sql = yield* SqlClient.SqlClient;
+    const authSessions = yield* AuthSessions.AuthSessionRepository;
     const activities = new Map<string, Set<Scope.Closeable>>();
     const releaseActivity = (id: string) =>
       Effect.gen(function* () {
@@ -138,6 +143,7 @@ export const layer = Layer.effect(
               Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
             );
             const encoded = yield* Schema.encodeEffect(sessionJson)({
+              authSessionId: owner.authSessionId,
               target,
               identity,
               cookie,
@@ -205,6 +211,21 @@ export const layer = Layer.effect(
           } else if (input.cookie !== session.cookie) {
             return yield* new SandboxIdeError({ reason: "forbidden" });
           }
+          const auth = yield* authSessions
+            .getById({ sessionId: session.authSessionId })
+            .pipe(
+              Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
+            );
+          if (
+            Option.isNone(auth) ||
+            auth.value.revokedAt !== null ||
+            auth.value.expiresAt.epochMilliseconds <= now ||
+            !auth.value.scopes.includes(AuthOrchestrationOperateScope)
+          ) {
+            yield* sql`DELETE FROM agent_runtime_ide_sessions WHERE session_id = ${input.sessionId}`;
+            yield* releaseActivity(input.sessionId);
+            return yield* new SandboxIdeError({ reason: "forbidden" });
+          }
           const current = yield* (
             "threadId" in session.target
               ? runtime.observeThread(session.target.threadId)
@@ -250,4 +271,4 @@ export const layer = Layer.effect(
         ),
     });
   }),
-);
+).pipe(Layer.provide(AuthSessions.layer));

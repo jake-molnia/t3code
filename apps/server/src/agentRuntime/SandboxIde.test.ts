@@ -4,6 +4,7 @@ import * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as RuntimeSchema from "./Schema.ts";
+import authMigration from "../persistence/Migrations/031_AuthAuthorizationScopes.ts";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import { acquireWorkspaceActivity, WorkspaceActivity } from "./WorkspaceActivity.ts";
@@ -38,6 +39,12 @@ const setup = Effect.gen(function* () {
   const database = yield* Layer.build(NodeSqliteClient.layer({ filename: ":memory:" }));
   const sql = Context.get(database, SqlClient.SqlClient);
   yield* RuntimeSchema.migrate.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+  yield* authMigration.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+  for (const sessionId of [owner.authSessionId, AuthSessionId.make("browser-two")]) {
+    yield* sql`INSERT INTO auth_sessions(session_id, subject, scopes, method, issued_at, expires_at)
+      VALUES (${sessionId}, 'test', '["orchestration:operate"]', 'browser-session-cookie',
+        '1970-01-01T00:00:00.000Z', '9999-12-31T23:59:59.999Z')`;
+  }
   const clients = new Map([
     ["root-one", client("one")],
     ["child", client("one")],
@@ -100,6 +107,7 @@ const setup = Effect.gen(function* () {
       return { url, sessionId, requestOrigin: url.origin, cookie: bootstrap.cookie };
     });
   return {
+    sql,
     ide,
     clients,
     make,
@@ -473,5 +481,45 @@ it.effect("fails closed when either a thread or project worker is unavailable", 
     }
     expect((yield* WorkspaceActivity).has("one")).toBe(false);
     expect((yield* WorkspaceActivity).has("t3:utility:project:project")).toBe(false);
+  }),
+);
+
+it.effect.each(["revoke", "expire", "remove", "scope"])(
+  "rejects established IDE access when its owning app session changes: %s",
+  (invalidation) =>
+    Effect.gen(function* () {
+      const { ide, open, sql, make } = yield* setup;
+      const session = yield* open("root-one");
+      if (invalidation === "revoke")
+        yield* sql`UPDATE auth_sessions SET revoked_at = '1970-01-01T00:00:00.000Z' WHERE session_id = ${owner.authSessionId}`;
+      else if (invalidation === "expire")
+        yield* sql`UPDATE auth_sessions SET expires_at = '1970-01-01T00:00:00.000Z' WHERE session_id = ${owner.authSessionId}`;
+      else if (invalidation === "scope")
+        yield* sql`UPDATE auth_sessions SET scopes = '[]' WHERE session_id = ${owner.authSessionId}`;
+      else yield* sql`DELETE FROM auth_sessions WHERE session_id = ${owner.authSessionId}`;
+      const restarted = yield* make();
+      expect((yield* restarted.authorize(session).pipe(Effect.flip)).reason).toBe("forbidden");
+      expect((yield* Effect.exit(ide.authorize(session)))._tag).toBe("Failure");
+    }),
+);
+
+it.effect("rejects an unredeemed IDE ticket after its app session is revoked", () =>
+  Effect.gen(function* () {
+    const { ide, sql } = yield* setup;
+    const opened = yield* ide.open({
+      target: { threadId: ThreadId.make("root-one") },
+      cwd: "/workspace/repo",
+    });
+    yield* sql`UPDATE auth_sessions SET revoked_at = '1970-01-01T00:00:00.000Z' WHERE session_id = ${owner.authSessionId}`;
+    const url = new URL(opened.url, owner.origin);
+    expect(
+      (yield* ide
+        .authorize({
+          sessionId: url.pathname.split("/")[3]!,
+          requestOrigin: owner.origin,
+          ticket: url.searchParams.get("ticket")!,
+        })
+        .pipe(Effect.flip)).reason,
+    ).toBe("forbidden");
   }),
 );
