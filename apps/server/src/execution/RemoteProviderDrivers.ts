@@ -352,8 +352,16 @@ export const makeRemoteDrivers = Effect.gen(function* () {
             if (wake || lastSnapshot === undefined) {
               client = yield* utility;
             } else {
-              const observation = yield* runtime.observeWorkspace(`t3:utility:${instanceId}`);
-              if (observation.kind === "stopped") return lastSnapshot;
+              const observation = yield* runtime
+                .observeWorkspace(`t3:utility:${instanceId}`)
+                .pipe(
+                  Effect.catch((error) =>
+                    Runtime.isWorkerObservationPending(error)
+                      ? Effect.succeed(null)
+                      : Effect.fail(error),
+                  ),
+                );
+              if (observation === null || observation.kind === "stopped") return lastSnapshot;
               client = observation.client;
               if (!configuredUtility || !sameIdentity(configuredUtility, client.identity)) {
                 yield* configure(client, false);

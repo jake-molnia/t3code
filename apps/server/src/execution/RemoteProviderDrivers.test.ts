@@ -20,6 +20,8 @@ import { makeRemoteDrivers } from "./RemoteProviderDrivers.ts";
 import { makeProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
 import { harnessDefaults } from "./HarnessDefaults.ts";
 
+const encodeProviderSnapshot = Schema.encodeEffect(Schema.toCodecJson(C.ServerProvider));
+
 const decodePollingRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ method: Schema.String })),
 );
@@ -804,4 +806,113 @@ it.live.each([
       ),
     ),
   ),
+);
+
+it.live.each(["not-ready", "status-503", "unauthorized", "gateway-error"] as const)(
+  "handles %s during passive gateway provider polling without waking a utility",
+  (scenario) =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("gateway-idle");
+      const available: C.ServerProvider = {
+        instanceId,
+        driver: C.ProviderDriverKind.make("codex"),
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-10-17T00:00:00.000Z",
+        models: [{ slug: "gateway/gpt", name: "GPT", isCustom: false, capabilities: null }],
+        slashCommands: [],
+        skills: [],
+        availability: "available",
+      };
+      const encoded = yield* encodeProviderSnapshot(available);
+      let stage: "ready" | "transition" | "stopped" = "ready";
+      let allocations = 0;
+      let snapshots = 0;
+      const client = createExecutionClient({
+        identity: {
+          workspaceId: `t3:utility:${instanceId}`,
+          allocationId: "allocation",
+          generation: 1,
+          incarnation: "worker",
+          podUid: "worker",
+          protocolVersion: 1,
+        },
+        endpoint: "http://worker.test",
+        token: "test-token",
+        fetch: async (_url, init) => {
+          const { method } = decodePollingRequest(init?.body);
+          if (method === "configureProvider") return Response.json({ ok: true, value: null });
+          snapshots++;
+          if (scenario === "gateway-error" && stage === "transition")
+            throw new Error("Gateway account unavailable");
+          return Response.json({ ok: true, value: encoded });
+        },
+      });
+      yield* Effect.gen(function* () {
+        const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
+        const driver = drivers.find((entry) => entry.driverKind === "codex");
+        if (!driver) throw new Error("Missing Codex");
+        const instance = yield* driver.create({
+          instanceId,
+          displayName: undefined,
+          environment: [],
+          enabled: true,
+          config: driver.defaultConfig(),
+        });
+        const initial = yield* instance.snapshot.getSnapshot;
+        expect(initial.availability).toBe("available");
+        stage = "transition";
+        const transition = yield* instance.snapshot.getSnapshot;
+        stage = "stopped";
+        const stopped = yield* instance.snapshot.getSnapshot;
+        if (scenario === "not-ready" || scenario === "status-503") {
+          expect(transition).toEqual(initial);
+          expect(stopped).toEqual(initial);
+        } else {
+          expect(transition.availability).toBe("unavailable");
+          expect(stopped.availability).toBe("unavailable");
+        }
+        expect(allocations).toBe(1);
+        expect(snapshots).toBe(scenario === "gateway-error" ? 2 : 1);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Settings.layerTest(),
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ T3_GATEWAY_API_KEY: "gateway-key" })),
+            Layer.mock(Runtime.RuntimeClient)({
+              enabled: true,
+              forUtility: () =>
+                Effect.sync(() => {
+                  allocations++;
+                  return client;
+                }),
+              observeWorkspace: () =>
+                Effect.suspend(
+                  (): Effect.Effect<Runtime.RuntimeObservation, Runtime.RuntimeClientError> => {
+                    if (stage === "stopped") return Effect.succeed({ kind: "stopped" as const });
+                    if (stage !== "transition" || scenario === "gateway-error")
+                      return Effect.succeed({ kind: "running" as const, client });
+                    return Effect.fail(
+                      new Runtime.RuntimeClientError({
+                        operation: "observe-workspace",
+                        cause:
+                          scenario === "not-ready"
+                            ? new Runtime.WorkerNotReady()
+                            : new Runtime.RuntimeClientError({
+                                operation: "request",
+                                httpStatus: scenario === "status-503" ? 503 : 401,
+                                cause: "Controller unavailable",
+                              }),
+                      }),
+                    );
+                  },
+                ),
+            }),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped),
 );
