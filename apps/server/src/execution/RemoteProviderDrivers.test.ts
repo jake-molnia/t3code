@@ -251,10 +251,28 @@ it.live("does not expose invented central auth controllers for CLI-owned account
   }).pipe(Effect.scoped, Effect.provide(Layer.merge(unavailableRuntime, Settings.layerTest()))),
 );
 
-it.live.each(["cursor", "antigravity"])(
-  "keeps %s instance credentials separate across roots and clears copies on logout",
-  (driverKind) =>
+it.live.each([
+  { driverKind: "cursor", gateway: false },
+  { driverKind: "antigravity", gateway: false },
+  { driverKind: "antigravity", gateway: true },
+])(
+  "keeps $driverKind credentials separate across roots and clears copies on logout with gateway=$gateway",
+  ({ driverKind, gateway }) =>
     Effect.gen(function* () {
+      let gatewayRequests = 0;
+      const gatewayServer = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          listenWorker({
+            host: "127.0.0.1",
+            port: 0,
+            handle: async () => {
+              gatewayRequests++;
+              return Response.json({ data: [{ id: "gateway-only" }] });
+            },
+          }),
+        ),
+        (server) => Effect.promise(server.close),
+      );
       const instanceId = ProviderInstanceId.make(`${driverKind}-account`);
       const snapshot = yield* buildUnavailableProviderSnapshot({
         instanceId,
@@ -340,7 +358,7 @@ it.live.each(["cursor", "antigravity"])(
       yield* Effect.gen(function* () {
         const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
         const driver = drivers.find((driver) => driver.driverKind === driverKind);
-        if (!driver) throw new Error("Missing Cursor");
+        if (!driver) throw new Error(`Missing ${driverKind}`);
         const instance = yield* driver.create({
           instanceId,
           displayName: undefined,
@@ -349,7 +367,7 @@ it.live.each(["cursor", "antigravity"])(
           config: driver.defaultConfig(),
         });
         if (!instance.snapshotForCwd || !instance.auth)
-          throw new Error("Missing Cursor capabilities");
+          throw new Error(`Missing ${driverKind} capabilities`);
         if (instance.refreshModels) yield* instance.refreshModels();
         yield* instance.snapshotForCwd("first");
         yield* instance.snapshotForCwd("second");
@@ -383,6 +401,7 @@ it.live.each(["cursor", "antigravity"])(
         expect(ownerKey).toBeNull();
         expect(copies.get("root-one")).toBeNull();
         expect(copies.get("root-two")).toBeNull();
+        expect(gatewayRequests).toBe(0);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -395,6 +414,16 @@ it.live.each(["cursor", "antigravity"])(
               clientForCwd: (cwd) => Effect.succeed(cwd === "first" ? first : second),
             }),
             Settings.layerTest(),
+            ConfigProvider.layer(
+              ConfigProvider.fromUnknown(
+                gateway
+                  ? {
+                      T3_GATEWAY_API_KEY: "key",
+                      T3_GATEWAY_MANAGEMENT_URL: `http://127.0.0.1:${gatewayServer.port}`,
+                    }
+                  : {},
+              ),
+            ),
           ),
         ),
       );
@@ -647,7 +676,7 @@ it.live.each([
 it.live("gateway deployment does not expose or copy native managed account controllers", () =>
   Effect.gen(function* () {
     const drivers = yield* makeRemoteDrivers.pipe(Effect.provide(McpProviderSessions.layer));
-    for (const kind of ["codex", "cursor", "antigravity"]) {
+    for (const kind of ["codex", "cursor"]) {
       const driver = drivers.find((driver) => driver.driverKind === kind);
       if (!driver) throw new Error("Missing provider");
       const instance = yield* driver.create({

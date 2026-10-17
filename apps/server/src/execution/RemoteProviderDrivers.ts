@@ -97,7 +97,6 @@ export const makeRemoteDrivers = Effect.gen(function* () {
   const advertisedMcp = yield* Config.option(Config.String("T3_MCP_ADVERTISED_URL"));
   const gatewayKey = yield* Config.option(Config.String("T3_GATEWAY_API_KEY"));
   const gatewayUrl = yield* Config.option(Config.String("T3_GATEWAY_MANAGEMENT_URL"));
-  const gatewayManaged = Option.isSome(gatewayKey);
   const readGatewayCatalog =
     Option.isSome(gatewayKey) && Option.isSome(gatewayUrl)
       ? createGatewayCatalogReader(gatewayUrl.value, gatewayKey.value)
@@ -108,6 +107,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
     create: (input) =>
       Effect.gen(function* () {
         const instanceId = input.instanceId;
+        const gatewayManaged = Option.isSome(gatewayKey) && driver.driverKind !== "antigravity";
         const credentialRecipients = new Map<string, ExecutionClient>();
         let configuredUtility: ExecutionClient["identity"] | undefined;
         const authPolicy = gatewayManaged
@@ -454,7 +454,7 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               }),
             ),
             Effect.flatMap((value) =>
-              readGatewayCatalog && input.enabled
+              gatewayManaged && readGatewayCatalog && input.enabled
                 ? Effect.promise(readGatewayCatalog).pipe(
                     Effect.map((catalog) => projectGatewaySnapshot(value, catalog)),
                   )

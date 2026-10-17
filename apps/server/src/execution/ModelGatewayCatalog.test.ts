@@ -57,7 +57,7 @@ test.each(["codex", "claudeAgent", "grok", "opencode", "pi"])(
   },
 );
 
-test.each(["cursor", "muse", "antigravity"])(
+test.each(["cursor", "muse"])(
   "%s remains explicitly unsupported with gateway credentials",
   (driver) => {
     const projected = projectGatewaySnapshot(snapshot(driver), {
@@ -68,6 +68,33 @@ test.each(["cursor", "muse", "antigravity"])(
     expect(projected.models).toEqual([]);
   },
 );
+
+test("Antigravity retains native discovery and inference independently of the gateway", async () => {
+  const native = snapshot("antigravity");
+  let requests = 0;
+  for (const state of [
+    { kind: "disabled" },
+    { kind: "unavailable" },
+    { kind: "ready", catalog: { data: [] } },
+    { kind: "ready", catalog: { data: [{ id: "gateway-only" }] } },
+  ] as const) {
+    expect(projectGatewaySnapshot(native, state)).toBe(native);
+  }
+  const gateway = createModelGatewayCatalog({
+    directory: "/unused",
+    environment: { T3_GATEWAY_URL: "http://gateway.invalid", T3_GATEWAY_API_KEY: "key" },
+    request: async () => {
+      requests++;
+      throw new Error("Native Antigravity must not fetch the gateway");
+    },
+  });
+  const instance = { driver: ProviderDriverKind.make("antigravity") };
+  expect(await gateway.configure("native", instance)).toBe(instance);
+  const selection = { instanceId: ProviderInstanceId.make("native"), model: "native-model" };
+  expect(gateway.normalizeSelection("antigravity", selection)).toBe(selection);
+  await gateway.prepareInference("antigravity", "native-model", "native");
+  expect(requests).toBe(0);
+});
 
 test("gateway native files reference the inference key and contain one route per model", () => {
   const configs = nativeGatewayConfigs(

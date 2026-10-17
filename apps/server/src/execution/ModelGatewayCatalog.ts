@@ -84,7 +84,7 @@ export function projectGatewaySnapshot(
   snapshot: ServerProvider,
   state: GatewayCatalogState,
 ): ServerProvider {
-  if (state.kind === "disabled") return snapshot;
+  if (state.kind === "disabled" || snapshot.driver === "antigravity") return snapshot;
   const reason = gatewayUnavailableReason(state, snapshot.driver);
   const setup = { ...snapshot.setup, canAuthenticate: false };
   if (reason || state.kind !== "ready")
@@ -297,7 +297,7 @@ export function createModelGatewayCatalog(options: {
   const readCatalog = base ? createGatewayCatalogReader(base, apiKey, request) : undefined;
   const instances = new Map<string, NativeConfiguration>();
   const normalizeSelection = (driver: string, selection: ModelSelection) => {
-    if (!base) return selection;
+    if (!base || driver === "antigravity") return selection;
     const native = instances.get(selection.instanceId);
     if (
       driver === "pi" &&
@@ -419,6 +419,7 @@ export function createModelGatewayCatalog(options: {
     normalizeSelection,
     snapshot: (snapshot: ServerProvider) => projectGatewaySnapshot(snapshot, state),
     async prepareInference(driver: string, model?: string, instanceId = driver) {
+      if (driver === "antigravity") return;
       const next = await refresh();
       const reason = gatewayUnavailableReason(next, driver);
       if (reason) throw new Error(reason);
