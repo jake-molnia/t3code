@@ -8,6 +8,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
@@ -15,40 +16,51 @@ import * as CheckpointCapture from "./CheckpointCaptureService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as RunFinalization from "./RunFinalizationService.ts";
 
-it.effect("refreshes workspace after checkpoint capture without reading history", () => {
-  const threadId = ThreadId.make("thread_finalize");
-  const runId = RunId.make("run_finalize");
-  const scopeId = CheckpointScopeId.make("scope_finalize");
-  const capture = vi.fn(() => Effect.void);
-  const refresh = vi.fn(() => Effect.void);
-  const checkpointContext = {
-    runs: [],
-    checkpointScopes: [{ id: scopeId, runId, kind: "root_run" as const, cwd: "/repo" }],
-    checkpoints: [],
-  };
-  const layer = RunFinalization.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.mock(CheckpointCapture.CheckpointCaptureServiceV2)({ execute: capture }),
-        Layer.mock(ProjectionStore.ProjectionStoreV2)({
-          getThreadProjection: () =>
-            Effect.die("workspace refresh must not load transcript history"),
-          getCheckpointContext: () => Effect.succeed(checkpointContext),
-        }),
-        Layer.succeed(RunFinalization.RunFinalizationObserver, {
-          refresh,
-          refreshAfterTurn: () => Effect.void,
-        }),
+it.effect.each([false, true])(
+  "refreshes local workspace without remote acquisition, disabled routing installed=%s",
+  (disabledRoutingInstalled) => {
+    const threadId = ThreadId.make("thread_finalize");
+    const runId = RunId.make("run_finalize");
+    const scopeId = CheckpointScopeId.make("scope_finalize");
+    const capture = vi.fn(() => Effect.void);
+    const refresh = vi.fn(() => Effect.void);
+    const checkpointContext = {
+      runs: [],
+      checkpointScopes: [{ id: scopeId, runId, kind: "root_run" as const, cwd: "/repo" }],
+      checkpoints: [],
+    };
+    const layer = RunFinalization.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(CheckpointCapture.CheckpointCaptureServiceV2)({ execute: capture }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getThreadProjection: () =>
+              Effect.die("workspace refresh must not load transcript history"),
+            getCheckpointContext: () => Effect.succeed(checkpointContext),
+          }),
+          Layer.succeed(RunFinalization.RunFinalizationObserver, {
+            refresh,
+            refreshAfterTurn: () => Effect.void,
+          }),
+        ),
       ),
-    ),
-  );
-  return Effect.gen(function* () {
-    const service = yield* RunFinalization.RunFinalizationService;
-    yield* service.finalize({ threadId, runId, scopeId });
-    assert.equal(capture.mock.calls.length, 1);
-    assert.deepEqual(refresh.mock.calls[0], [{ cwd: "/repo", threadId, runId }]);
-  }).pipe(Effect.provide(layer));
-});
+      Layer.provide(
+        disabledRoutingInstalled
+          ? Layer.mock(WorkspaceRouting.WorkspaceRouting)({
+              enabled: false,
+              execute: () => Effect.die("local finalization must not acquire remote execution"),
+            })
+          : Layer.empty,
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* RunFinalization.RunFinalizationService;
+      yield* service.finalize({ threadId, runId, scopeId });
+      assert.equal(capture.mock.calls.length, 1);
+      assert.deepEqual(refresh.mock.calls[0], [{ cwd: "/repo", threadId, runId }]);
+    }).pipe(Effect.provide(layer));
+  },
+);
 
 it.effect.each(
   (
