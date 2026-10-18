@@ -10,44 +10,69 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/reactivity";
 import * as Option from "effect/Option";
-import { useEffect, useRef, useState } from "react";
-import { ChevronDownIcon, PlusIcon } from "lucide-react";
-import { useProjects } from "../../state/entities";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { PlusIcon } from "lucide-react";
 import { mcpConnections } from "../../state/mcpConnections";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsGroup } from "./SettingsGroup";
-import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
+import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { commonMcpSelection } from "./McpSettings.logic";
+import { commonMcpSelection, readMcpAuthReturnScope } from "./McpSettings.logic";
 
 const pendingAuthKey = (state: string) => `t3:mcp-oauth:${state}`;
+const pendingScopeKey = (state: string) => `${pendingAuthKey(state)}:scope`;
 
 export function McpSettings() {
-  const { environment } = useSettingsScope();
+  const { environment, scope } = useSettingsScope();
   const params = new URLSearchParams(window.location.search);
   const state = params.get("state");
   const pendingEnvironment = state ? sessionStorage.getItem(pendingAuthKey(state)) : null;
   const environmentId = pendingEnvironment
     ? EnvironmentId.make(pendingEnvironment)
     : environment?.environmentId;
+  const completingAuth = state !== null && (params.has("code") || params.has("error"));
+  const projectIds = scope.members
+    .filter((member) => member.environmentId === environmentId)
+    .map((member) => member.id);
+  if (!completingAuth && projectIds.length === 0) {
+    return (
+      <SettingsPageContainer>
+        <p className="text-sm text-muted-foreground">
+          {scope.kind === "unavailable"
+            ? scope.message
+            : "Select a project above to configure MCP access."}
+        </p>
+      </SettingsPageContainer>
+    );
+  }
   return environmentId ? (
-    <McpEnvironmentSettings key={environmentId} environmentId={environmentId} />
+    <McpProjectSettings
+      key={environmentId}
+      environmentId={environmentId}
+      projectIds={projectIds}
+      completingAuth={completingAuth}
+    />
   ) : (
     <SettingsPageContainer>
-      <p className="text-sm text-muted-foreground">
-        Connect an environment to manage MCP connections.
-      </p>
+      <p className="text-sm text-muted-foreground">Connect to T3 Code to manage MCP connections.</p>
     </SettingsPageContainer>
   );
 }
 
-function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentId }) {
+function McpProjectSettings({
+  environmentId,
+  projectIds,
+  completingAuth,
+}: {
+  environmentId: EnvironmentId;
+  projectIds: readonly ProjectId[];
+  completingAuth: boolean;
+}) {
   const query = mcpConnections.state({ environmentId, input: {} });
   const result = useAtomValue(query);
   const reload = useAtomRefresh(query);
@@ -56,10 +81,6 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
   const canCompleteAuth = useAtomValue(mcpConnections.completeAuth.permissionAtom(environmentId));
   const completeAuth = useAtomCommand(mcpConnections.completeAuth);
   const navigate = useNavigate();
-  const projects = useProjects().filter(
-    (project) => project.environmentId === environmentId && !project.isScratch,
-  );
-  const [selectedProjects, setSelectedProjects] = useState<readonly ProjectId[]>([]);
   const [adding, setAdding] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -72,7 +93,16 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
   const authStarted = useRef<number | null>(null);
   const [authRetry, setAuthRetry] = useState(false);
   const [authAttempt, setAuthAttempt] = useState(0);
-  const selected = selectedProjects.filter((id) => projects.some((project) => project.id === id));
+  const returnFromAuth = useCallback(
+    async (state: string) => {
+      const search = readMcpAuthReturnScope(sessionStorage.getItem(pendingScopeKey(state)));
+      await navigate({ to: "/settings/mcp", search, replace: true });
+      sessionStorage.removeItem(pendingAuthKey(state));
+      sessionStorage.removeItem(pendingScopeKey(state));
+      reload();
+    },
+    [navigate, reload],
+  );
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -96,12 +126,10 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
           ? "Connection added."
           : "Sign-in could not be completed. Add the connection again.",
       );
-      sessionStorage.removeItem(pendingAuthKey(state));
-      await navigate({ to: "/settings/mcp", search: { machine: environmentId }, replace: true });
-      reload();
+      await returnFromAuth(state);
     };
     void finish();
-  }, [authAttempt, canCompleteAuth, completeAuth, environmentId, navigate, reload]);
+  }, [authAttempt, canCompleteAuth, completeAuth, environmentId, returnFromAuth]);
 
   return (
     <SettingsPageContainer>
@@ -113,7 +141,7 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
           <Button
             size="sm"
             variant="outline"
-            disabled={!data?.available || !canConnect}
+            disabled={completingAuth || !data?.available || !canConnect}
             onClick={() => setAdding(!adding)}
           >
             <PlusIcon className="size-4" />
@@ -123,7 +151,13 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
       >
         <div className="grid gap-4">
           <p className="px-3 text-sm text-muted-foreground sm:px-4">
-            Connect once, then choose which projects and tools have access.
+            Choose which tools this project can use. Changes apply to the next tool request in new
+            and existing agent sessions. Calls already running can finish.
+          </p>
+          <p className="px-3 text-xs text-muted-foreground sm:px-4">
+            Connection accounts are shared. Reconnecting or disconnecting an account affects every
+            project that uses it. Adding a connection leaves project access disabled until you
+            enable it.
           </p>
           {authMessage ? (
             <p role="status" className="text-sm text-muted-foreground">
@@ -146,6 +180,22 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
               </Button>
             </div>
           ) : null}
+          {completingAuth ? (
+            <div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  const state = new URLSearchParams(window.location.search).get("state");
+                  if (state) void returnFromAuth(state);
+                  setAuthMessage(null);
+                  setAuthRetry(false);
+                }}
+              >
+                Back to MCP settings
+              </Button>
+            </div>
+          ) : null}
           {AsyncResult.isFailure(result) ? (
             <div className="flex items-center gap-3">
               <p role="alert" className="text-sm text-destructive">
@@ -161,7 +211,7 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
           ) : null}
           {data && !data.available ? (
             <p className="text-sm text-muted-foreground">
-              MCP connections are unavailable on this environment.
+              MCP connections are currently unavailable.
             </p>
           ) : null}
           {adding ? (
@@ -174,52 +224,17 @@ function McpEnvironmentSettings({ environmentId }: { environmentId: EnvironmentI
               onCancel={() => setAdding(false)}
             />
           ) : null}
-          {data?.available ? (
+          {data?.available && !completingAuth ? (
             <>
-              <div className="flex flex-wrap items-center gap-3">
-                <Menu>
-                  <MenuTrigger render={<Button variant="outline" size="sm" />}>
-                    {selected.length === 0
-                      ? "Choose projects"
-                      : selected.length === 1
-                        ? projects.find((project) => project.id === selected[0])?.title
-                        : `${selected.length} projects`}
-                    <ChevronDownIcon className="size-4" />
-                  </MenuTrigger>
-                  <MenuPopup>
-                    {projects.map((project) => (
-                      <MenuCheckboxItem
-                        key={project.id}
-                        checked={selected.includes(project.id)}
-                        closeOnClick={false}
-                        onCheckedChange={(checked) =>
-                          setSelectedProjects(
-                            checked
-                              ? [...selected, project.id]
-                              : selected.filter((id) => id !== project.id),
-                          )
-                        }
-                      >
-                        {project.title}
-                      </MenuCheckboxItem>
-                    ))}
-                  </MenuPopup>
-                </Menu>
-                <p className="text-xs text-muted-foreground">
-                  {projects.length === 0
-                    ? "Create a project to assign connections."
-                    : "Select one or more projects to edit access together."}
-                </p>
-              </div>
               {data.connections.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No connections yet.</p>
               ) : (
                 data.connections.map((connection) => (
                   <McpConnectionCard
-                    key={`${connection.id}:${selected.join(",")}`}
+                    key={`${connection.id}:${projectIds.join(",")}`}
                     environmentId={environmentId}
                     connection={connection}
-                    projectIds={selected}
+                    projectIds={projectIds}
                     access={data.access}
                     onChanged={reload}
                     refreshing={result.waiting}
@@ -245,6 +260,7 @@ function AddMcpConnection({
   onCancel: () => void;
   connection?: McpConnection;
 }) {
+  const { search } = useSettingsScope();
   const connect = useAtomCommand(mcpConnections.connect);
   const canConnect = useAtomValue(mcpConnections.connect.permissionAtom(environmentId));
   const [name, setName] = useState(connection?.name ?? "");
@@ -281,6 +297,11 @@ function AddMcpConnection({
       if (result.value.status === "connected") onDone();
       else {
         sessionStorage.setItem(pendingAuthKey(result.value.state), environmentId);
+        const scopeParams = new URLSearchParams();
+        for (const [key, value] of Object.entries(search)) {
+          if (value !== undefined) scopeParams.set(key, value);
+        }
+        sessionStorage.setItem(pendingScopeKey(result.value.state), scopeParams.toString());
         setAuthorizationUrl(result.value.authorizationUrl);
       }
     } finally {
@@ -558,40 +579,43 @@ function McpConnectionCard({
         ) : null}
         {projectIds.length > 0 ? (
           <div className="grid gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor={`mcp-access-${connection.id}`}>Project access</Label>
-              <Select
-                value={mode}
-                disabled={busy || refreshing || !canSetAccess}
-                onValueChange={(value) => {
-                  if (value === "off") void save(null);
-                  if (value === "all") void save({ mode: "all" });
-                  if (value === "selected") void save({ mode: "selected", toolIds: [] });
-                }}
-              >
-                <SelectTrigger id={`mcp-access-${connection.id}`}>
-                  <SelectValue>
-                    {mode === "mixed"
-                      ? "Different across projects"
-                      : mode === "off"
-                        ? "Disabled"
-                        : mode === "all"
-                          ? "All tools, including new tools"
-                          : "Selected tools only"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup>
-                  {mode === "mixed" ? (
-                    <SelectItem value="mixed" disabled>
-                      Different across projects
-                    </SelectItem>
-                  ) : null}
-                  <SelectItem value="off">Disabled</SelectItem>
-                  <SelectItem value="all">All tools, including new tools</SelectItem>
-                  <SelectItem value="selected">Selected tools only</SelectItem>
-                </SelectPopup>
-              </Select>
-            </div>
+            <SettingsRow
+              title="Project access"
+              description="Enable this connection for the project selected above."
+              control={
+                <Select
+                  value={mode}
+                  disabled={busy || refreshing || !canSetAccess}
+                  onValueChange={(value) => {
+                    if (value === "off") void save(null);
+                    if (value === "all") void save({ mode: "all" });
+                    if (value === "selected") void save({ mode: "selected", toolIds: [] });
+                  }}
+                >
+                  <SelectTrigger size="sm" aria-label={`Project access to ${connection.name}`}>
+                    <SelectValue>
+                      {mode === "mixed"
+                        ? "Different across checkouts"
+                        : mode === "off"
+                          ? "Disabled"
+                          : mode === "all"
+                            ? "All tools, including new tools"
+                            : "Selected tools only"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {mode === "mixed" ? (
+                      <SelectItem value="mixed" disabled>
+                        Different across checkouts
+                      </SelectItem>
+                    ) : null}
+                    <SelectItem value="off">Disabled</SelectItem>
+                    <SelectItem value="all">All tools, including new tools</SelectItem>
+                    <SelectItem value="selected">Selected tools only</SelectItem>
+                  </SelectPopup>
+                </Select>
+              }
+            />
             {selection !== null && selection !== "mixed" && selection.mode === "selected" ? (
               <McpTools
                 environmentId={environmentId}
@@ -630,7 +654,7 @@ function McpTools({
     <div className="grid gap-2">
       {selection.toolIds.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          No tools are enabled. Select tools to give these projects access.
+          No tools are enabled. Select tools to give this project access.
         </p>
       ) : null}
       <Input

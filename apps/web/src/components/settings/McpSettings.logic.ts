@@ -1,4 +1,14 @@
 import type { McpToolSelection, ProjectId } from "@t3tools/contracts";
+import { validateSettingsScopeSearch } from "./settingsScope";
+
+/** OAuth leaves Settings; restore its project without retaining callback or legacy machine fields. */
+export function readMcpAuthReturnScope(savedSearch: string | null) {
+  const params = new URLSearchParams(savedSearch ?? "");
+  return validateSettingsScopeSearch({
+    project: params.get("project"),
+    checkout: params.get("checkout"),
+  });
+}
 
 /** Bulk edits show mixed permissions until the user chooses a replacement. */
 export function commonMcpSelection(
