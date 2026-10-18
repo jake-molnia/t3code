@@ -209,9 +209,8 @@ function projectOverrideWrites(
 }
 
 /**
- * Environment scopes write the patch to every connected environment; project
- * and checkout scopes write the scopable keys into each member's override
- * entry on its environment. Client keys always persist locally.
+ * Project policy requires a concrete project and writes its override entry.
+ * App and account settings stay central. Client keys persist locally.
  */
 export function planScopedSettingsPatch(
   scope: ResolvedSettingsScope,
@@ -227,47 +226,55 @@ export function planScopedSettingsPatch(
   const serverKeys = Object.keys(serverPatch);
   const { connectedEnvironments } = selectScopedSettingsEnvironments(scope, environments, null);
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
-  const unscopableKeys = isProjectScope
-    ? serverKeys.filter((key) => !isProjectScopedSettingKey(key))
-    : [];
+  const projectPatch = Object.fromEntries(
+    Object.entries(serverPatch).filter(([key]) => isProjectScopedSettingKey(key)),
+  ) as ServerSettingsPatch;
+  const sharedPatch = Object.fromEntries(
+    Object.entries(serverPatch).filter(([key]) => !isProjectScopedSettingKey(key)),
+  ) as ServerSettingsPatch;
+  const projectRequired = !isProjectScope && Object.keys(projectPatch).length > 0;
   const serverWrites: ScopedServerWrite[] =
-    serverKeys.length === 0
+    serverKeys.length === 0 || projectRequired
       ? []
       : isProjectScope
-        ? unscopableKeys.length > 0
-          ? []
-          : projectOverrideWrites(scope, environments, (current, settings, projectId) => {
-              // Object-valued keys arrive as partial patches (the writing style
-              // rows send one field); an override entry stores the whole value,
-              // so complete the patch from the target's effective value.
-              const effective = resolveProjectSettings(settings, projectId).settings;
-              const next: Record<string, unknown> = { ...current };
-              for (const [key, value] of Object.entries(serverPatch)) {
-                if (key === "worktreeCleanup" && serverPatch.worktreeCleanup?.mode === "custom") {
-                  next[key] = {
-                    mode: "custom",
-                    rules: {
-                      ...resolveWorktreeCleanup(settings, projectId),
-                      ...serverPatch.worktreeCleanup.rules,
-                    },
-                  };
-                  continue;
-                }
-                // A picker's "Inherit" sends null; for keys whose override
-                // cannot store null that means remove the override.
-                if (
-                  value === null &&
-                  !isNullableProjectSettingsOverride(key as ProjectScopedServerSettingKey)
-                ) {
-                  delete next[key];
-                  continue;
-                }
-                const base = effective[key as keyof ServerSettings];
-                next[key] =
-                  isPlainObject(value) && isPlainObject(base) ? { ...base, ...value } : value;
+        ? projectOverrideWrites(scope, environments, (current, settings, projectId) => {
+            // Object-valued keys arrive as partial patches (the writing style
+            // rows send one field); an override entry stores the whole value,
+            // so complete the patch from the target's effective value.
+            const effective = resolveProjectSettings(settings, projectId).settings;
+            const next: Record<string, unknown> = { ...current };
+            for (const [key, value] of Object.entries(projectPatch)) {
+              if (key === "worktreeCleanup" && serverPatch.worktreeCleanup?.mode === "custom") {
+                next[key] = {
+                  mode: "custom",
+                  rules: {
+                    ...resolveWorktreeCleanup(settings, projectId),
+                    ...serverPatch.worktreeCleanup.rules,
+                  },
+                };
+                continue;
               }
-              return next as ProjectSettingsOverrides;
-            })
+              // A picker's "Inherit" sends null; for keys whose override
+              // cannot store null that means remove the override.
+              if (
+                value === null &&
+                !isNullableProjectSettingsOverride(key as ProjectScopedServerSettingKey)
+              ) {
+                delete next[key];
+                continue;
+              }
+              const base = effective[key as keyof ServerSettings];
+              next[key] =
+                isPlainObject(value) && isPlainObject(base) ? { ...base, ...value } : value;
+            }
+            return next as ProjectSettingsOverrides;
+          }).map((write) => ({
+            ...write,
+            patch: {
+              ...sharedPatch,
+              ...(Object.keys(projectPatch).length > 0 ? write.patch : {}),
+            },
+          }))
         : scope.kind === "all" || scope.kind === "environment"
           ? connectedEnvironments.flatMap((environment) => {
               const previous = environment.serverConfig?.settings;
@@ -304,16 +311,15 @@ export function planScopedSettingsPatch(
           : [];
   const hasClientWrite = Object.keys(clientPatch).length > 0;
   const hasWrite = hasClientWrite || serverWrites.length > 0;
-  const unavailableReason =
-    hasWrite || Object.keys(patch).length === 0
+  const unavailableReason = projectRequired
+    ? "Select a project to change project settings."
+    : hasWrite || Object.keys(patch).length === 0
       ? null
       : scope.kind === "unavailable"
         ? scope.message
-        : unscopableKeys.length > 0
-          ? "This setting is environment-wide and cannot be overridden by a project."
-          : isProjectScope
-            ? "Connect the selected checkouts, or update their environments, to save a project override."
-            : `Connect ${scope.kind === "environment" ? scope.label : "an environment"} to save this setting.`;
+        : isProjectScope
+          ? "Connect the selected checkouts, or update their environments, to save a project override."
+          : `Connect ${scope.kind === "environment" ? scope.label : "an environment"} to save this setting.`;
   return { clientPatch, hasClientWrite, serverWrites, unavailableReason };
 }
 

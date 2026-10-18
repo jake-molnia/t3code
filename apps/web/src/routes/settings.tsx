@@ -154,6 +154,7 @@ function SettingsRouteLayout() {
   return (
     <SettingsScopeProvider
       search={rawSearch}
+      projectOnly={!SETTINGS_DEVICE_ONLY_PATHS.has(pathname)}
       singleEnvironment={pathname === "/settings/providers" || pathname === "/settings/mcp"}
       onChange={(next) => {
         // Send every axis so the retain middleware sees an explicit target

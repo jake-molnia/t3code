@@ -52,7 +52,7 @@ function isWorktreeSubmodules(value: string | null): value is WorktreeSubmodules
 }
 
 export function ProjectDefaultsSettings({ category }: { category: ProjectSettingsCategory }) {
-  const { scope, target, targets, connectedEnvironments } = useSettingsScope();
+  const { scope, target, targets, connectedEnvironments, search } = useSettingsScope();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const navigate = useNavigate();
@@ -118,7 +118,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
         entry.driverKind !== sourceEntry?.driverKind ||
         !options?.some((option) => option.slug === model && !option.isUnavailable)
       ) {
-        return `This model is unavailable on ${environment?.label ?? "a selected environment"}. Select that environment to choose its model separately.`;
+        return "This model is unavailable for this project. Choose another model or configure its harness.";
       }
     }
     return null;
@@ -174,7 +174,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                 if (representative)
                   void navigate({
                     to: "/settings/providers",
-                    search: { environmentId: representative.environmentId, instanceId },
+                    search: { ...search, instanceId },
                   });
               }}
               onInstanceModelChange={(instanceId, model) =>

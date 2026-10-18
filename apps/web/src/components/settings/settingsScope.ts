@@ -60,6 +60,19 @@ export function validateSettingsScopeSearch(raw: Record<string, unknown>): Setti
   };
 }
 
+/** Legacy environment links enter the first project; explicit stale projects stay unavailable. */
+export function selectProjectSettingsScope(
+  search: SettingsScopeSearch,
+  groups: readonly SidebarProjectSnapshot[],
+): SettingsScopeSearch {
+  if (search.checkout && !search.project) return { checkout: search.checkout };
+  const project = search.project ?? groups[0]?.projectKey;
+  return {
+    ...(project === undefined ? {} : { project }),
+    ...(search.project && search.checkout ? { checkout: search.checkout } : {}),
+  };
+}
+
 /** Resolves only existing targets. An unavailable selection never broadens a subsequent write. */
 export function resolveSettingsScope(
   search: SettingsScopeSearch,

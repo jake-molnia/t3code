@@ -9,7 +9,11 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environmen
 import { getProjectFileQueryAtom, optimisticFileAtom } from "../files/projectFilesQueryState";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 import { resolveScopedSettingsTargets, selectScopedSettingsEnvironments } from "./scopedSettings";
-import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope";
+import {
+  resolveSettingsScope,
+  selectProjectSettingsScope,
+  type SettingsScopeSearch,
+} from "./settingsScope";
 import { selectSingleEnvironmentScope } from "./settingsScopeAxis";
 
 /**
@@ -54,26 +58,35 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
   );
 }
 
-function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, singleEnvironment: boolean) {
+function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, projectOnly: boolean) {
   const groups = useSettingsProjectGroups();
   const { environments: availableEnvironments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const search = useMemo(
     () =>
-      singleEnvironment
-        ? selectSingleEnvironmentScope(
-            rawSearch,
-            resolveSettingsScope(rawSearch, groups, availableEnvironments),
+      projectOnly
+        ? selectProjectSettingsScope(rawSearch, groups)
+        : selectSingleEnvironmentScope(
+            {},
+            resolveSettingsScope({}, groups, availableEnvironments),
             availableEnvironments,
             primaryEnvironmentId,
-          )
-        : rawSearch,
-    [availableEnvironments, groups, primaryEnvironmentId, rawSearch, singleEnvironment],
+          ),
+    [availableEnvironments, groups, primaryEnvironmentId, rawSearch, projectOnly],
   );
-  const scope = useMemo(
-    () => resolveSettingsScope(search, groups, availableEnvironments),
-    [availableEnvironments, groups, search],
-  );
+  const scope = useMemo(() => {
+    if (projectOnly && !search.project) {
+      return {
+        kind: "unavailable" as const,
+        reason: "project-required" as const,
+        label: "Select a project",
+        message: "Add a project to configure its settings.",
+        members: [],
+        environmentIds: [],
+      };
+    }
+    return resolveSettingsScope(search, groups, availableEnvironments);
+  }, [availableEnvironments, groups, search, projectOnly]);
   const projectFiles = useMemberProjectFiles(scope);
   return useMemo(() => {
     const selected = selectScopedSettingsEnvironments(
@@ -112,13 +125,15 @@ export function SettingsScopeProvider({
   onChange,
   children,
   singleEnvironment = false,
+  projectOnly = true,
 }: {
   singleEnvironment?: boolean;
+  projectOnly?: boolean;
   search: SettingsScopeSearch;
   onChange: (next: SettingsScopeSearch) => void;
   children: ReactNode;
 }) {
-  const resolved = useResolvedSettingsScope(search, singleEnvironment);
+  const resolved = useResolvedSettingsScope(search, projectOnly);
   const value = useMemo(
     () => ({ ...resolved, singleEnvironment, selectScope: onChange }),
     [onChange, resolved, singleEnvironment],

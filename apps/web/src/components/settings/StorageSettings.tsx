@@ -475,7 +475,7 @@ export function StorageSettingsPanel() {
                 ? "Keep this project's worktrees until you delete them manually."
                 : mode === "custom"
                   ? "Use these rules for this project."
-                  : "Use each machine's worktree cleanup settings."
+                  : "Use the saved worktree cleanup default."
             }
             serverScoped
             settingKeys={["worktreeCleanup"]}
@@ -495,14 +495,14 @@ export function StorageSettingsPanel() {
                     {mixedModes
                       ? "Mixed"
                       : mode === "inherit"
-                        ? "Inherit"
+                        ? "Saved default"
                         : mode === "off"
                           ? "Off"
                           : "Custom"}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="inherit">Inherit</SelectItem>
+                  <SelectItem value="inherit">Saved default</SelectItem>
                   <SelectItem value="off">Off</SelectItem>
                   <SelectItem value="custom">Custom</SelectItem>
                 </SelectPopup>
