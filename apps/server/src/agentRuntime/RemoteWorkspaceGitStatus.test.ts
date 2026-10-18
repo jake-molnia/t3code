@@ -98,6 +98,7 @@ const fixture = Effect.gen(function* () {
   let allowed = true;
   let interval = Duration.seconds(10);
   let branch = "first";
+  let aheadCount = 2;
   let localReads = 0;
   const remoteReads: Array<{ at: number; fetch: boolean }> = [];
   const events = yield* Queue.unbounded<C.VcsStatusStreamEvent>();
@@ -123,7 +124,7 @@ const fixture = Effect.gen(function* () {
         const fetch = options?.refreshUpstream !== false;
         remoteReads.push({ at: yield* Clock.currentTimeMillis, fetch });
         yield* Queue.offer(remoteRead, undefined);
-        return { hasUpstream: true, aheadCount: 2, behindCount: 1, pr: null };
+        return { hasUpstream: true, aheadCount, behindCount: 1, pr: null };
       }),
     status: () =>
       Effect.gen(function* () {
@@ -170,6 +171,9 @@ const fixture = Effect.gen(function* () {
     },
     setInterval: (value: Duration.Duration) => {
       interval = value;
+    },
+    setAheadCount: (value: number) => {
+      aheadCount = value;
     },
     setBranch: (value: string) => {
       branch = value;
@@ -266,4 +270,50 @@ it.effect("local-only subscriptions never schedule remote work", () =>
     expect(f.localReads()).toBeGreaterThan(1);
     yield* Fiber.interrupt(fiber);
   }),
+);
+
+it.effect(
+  "passive subscribers share cached remote state without retaining another subscriber's polling",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const active = yield* f.start();
+      yield* Queue.take(f.events);
+      expect(yield* Queue.take(f.events)).toMatchObject({
+        _tag: "snapshot",
+        remote: { aheadCount: 2 },
+      });
+      const passiveEvents = yield* Queue.unbounded<C.VcsStatusStreamEvent>();
+      const passive = yield* f.service
+        .streamStatus({
+          cwd: "/workspace/first/repo",
+          includeRemote: false,
+        })
+        .pipe(
+          Stream.runForEach((event) => Queue.offer(passiveEvents, event)),
+          Effect.forkScoped,
+        );
+      expect(yield* Queue.take(passiveEvents)).toMatchObject({
+        _tag: "snapshot",
+        remote: { aheadCount: 2 },
+      });
+      expect(f.remoteReads).toHaveLength(1);
+      f.setAheadCount(3);
+      yield* TestClock.adjust("12 seconds");
+      expect(yield* Queue.take(passiveEvents)).toMatchObject({
+        _tag: "snapshot",
+        remote: { aheadCount: 3 },
+      });
+      expect(f.remoteReads).toHaveLength(2);
+      yield* Fiber.interrupt(active);
+      f.setBranch("still-observing");
+      yield* TestClock.adjust("30 seconds");
+      expect(yield* Queue.take(passiveEvents)).toMatchObject({
+        _tag: "snapshot",
+        local: { refName: "still-observing" },
+        remote: { aheadCount: 3 },
+      });
+      expect(f.remoteReads).toHaveLength(2);
+      yield* Fiber.interrupt(passive);
+    }),
 );
