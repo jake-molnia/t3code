@@ -80,7 +80,8 @@ describe("MCP sign-in project return", () => {
     });
   });
 
-  it("lets the shared scope choose a project for callbacks started before project restoration existed", () => {
+  it("keeps All projects selected when OAuth returns without a project", () => {
+    expect(readMcpAuthReturnScope("")).toEqual({});
     expect(readMcpAuthReturnScope(null)).toEqual({});
     expect(readMcpAuthReturnScope("project=%20")).toEqual({});
   });
