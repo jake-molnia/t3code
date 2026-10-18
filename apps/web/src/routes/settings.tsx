@@ -19,6 +19,7 @@ import { SettingsScopeNotice } from "../components/settings/SettingsScopeNotice"
 import { SETTINGS_DEVICE_ONLY_PATHS } from "../components/settings/SettingsScopeSentence";
 import { SettingsPageContainer } from "../components/settings/settingsLayout";
 import {
+  isMcpAuthCallback,
   retainSettingsScope,
   validateSettingsRouteSearch,
 } from "../components/settings/settingsScopeNavigation";
@@ -47,7 +48,9 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
   const { scope, connectedEnvironments } = useSettingsScope();
   const { environments } = useEnvironments();
   const hash = useLocation({ select: (location) => location.hash });
+  const searchStr = useLocation({ select: (location) => location.searchStr });
   const searchTarget = getSettingsSearchTargetScope(hash);
+  if (isMcpAuthCallback(pathname, searchStr)) return children;
   const autoSettlementAvailability = searchTarget?.requiresThreadAutoSettlement
     ? getThreadAutoSettlementSearchAvailability(environments, scope)
     : null;

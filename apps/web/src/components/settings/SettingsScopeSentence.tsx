@@ -20,7 +20,6 @@ export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/connections",
   "/settings/diagnostics",
   "/settings/keybindings",
-  "/settings/integrations",
   "/settings/open-source-licenses",
   "/settings/archived",
 ]);
