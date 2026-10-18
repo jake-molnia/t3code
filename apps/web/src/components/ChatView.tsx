@@ -5078,10 +5078,20 @@ export default function ChatView(props: ChatViewProps) {
     (instanceId: ProviderInstanceId) => {
       void navigate({
         to: "/settings/providers",
-        search: { environmentId, instanceId },
+        search: {
+          instanceId,
+          ...(activeProject
+            ? {
+                project: deriveLogicalProjectKeyFromSettings(
+                  activeProject,
+                  projectGroupingSettings,
+                ),
+              }
+            : {}),
+        },
       });
     },
-    [environmentId, navigate],
+    [activeProject, projectGroupingSettings, navigate],
   );
   const canOperatePreview = useEnvironmentScope(
     activeThreadRef?.environmentId ?? null,

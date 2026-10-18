@@ -336,6 +336,9 @@ function CleanupSection() {
   };
   return (
     <SettingsSection id="storage-cleanup" title="Cleanup" variant="plain">
+      <p className="px-3 text-sm text-muted-foreground sm:px-4">
+        Runs cleanup for all projects and shared storage using their saved rules.
+      </p>
       <SettingsGroup>
         <SettingsRow
           {...searchableSetting("storage-delete-now")}
@@ -419,28 +422,21 @@ export function StorageSettingsPanel() {
           key
         ] !== settings[key],
     )
-      ? "Mixed across selected machines"
+      ? "Mixed across project checkouts"
       : undefined;
   const update = (patch: Partial<StorageCleanupSettings>) =>
     updateSettings({ storageCleanup: patch });
   const updateWorktree = (patch: Partial<WorktreeCleanupRules>) =>
-    isProjectScope
-      ? updateSettings({ worktreeCleanup: { mode: "custom", rules: patch } })
-      : update(patch);
+    updateSettings({ worktreeCleanup: { mode: "custom", rules: patch } });
 
-  if (
+  const canConfigureWorktrees =
     isProjectScope &&
-    connectedEnvironments.some(
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every(
       (environment) =>
-        environment.serverConfig?.environment.capabilities.projectWorktreeCleanup !== true,
-    )
-  ) {
-    return (
-      <SettingsScopeNotice target="all">
-        Update the selected machines to configure project worktree cleanup.
-      </SettingsScopeNotice>
+        environment.serverConfig?.environment.capabilities.projectWorktreeCleanup === true &&
+        environment.serverConfig.environment.capabilities.projectSettingsOverrides === true,
     );
-  }
 
   if (
     connectedEnvironments.some(
@@ -457,8 +453,7 @@ export function StorageSettingsPanel() {
           )
           .map((environment) => environment.environmentId)}
       >
-        Update the selected environments to use storage cleanup, or choose a machine that supports
-        it.
+        Update T3 Code to use storage cleanup.
       </SettingsScopeNotice>
     );
   }
@@ -467,7 +462,14 @@ export function StorageSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection id="storage-worktrees" title="Worktrees">
         {!isProjectScope && <WorktreesDirectoryRow />}
-        {isProjectScope && (
+        {!canConfigureWorktrees ? (
+          <p className="px-3 text-sm text-muted-foreground sm:px-4">
+            {isProjectScope
+              ? "Update T3 Code to configure project worktree cleanup."
+              : "Select a project to configure worktree cleanup."}
+          </p>
+        ) : null}
+        {canConfigureWorktrees && (
           <SettingsRow
             title="Automatic worktree cleanup"
             description={
@@ -475,7 +477,7 @@ export function StorageSettingsPanel() {
                 ? "Keep this project's worktrees until you delete them manually."
                 : mode === "custom"
                   ? "Use these rules for this project."
-                  : "Use each machine's worktree cleanup settings."
+                  : "Use the saved worktree cleanup default."
             }
             serverScoped
             settingKeys={["worktreeCleanup"]}
@@ -495,14 +497,14 @@ export function StorageSettingsPanel() {
                     {mixedModes
                       ? "Mixed"
                       : mode === "inherit"
-                        ? "Inherit"
+                        ? "Saved default"
                         : mode === "off"
                           ? "Off"
                           : "Custom"}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="inherit">Inherit</SelectItem>
+                  <SelectItem value="inherit">Saved default</SelectItem>
                   <SelectItem value="off">Off</SelectItem>
                   <SelectItem value="custom">Custom</SelectItem>
                 </SelectPopup>
@@ -510,7 +512,7 @@ export function StorageSettingsPanel() {
             }
           />
         )}
-        {(!isProjectScope || (!mixedModes && mode === "custom")) && (
+        {canConfigureWorktrees && !mixedModes && mode === "custom" && (
           <>
             <SettingsRow
               title="Delete worktrees with deleted threads"
@@ -611,37 +613,38 @@ export function StorageSettingsPanel() {
         )}
       </SettingsSection>
 
-      {!isProjectScope && (
-        <SettingsSection id="storage-artifacts" title="Artifacts and logs">
-          <SettingsRow
-            title="Delete old browser artifacts"
-            status={ruleStatus("browserArtifactsAfterDays")}
-            description="Delete saved browser captures after this many days. Older capture links will no longer open."
-            serverScoped
-            control={
-              <RetentionControl
-                label="Delete old browser artifacts"
-                value={settings.browserArtifactsAfterDays}
-                onChange={(browserArtifactsAfterDays) => update({ browserArtifactsAfterDays })}
-              />
-            }
-          />
-          <SettingsRow
-            title="Delete old rotated logs"
-            status={ruleStatus("logsAfterDays")}
-            description="Delete inactive rotated log files after this many days. Current logs are kept."
-            serverScoped
-            control={
-              <RetentionControl
-                label="Delete old rotated logs"
-                value={settings.logsAfterDays}
-                onChange={(logsAfterDays) => update({ logsAfterDays })}
-              />
-            }
-          />
-        </SettingsSection>
-      )}
-      {!isProjectScope && <CleanupSection />}
+      <SettingsSection id="storage-artifacts" title="Artifacts and logs">
+        <p className="px-3 text-sm text-muted-foreground sm:px-4">
+          Retention applies to shared artifacts and logs across all projects.
+        </p>
+        <SettingsRow
+          title="Delete old browser artifacts"
+          status={ruleStatus("browserArtifactsAfterDays")}
+          description="Delete saved browser captures after this many days. Older capture links will no longer open."
+          serverScoped
+          control={
+            <RetentionControl
+              label="Delete old browser artifacts"
+              value={settings.browserArtifactsAfterDays}
+              onChange={(browserArtifactsAfterDays) => update({ browserArtifactsAfterDays })}
+            />
+          }
+        />
+        <SettingsRow
+          title="Delete old rotated logs"
+          status={ruleStatus("logsAfterDays")}
+          description="Delete inactive rotated log files after this many days. Current logs are kept."
+          serverScoped
+          control={
+            <RetentionControl
+              label="Delete old rotated logs"
+              value={settings.logsAfterDays}
+              onChange={(logsAfterDays) => update({ logsAfterDays })}
+            />
+          }
+        />
+      </SettingsSection>
+      <CleanupSection />
     </SettingsPageContainer>
   );
 }

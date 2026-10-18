@@ -925,12 +925,13 @@ export function isSettingsSearchScopeAvailable(
     case "connections":
       return true;
     case "environment":
+      return scopeKind !== "unavailable";
     case "checkout":
       return requiredScope === scopeKind;
     case "project":
       return scopeKind === "project" || scopeKind === "checkout";
     case "environment-defaults":
-      return scopeKind === "environment" || scopeKind === "all";
+      return scopeKind !== "unavailable";
     case "project-defaults":
       return (
         scopeKind === "environment" ||

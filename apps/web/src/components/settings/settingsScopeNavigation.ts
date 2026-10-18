@@ -30,3 +30,10 @@ export const retainSettingsScope: SearchMiddleware<SettingsScopeSearch> = ({ sea
   );
   return { ...previousScope, ...result };
 };
+
+/** Account sign-in must finish even if its original project was deleted. */
+export function isMcpAuthCallback(pathname: string, searchStr: string): boolean {
+  if (pathname !== "/settings/mcp") return false;
+  const params = new URLSearchParams(searchStr);
+  return params.get("state") !== null && (params.has("code") || params.has("error"));
+}

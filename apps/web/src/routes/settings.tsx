@@ -19,6 +19,7 @@ import { SettingsScopeNotice } from "../components/settings/SettingsScopeNotice"
 import { SETTINGS_DEVICE_ONLY_PATHS } from "../components/settings/SettingsScopeSentence";
 import { SettingsPageContainer } from "../components/settings/settingsLayout";
 import {
+  isMcpAuthCallback,
   retainSettingsScope,
   validateSettingsRouteSearch,
 } from "../components/settings/settingsScopeNavigation";
@@ -47,7 +48,9 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
   const { scope, connectedEnvironments } = useSettingsScope();
   const { environments } = useEnvironments();
   const hash = useLocation({ select: (location) => location.hash });
+  const searchStr = useLocation({ select: (location) => location.searchStr });
   const searchTarget = getSettingsSearchTargetScope(hash);
+  if (isMcpAuthCallback(pathname, searchStr)) return children;
   const autoSettlementAvailability = searchTarget?.requiresThreadAutoSettlement
     ? getThreadAutoSettlementSearchAvailability(environments, scope)
     : null;
@@ -92,7 +95,11 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
     return children;
   }
   // Keep the scope sentence on screen so the selection can be changed back.
-  if (scope.kind === "unavailable")
+  if (
+    scope.kind === "unavailable" &&
+    pathname !== "/settings/general" &&
+    pathname !== "/settings/storage"
+  )
     return (
       <SettingsPageContainer>
         <p className="text-sm text-muted-foreground">{scope.message}</p>
@@ -154,6 +161,7 @@ function SettingsRouteLayout() {
   return (
     <SettingsScopeProvider
       search={rawSearch}
+      projectOnly={!SETTINGS_DEVICE_ONLY_PATHS.has(pathname)}
       singleEnvironment={pathname === "/settings/providers" || pathname === "/settings/mcp"}
       onChange={(next) => {
         // Send every axis so the retain middleware sees an explicit target

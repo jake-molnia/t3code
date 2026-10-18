@@ -1,10 +1,14 @@
 import {
   AuthProvidersManageScope,
+  DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
+  resolveProjectProviderInstanceEnabled,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
   type ServerSettings,
 } from "@t3tools/contracts";
+import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -419,4 +423,47 @@ describe("remote operate access", () => {
       }),
     ).toBe("denied");
   });
+});
+
+describe("saved project harness policy", () => {
+  it.each(["codex", "claudeAgent", "cursor", "grok", "opencode", "antigravity"])(
+    "enables, disables and re-enables %s without changing accounts or another project",
+    (kind) => {
+      const projectId = ProjectId.make("chosen");
+      const otherProjectId = ProjectId.make("other");
+      const instanceId = ProviderInstanceId.make(kind);
+      const instance = {
+        driver: ProviderDriverKind.make(kind),
+        enabled: false,
+        config: { enabled: false, customModels: ["saved-model"] },
+        environment: [{ name: "API_KEY", value: "saved-secret", sensitive: true }],
+      };
+      const before: ServerSettings = {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: { [instanceId]: instance },
+        projectSettingsOverrides: {
+          [projectId]: { defaultAutoPull: true },
+          [otherProjectId]: { providerInstances: { [instanceId]: { enabled: false } } },
+        },
+      };
+      let saved = before;
+      for (const enabled of [true, false, true]) {
+        saved = applyServerSettingsPatch(saved, {
+          projectSettingsOverrides: buildProviderInstanceOverridePatch(
+            saved,
+            [projectId],
+            instanceId,
+            enabled,
+          ),
+        });
+        expect(resolveProjectProviderInstanceEnabled(saved, projectId, instanceId)).toBe(enabled);
+        expect(resolveProjectProviderInstanceEnabled(saved, otherProjectId, instanceId)).toBe(
+          false,
+        );
+        expect(saved.providerInstances).toEqual(before.providerInstances);
+        expect(saved.textGenerationModelSelection).toEqual(before.textGenerationModelSelection);
+        expect(saved.projectSettingsOverrides[projectId]?.defaultAutoPull).toBe(true);
+      }
+    },
+  );
 });

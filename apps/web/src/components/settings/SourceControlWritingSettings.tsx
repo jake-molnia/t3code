@@ -68,7 +68,7 @@ export function SourceControlWritingSettingsSection() {
   const updateSettings = useUpdateScopedSettings();
   const mixedReviewGuidesEnabled = useScopedSettingsMixed(["reviewGuidesEnabled"]);
   const navigate = useNavigate();
-  const { environment, connectedEnvironments, targets, target } = useSettingsScope();
+  const { environment, connectedEnvironments, targets, target, search } = useSettingsScope();
   // The representative supplies the provider list; a model choice is checked
   // against every target before it fans out.
   const environmentId = environment?.environmentId ?? null;
@@ -367,7 +367,7 @@ export function SourceControlWritingSettingsSection() {
                         onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
                           void navigate({
                             to: "/settings/providers",
-                            search: { environmentId, instanceId },
+                            search: { ...search, instanceId },
                           });
                         },
                       }

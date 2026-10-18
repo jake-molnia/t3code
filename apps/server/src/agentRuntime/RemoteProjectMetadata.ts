@@ -8,6 +8,8 @@ import * as Routing from "./WorkspaceRouting.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as SourceControlBuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import { redactRepositoryUrl } from "./RepositoryUrl.ts";
 import * as P from "./worker/MetadataExecutor.ts";
 import * as Assets from "./RemoteAssets.ts";
@@ -26,8 +28,11 @@ export const projectFileLayer = Layer.effect(
     });
   }),
 );
-export const repositoryLayer = Layer.effect(
-  RepositoryIdentityResolver.RepositoryIdentityResolver,
+const makeRepository = (
+  refine: (
+    identity: C.RepositoryIdentity,
+  ) => Effect.Effect<C.RepositoryIdentity, C.SourceControlProviderError>,
+) =>
   Effect.gen(function* () {
     const routes = yield* Routing.WorkspaceRouting;
     const sql = yield* SqlClient.SqlClient;
@@ -35,15 +40,33 @@ export const repositoryLayer = Layer.effect(
     return RepositoryIdentityResolver.RepositoryIdentityResolver.of({
       resolve: (cwd, options) =>
         Effect.gen(function* () {
-          const raw = yield* routes.observeCall({
+          // Refinement may need native forge configuration. Reuse the observed worker without waking it.
+          const observed = yield* routes.observe(
             cwd,
-            method: "project.repositoryIdentity",
-            input: { ...(options?.refresh === undefined ? {} : { refresh: options.refresh }) },
-          });
-          if (raw !== null) {
-            const result = yield* Schema.decodeUnknownEffect(P.RepositoryResult)(raw);
-            cache.set(cwd, result.identity);
-            return result.identity;
+            routes
+              .call({
+                cwd,
+                method: "project.repositoryIdentity",
+                input: options?.refresh === undefined ? {} : { refresh: options.refresh },
+              })
+              .pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(P.RepositoryResult)),
+                Effect.flatMap((result) =>
+                  Effect.gen(function* () {
+                    const identity = result.identity;
+                    return {
+                      identity:
+                        identity === null
+                          ? null
+                          : yield* refine(identity).pipe(Effect.orElseSucceed(() => identity)),
+                    };
+                  }),
+                ),
+              ),
+          );
+          if (observed !== null) {
+            cache.set(cwd, observed.identity);
+            return observed.identity;
           }
           if (cache.has(cwd)) return cache.get(cwd) ?? null;
           const route = yield* routes.describeCwd(cwd);
@@ -60,8 +83,36 @@ export const repositoryLayer = Layer.effect(
           });
         }).pipe(Effect.catchCause(() => Effect.succeed(cache.get(cwd) ?? null))),
     });
+  });
+
+export const repositoryLayer = Layer.effect(
+  RepositoryIdentityResolver.RepositoryIdentityResolver,
+  makeRepository(Effect.succeed),
+);
+
+export const refinedRepositoryLayer = Layer.effect(
+  RepositoryIdentityResolver.RepositoryIdentityResolver,
+  Effect.gen(function* () {
+    const registry = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+    const refine = Effect.fn("RemoteProjectMetadata.refineRepositoryIdentity")(function* (
+      identity: C.RepositoryIdentity,
+    ) {
+      for (const driver of SourceControlBuiltInDrivers.BUILT_IN_SOURCE_CONTROL_DRIVERS) {
+        const provider = yield* registry.get(driver.kind);
+        if (provider.refineRepositoryIdentity === undefined) continue;
+        const refined = yield* provider.refineRepositoryIdentity({
+          identity,
+          resolveContext: (input) =>
+            registry.resolveHandle(input).pipe(Effect.map((handle) => handle.context)),
+        });
+        if (refined !== identity) return refined;
+      }
+      return identity;
+    });
+    return yield* makeRepository(refine);
   }),
 );
+
 export const faviconLayer = Layer.effect(
   ProjectFaviconResolver.ProjectFaviconResolver,
   Effect.gen(function* () {

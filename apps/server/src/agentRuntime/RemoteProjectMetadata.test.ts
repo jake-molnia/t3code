@@ -1,3 +1,6 @@
+import * as C from "@t3tools/contracts";
+import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
+import * as Registry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { expect, it } from "@effect/vitest";
@@ -136,6 +139,9 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
                 cachedFavicons.push({ cwd, preferred, found });
               }),
           }),
+          Effect.provideService(ProcessRunner.ProcessRunner, {
+            run: () => Effect.die("Central Git is forbidden"),
+          }),
           Effect.provideService(FileSystem.FileSystem, {
             ...fs,
             readFileString: () => Effect.die("Central must not read t3.json or Git config"),
@@ -176,6 +182,170 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
         expect(wakes).toBe(wakeCount);
         expect(() => validateCloneSourceUrl("https://token@github.com/example/repo.git")).toThrow(
           "credentials",
+        );
+      }),
+  );
+});
+
+const database = NodeSqliteClient.layer({ filename: ":memory:" }).pipe(
+  Layer.provideMerge(NodeServices.layer),
+);
+
+it.layer(database, { excludeTestServices: true })("remote repository identity", (it) => {
+  it.effect(
+    "refines live worker metadata centrally and preserves stopped identity without waking",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* RuntimeSchema.migrate;
+        for (const id of ["first", "second"]) {
+          yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id,owner_thread_id) VALUES (${id},${id})`;
+          yield* sql`INSERT INTO agent_runtime_workspace_paths(virtual_cwd,workspace_id,relative_cwd,source_url)
+          VALUES (${`/workspace/${id}/repo`},${id},'repo',${`https://user:secret@forge.test/team/${id}.git`})`;
+        }
+        const calls: Array<{ workspaceId: string; method: string; input: unknown }> = [];
+        let running = false;
+        let generation = 1;
+        let failRefinement = false;
+        const client = (workspaceId: string): ExecutionClient => {
+          const identity = {
+            workspaceId,
+            generation,
+            allocationId: "allocation",
+            incarnation: String(generation),
+            protocolVersion: 1,
+            podUid: "pod",
+          } satisfies ExecutionClient["identity"];
+          return {
+            identity,
+            credentialSource: () => {
+              throw new Error("Credentials are not used by metadata");
+            },
+            call: async (method, input) => {
+              calls.push({ workspaceId, method, input });
+              if (method === "forge.resolve") return null;
+              if (method !== "project.repositoryIdentity") throw new Error(`Unexpected ${method}`);
+              return {
+                identity: RepositoryIdentity.buildRepositoryIdentity({
+                  remoteName: "origin",
+                  remoteUrl: `https://forge.test/team/${workspaceId}-${generation}.git`,
+                  originUrl: undefined,
+                  rootPath: `/workspace/${workspaceId}/repo`,
+                }),
+              };
+            },
+            transient: async () => null,
+            events: async () => [],
+            ack: async () => {},
+            operationStatus: async () => ({ state: "missing" }),
+            inspectIdentity: async () => identity,
+          };
+        };
+        const runtime = Layer.mock(RuntimeClient.RuntimeClient)({
+          enabled: true,
+          observeWorkspace: (id) =>
+            Effect.sync(() =>
+              running ? { kind: "running", client: client(id) } : { kind: "stopped" },
+            ),
+          forWorkspace: () => Effect.die("Metadata must not wake a worker"),
+          forUtility: () => Effect.die("Metadata must not acquire utility compute"),
+        });
+        const routes = yield* Routing.WorkspaceRouting.pipe(
+          Effect.provide(Routing.layer.pipe(Layer.provide(runtime))),
+        );
+        const unused = () => Effect.die("Unexpected repository operation");
+        const provider = SourceControlProvider.SourceControlProvider.of({
+          kind: C.SourceControlProviderKind.make("forgejo"),
+          listChangeRequests: unused,
+          getChangeRequest: unused,
+          createChangeRequest: unused,
+          getRepositoryCloneUrls: unused,
+          createRepository: unused,
+          getDefaultBranch: unused,
+          checkoutChangeRequest: unused,
+          refineRepositoryIdentity: ({ identity, resolveContext }) =>
+            Effect.gen(function* () {
+              if (!identity.rootPath) return identity;
+              yield* resolveContext({
+                cwd: identity.rootPath,
+                context: {
+                  provider: {
+                    kind: C.SourceControlProviderKind.make("unknown"),
+                    name: "Unknown",
+                    baseUrl: "",
+                  },
+                  remoteName: identity.locator.remoteName,
+                  remoteUrl: identity.locator.remoteUrl,
+                },
+              });
+              return {
+                ...identity,
+                provider: C.SourceControlProviderKind.make("forgejo"),
+                webUrl: "https://forge.test/mount/team/repo",
+              };
+            }),
+        });
+        const registry = Layer.mock(Registry.SourceControlProviderRegistry)({
+          resolveLink: () => undefined,
+          get: () => Effect.succeed(provider),
+          resolveHandle: ({ cwd }) =>
+            Effect.gen(function* () {
+              if (failRefinement)
+                return yield* new C.SourceControlProviderError({
+                  provider: C.SourceControlProviderKind.make("forgejo"),
+                  operation: "refine",
+                  cwd,
+                  detail: "Forge unavailable",
+                });
+              yield* routes.call({ cwd, method: "forge.resolve", input: {} }).pipe(Effect.orDie);
+              return { provider, context: null };
+            }),
+        });
+        const metadataLayer = RemoteMetadata.refinedRepositoryLayer.pipe(
+          Layer.provide(registry),
+          Layer.provide(Layer.succeed(Routing.WorkspaceRouting, routes)),
+          Layer.provide(
+            Layer.mock(ProcessRunner.ProcessRunner)({
+              run: () => Effect.die("Central Git is forbidden"),
+            }),
+          ),
+        );
+        const resolver = yield* RepositoryIdentity.RepositoryIdentityResolver.pipe(
+          Effect.provide(metadataLayer),
+        );
+        const first = "/workspace/first/repo";
+        const second = "/workspace/second/repo";
+        expect((yield* resolver.resolve(first))?.locator.remoteUrl).toBe(
+          "https://forge.test/team/first.git",
+        );
+        expect(calls).toEqual([]);
+        running = true;
+        const live = yield* resolver.resolve(first, { refresh: true });
+        expect(live?.provider).toBe("forgejo");
+        expect(live?.webUrl).toBe("https://forge.test/mount/team/repo");
+        expect(calls).toEqual([
+          {
+            workspaceId: "first",
+            method: "project.repositoryIdentity",
+            input: { cwd: "repo", refresh: true },
+          },
+          { workspaceId: "first", method: "forge.resolve", input: { cwd: "repo" } },
+        ]);
+        expect((yield* resolver.resolve(second))?.canonicalKey).toBe("forge.test/team/second-1");
+        running = false;
+        const count = calls.length;
+        expect(yield* resolver.resolve(first)).toEqual(live);
+        expect(calls).toHaveLength(count);
+        const restarted = yield* RepositoryIdentity.RepositoryIdentityResolver.pipe(
+          Effect.provide(metadataLayer),
+        );
+        expect((yield* restarted.resolve(first))?.canonicalKey).toBe("forge.test/team/first");
+        expect(calls).toHaveLength(count);
+        running = true;
+        generation = 2;
+        failRefinement = true;
+        expect((yield* resolver.resolve(first, { refresh: true }))?.canonicalKey).toBe(
+          "forge.test/team/first-2",
         );
       }),
   );

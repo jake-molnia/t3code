@@ -171,6 +171,22 @@ describe("settings scope navigation", () => {
     },
   );
 
+  it("keeps the selected project through provider setup and back to common settings", async () => {
+    const router = createSettingsRouter();
+    const selected = { project: "selected-project", checkout: "server:/repo" };
+    await router.navigate({ to: "/settings/general", search: selected });
+    await router.navigate({
+      to: "/settings/providers",
+      search: { ...selected, instanceId: ProviderInstanceId.make("codex-work") },
+    });
+    expect(router.state.location.search).toEqual({
+      ...selected,
+      instanceId: "codex-work",
+    });
+    await router.navigate({ to: "/settings/source-control" });
+    expect(router.state.location.search).toEqual(selected);
+  });
+
   it("honors an explicit provider environment and drops its instance on category navigation", async () => {
     const router = createSettingsRouter();
     await router.navigate({ to: "/settings/general", search: checkoutSearch });

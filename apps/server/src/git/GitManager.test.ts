@@ -919,6 +919,11 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           Effect.provide(
             RemoteWorkspaceGitStatus.layer.pipe(
               Layer.provide(
+                Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+                  shouldRunScopeWork: () => Effect.succeed(true),
+                }),
+              ),
+              Layer.provide(
                 Layer.mock(WorkspaceRouting.WorkspaceRouting)({
                   enabled: true,
                   observe: (_cwd, effect) =>

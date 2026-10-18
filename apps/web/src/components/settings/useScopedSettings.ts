@@ -69,10 +69,13 @@ function useRunScopedPlan() {
       if (plan.unavailableReason) {
         toastManager.add({
           type: "warning",
-          title: "Setting not saved",
+          title:
+            plan.hasClientWrite || plan.serverWrites.length > 0
+              ? "Some settings not saved"
+              : "Setting not saved",
           description: plan.unavailableReason,
         });
-        return;
+        if (!plan.hasClientWrite && plan.serverWrites.length === 0) return;
       }
       void persistScopedSettingsPatch(
         plan,

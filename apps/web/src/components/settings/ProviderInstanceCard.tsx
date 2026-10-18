@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckIcon, ExternalLinkIcon, LayersIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
+import { ExternalLinkIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { Lock as LockGlyph, LockOpen } from "lucide";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
@@ -31,9 +31,7 @@ import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { DraftInput } from "../ui/draft-input";
 import { SecretInput } from "./SecretInput";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type {
   ProviderClientDefinition,
@@ -44,7 +42,7 @@ import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
-import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
+import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
@@ -491,91 +489,9 @@ export function ProviderEnvironmentSection(props: {
   );
 }
 
-/**
- * When a project is in scope, the enable control reads and writes that
- * project's override instead of the environment's `instance.enabled`.
- * `value` is the project's explicit override (`undefined` means it
- * inherits the environment); `effectiveEnabled` is what the Switch shows.
- */
-/**
- * The project-scope counterpart of a settings row's inheritance indicator:
- * hover for the summary, open for the project and device values side by side.
- */
-function ProjectOverrideInheritance({
-  projectEnabled,
-  deviceEnabled,
-}: {
-  readonly projectEnabled: boolean;
-  readonly deviceEnabled: boolean;
-}) {
-  const layers = [
-    { key: "project", label: "Project", enabled: projectEnabled, effective: true },
-    { key: "device", label: "Device", enabled: deviceEnabled, effective: false },
-  ];
-  return (
-    <Popover>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <PopoverTrigger
-              render={
-                <Button
-                  size="icon-micro"
-                  variant="ghost-muted"
-                  aria-label="Overridden for this project. Show where this value comes from"
-                />
-              }
-            />
-          }
-        >
-          <LayersIcon className="size-3 text-primary" />
-        </TooltipTrigger>
-        <TooltipPopup side="top">Overridden for this project</TooltipPopup>
-      </Tooltip>
-      <PopoverPopup align="end" width="md" padding="none">
-        <ol role="list" className="px-3 py-2.5 text-sm">
-          {layers.map((layer) => (
-            <li
-              key={layer.key}
-              className={cn(
-                "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-2 py-1",
-                layer.effective && "bg-foreground/[0.06]",
-              )}
-            >
-              <span
-                className={cn(
-                  "min-w-0 truncate",
-                  layer.effective ? "font-medium text-foreground" : "text-muted-foreground",
-                )}
-              >
-                {layer.label}
-              </span>
-              <span
-                className={cn(
-                  "flex items-center gap-1.5",
-                  layer.effective ? "text-foreground" : "text-muted-foreground",
-                )}
-              >
-                {layer.enabled ? "On" : "Off"}
-                {layer.effective ? (
-                  <CheckIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
-                ) : (
-                  <span aria-hidden className="size-3.5 shrink-0" />
-                )}
-              </span>
-            </li>
-          ))}
-        </ol>
-      </PopoverPopup>
-    </Popover>
-  );
-}
-
 interface ProjectOverrideControl {
-  readonly value: boolean | undefined;
   readonly effectiveEnabled: boolean;
   readonly onChange: (next: boolean) => void;
-  readonly onReset: () => void;
 }
 
 interface ProviderInstanceCardProps {
@@ -619,7 +535,7 @@ interface ProviderInstanceCardProps {
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
   readonly onAcceptUrlAuth?: ((action: AcpRegistryUrlAuthAction) => void) | undefined;
   readonly environmentId?: EnvironmentId | undefined;
-  /** Omit this prop entirely for environment-wide editing. */
+  /** Required to change project enablement. */
   readonly projectOverride?: ProjectOverrideControl | undefined;
   readonly acpProjects?:
     | ReadonlyArray<{
@@ -645,14 +561,8 @@ const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> 
  *   - Unknown drivers (`driverOption === undefined`) get a read-only
  *     notice instead of editable fields, so fork instances round-trip
  *     without accidentally destroying their config.
- *   - The session preference control writes to the envelope's `instance.enabled`
- *     field, which is the single enabled flag: the server folds any legacy
- *     driver-specific `config.enabled` into the envelope on load and both
- *     sides resolve through `resolveProviderInstanceEnabled` (an explicit
- *     false wins, then envelope, then config, then the driver default).
- *     With `projectOverride` set, the control instead reads and writes
- *     that project's override, leaving the environment's `instance.enabled`
- *     untouched.
+ *   - Enablement writes only the selected project's policy. Shared account
+ *     configuration and model preferences remain on the provider instance.
  */
 export function ProviderInstanceCard({
   instanceId,
@@ -747,14 +657,6 @@ export function ProviderInstanceCard({
         ? ({ ...rest, displayName: trimmed } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
     );
-  };
-
-  const updateEnabled = (value: boolean) => {
-    if (projectOverride) {
-      projectOverride.onChange(value);
-      return;
-    }
-    onUpdate({ ...instance, enabled: value });
   };
 
   const updateAccentColor = (value: string) => {
@@ -933,28 +835,12 @@ export function ProviderInstanceCard({
           </span>
         </div>
         <span className="flex h-5 shrink-0 items-center gap-1">
-          {projectOverride?.value !== undefined ? (
-            <span className="flex items-center">
-              <ProjectOverrideInheritance
-                projectEnabled={projectOverride.value}
-                deviceEnabled={resolveProviderInstanceEnabled(instance)}
-              />
-              <SettingResetButton
-                label={`${displayName} enablement`}
-                tooltip="Reset to the device setting"
-                disabled={readOnly || !canWriteSettings}
-                onClick={projectOverride.onReset}
-              />
-            </span>
-          ) : null}
-          {!gatewayManaged ? (
-            <Switch
-              checked={enabled}
-              disabled={readOnly || (projectOverride !== undefined && !canWriteSettings)}
-              onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-              aria-label={`Enable ${displayName}`}
-            />
-          ) : null}
+          <Switch
+            checked={enabled}
+            disabled={readOnly || !projectOverride || !canWriteSettings}
+            onCheckedChange={(checked) => projectOverride?.onChange(Boolean(checked))}
+            aria-label={`Enable ${displayName} for this project`}
+          />
         </span>
       </div>
     );
@@ -1081,36 +967,6 @@ export function ProviderInstanceCard({
         />
       </SettingsSection>
 
-      {gatewayManaged ? (
-        <SettingsSection title="Session preferences">
-          <SettingsRow
-            title="New sessions"
-            description={
-              projectOverride
-                ? "Choose whether this project can use this harness. Authentication and compatibility checks still apply."
-                : "Choose whether new sessions can use this harness. This keeps its saved configuration and does not install or authenticate it."
-            }
-            control={
-              <Select
-                value={enabled ? "use" : "exclude"}
-                disabled={readOnly || (projectOverride !== undefined && !canWriteSettings)}
-                onValueChange={(value) => {
-                  if (value === "use" || value === "exclude") updateEnabled(value === "use");
-                }}
-              >
-                <SelectTrigger size="sm" aria-label={`${displayName} for new sessions`}>
-                  <SelectValue>{enabled ? "Use for new sessions" : "Do not use"}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end">
-                  <SelectItem value="use">Use for new sessions</SelectItem>
-                  <SelectItem value="exclude">Do not use</SelectItem>
-                </SelectPopup>
-              </Select>
-            }
-          />
-        </SettingsSection>
-      ) : null}
-
       {gatewayManaged && instance.driver === "antigravity" ? (
         <SettingsSection title="Antigravity account">
           <SettingsRow
@@ -1178,7 +1034,7 @@ export function ProviderInstanceCard({
 
       {!usesGatewayCredentials ? (
         <SettingsSection
-          title="Environment"
+          title="Shell environment variables"
           inert={readOnly}
           aria-disabled={readOnly || undefined}
           className={readOnly ? "opacity-50 select-none" : undefined}
@@ -1207,7 +1063,7 @@ export function ProviderInstanceCard({
             <p className="mb-3 text-xs text-muted-foreground">
               {usesGatewayCredentials
                 ? "Models are discovered from your connected accounts. Favorites and visibility are shared across your devices."
-                : "Model preferences and custom models are saved on the selected environment and shared across connected devices."}
+                : "Model preferences and custom models are shared across projects and connected devices."}
             </p>
             <ProviderModelsSection
               canManageCustomModels={!readOnly && !usesGatewayCredentials}

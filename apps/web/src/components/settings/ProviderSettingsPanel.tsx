@@ -33,7 +33,6 @@ import * as Result from "effect/Result";
 import { PlusIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import {
   useEnvironmentSettings,
   usePersistEnvironmentProviderInstanceMutation,
@@ -54,11 +53,7 @@ import { useEnvironmentSessionState } from "../../state/session";
 import { useProjects, useServerConfigs } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { getRelativeTimeState } from "../../timestampFormat";
-import {
-  ConnectionStatusDot,
-  connectionPhaseDotClassName,
-  connectionPhasePingClassName,
-} from "../ConnectionStatusDot";
+
 import { Button } from "../ui/button";
 import {
   Empty,
@@ -76,7 +71,6 @@ import {
   NumberFieldInput,
 } from "../ui/number-field";
 import { ScrollArea } from "../ui/scroll-area";
-import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
@@ -154,31 +148,21 @@ function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }
   );
 }
 
-function providerEnvironmentDetail(environment: EnvironmentPresentation): string {
-  if (environment.entry.target._tag === "PrimaryConnectionTarget") return "Primary device";
-  if (environment.relayManaged) return "T3 Connect";
-  if (environment.entry.target._tag === "SshConnectionTarget") return "SSH";
-  if (isDesktopLocalConnectionTarget(environment.entry.target)) return "Local device";
-  return environment.displayUrl ?? "Remote device";
-}
-
 // Shared by the editor grid and the placeholder states so switching devices
 // never changes the card's footprint.
 const providerCardHeightClassName =
   "@min-[48rem]/providers:h-[min(44rem,calc(100dvh-11rem))] @min-[48rem]/providers:min-h-[32rem]";
 
 /**
- * Same chrome as the provider editor (section heading, floating device tabs,
+ * Same chrome as the provider editor (section heading,
  * tall card) for states that cannot render provider settings yet.
  */
 function ProviderSettingsPlaceholder({
-  deviceTabs,
   icon,
   title,
   description,
   children,
 }: {
-  readonly deviceTabs?: ReactNode;
   readonly icon: ReactNode;
   readonly title: string;
   readonly description: string;
@@ -186,9 +170,6 @@ function ProviderSettingsPlaceholder({
 }) {
   return (
     <SettingsSection {...searchableSetting("providers")} variant="plain">
-      {deviceTabs ? (
-        <div className="flex min-h-11 min-w-0 items-center px-3 sm:px-4">{deviceTabs}</div>
-      ) : null}
       <SettingsGroup
         divided={false}
         className={cn(
@@ -212,11 +193,9 @@ function ProviderSettingsPlaceholder({
 function EnvironmentUnavailablePlaceholder({
   environment,
   access,
-  deviceTabs,
 }: {
   readonly environment: EnvironmentPresentation;
   readonly access: Exclude<ProviderEnvironmentAccess, { kind: "editable" | "read-only" }>;
-  readonly deviceTabs?: ReactNode;
 }) {
   const isLoading = access.kind === "loading";
   const title = isLoading
@@ -236,7 +215,6 @@ function EnvironmentUnavailablePlaceholder({
   // continuously repainting animation would run the whole time.
   return (
     <ProviderSettingsPlaceholder
-      deviceTabs={deviceTabs}
       icon={
         <EnvironmentMachineIcon kind={resolveEnvironmentMachineKind(environment.serverConfig)} />
       }
@@ -350,66 +328,14 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
     selectedEnvironmentCanRenderSettings,
     target.scoped,
   ]);
-  const onlyPrimaryDevice =
-    options.length === 1 && options[0]?.entry.target._tag === "PrimaryConnectionTarget";
-  const deviceTabs =
-    !target.scoped && !onlyPrimaryDevice && options.length > 0 ? (
-      <ScrollArea radius="none" hideScrollbars scrollFade className="h-11 min-w-0 flex-1">
-        <ToggleGroup
-          aria-label="Devices"
-          variant="segmented"
-          className="my-2"
-          value={effectiveEnvironmentId ? [effectiveEnvironmentId] : []}
-          onValueChange={(next) => {
-            const environment = options.find((option) => option.environmentId === next[0]);
-            if (environment) setSelectedEnvironmentId(environment.environmentId);
-          }}
-        >
-          {options.map((environment) => {
-            const machine = resolveEnvironmentMachineKind(environment.serverConfig);
-            const detail = providerEnvironmentDetail(environment);
-            const statusText = connectionStatusTitle(environment.connection);
-            return (
-              <Tooltip key={environment.environmentId}>
-                <TooltipTrigger
-                  render={
-                    <Toggle value={environment.environmentId}>
-                      <EnvironmentMachineIcon
-                        kind={machine}
-                        className="size-3.5 shrink-0"
-                        aria-hidden
-                      />
-                      <span className="max-w-40 truncate">{environment.label}</span>
-                      {environment.connection.phase !== "connected" ? (
-                        <ConnectionStatusDot
-                          dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
-                          pingClassName={connectionPhasePingClassName(environment.connection.phase)}
-                        />
-                      ) : null}
-                      <span className="sr-only">
-                        {detail}, {statusText}
-                      </span>
-                    </Toggle>
-                  }
-                />
-                <TooltipPopup side="top">
-                  {detail} · {statusText}
-                </TooltipPopup>
-              </Tooltip>
-            );
-          })}
-        </ToggleGroup>
-      </ScrollArea>
-    ) : null;
 
   return (
     <>
       {targetEnvironmentMissing ? (
         <ProviderSettingsPlaceholder
-          deviceTabs={deviceTabs}
           icon={<EnvironmentMachineIcon kind={resolveEnvironmentMachineKind(null)} />}
           title="Device unavailable"
-          description="Reconnect this device to set up its provider, or select another device."
+          description="Reconnect to configure this project's harnesses."
         />
       ) : null}
       {options.length === 0 && !targetEnvironmentMissing ? (
@@ -428,7 +354,7 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
         <SelectedEnvironmentProviderSettings
           key={selectedEnvironment.environmentId}
           environment={selectedEnvironment}
-          deviceTabs={deviceTabs}
+
           targetInstanceId={
             target.environmentId === undefined ||
             selectedEnvironment.environmentId === target.environmentId
@@ -444,19 +370,19 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
 
 function SelectedEnvironmentProviderSettings({
   environment,
-  deviceTabs,
+
   targetInstanceId,
   projectIds,
 }: {
   readonly environment: EnvironmentPresentation;
-  readonly deviceTabs?: ReactNode;
+
   readonly targetInstanceId?: ProviderInstanceId | undefined;
   readonly projectIds: readonly ProjectId[];
 }) {
   return (
     <RemoteSessionGatedProviderSettings
       environment={environment}
-      deviceTabs={deviceTabs}
+
       targetInstanceId={targetInstanceId}
       projectIds={projectIds}
     />
@@ -465,12 +391,12 @@ function SelectedEnvironmentProviderSettings({
 
 function RemoteSessionGatedProviderSettings({
   environment,
-  deviceTabs,
+
   targetInstanceId,
   projectIds,
 }: {
   readonly environment: EnvironmentPresentation;
-  readonly deviceTabs?: ReactNode;
+
   readonly targetInstanceId?: ProviderInstanceId | undefined;
   readonly projectIds: readonly ProjectId[];
 }) {
@@ -484,7 +410,7 @@ function RemoteSessionGatedProviderSettings({
     <AccessGatedProviderSettings
       environment={environment}
       operateAccess={operateAccess}
-      deviceTabs={deviceTabs}
+
       targetInstanceId={targetInstanceId}
       projectIds={projectIds}
     />
@@ -494,13 +420,13 @@ function RemoteSessionGatedProviderSettings({
 function AccessGatedProviderSettings({
   environment,
   operateAccess,
-  deviceTabs,
+
   targetInstanceId,
   projectIds,
 }: {
   readonly environment: EnvironmentPresentation;
   readonly operateAccess: ProviderOperateAccess;
-  readonly deviceTabs?: ReactNode;
+
   readonly targetInstanceId?: ProviderInstanceId | undefined;
   readonly projectIds: readonly ProjectId[];
 }) {
@@ -510,20 +436,14 @@ function AccessGatedProviderSettings({
     operateAccess,
   });
   if (access.kind !== "editable" && access.kind !== "read-only") {
-    return (
-      <EnvironmentUnavailablePlaceholder
-        environment={environment}
-        access={access}
-        deviceTabs={deviceTabs}
-      />
-    );
+    return <EnvironmentUnavailablePlaceholder environment={environment} access={access} />;
   }
   return (
     <EnvironmentProviderSettings
       environmentId={environment.environmentId}
       environmentLabel={environment.label}
       readOnly={access.kind === "read-only"}
-      deviceTabs={deviceTabs}
+
       targetInstanceId={targetInstanceId}
       projectIds={projectIds}
     />
@@ -534,13 +454,13 @@ export function EnvironmentProviderSettings({
   environmentId,
   environmentLabel,
   readOnly = false,
-  deviceTabs,
+
   targetInstanceId,
   projectIds = [],
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
-  readonly deviceTabs?: ReactNode;
+
   readonly targetInstanceId?: ProviderInstanceId | undefined;
   /** The project's checkouts on this environment, if a project is in scope. */
   readonly projectIds?: readonly ProjectId[];
@@ -815,7 +735,7 @@ export function EnvironmentProviderSettings({
     );
     const resetLabel = driverOption?.label ?? String(row.driver);
     const representativeProjectId = projectIds[0];
-    const writeProjectOverride = (next: boolean | undefined) => {
+    const writeProjectOverride = (next: boolean) => {
       updateSettings({
         projectSettingsOverrides: buildProviderInstanceOverridePatch(
           settings,
@@ -829,17 +749,12 @@ export function EnvironmentProviderSettings({
       representativeProjectId === undefined || !supportsProjectProviderOverrides
         ? undefined
         : {
-            value:
-              settings.projectSettingsOverrides[representativeProjectId]?.providerInstances?.[
-                row.instanceId
-              ]?.enabled,
             effectiveEnabled: resolveProjectProviderInstanceEnabled(
               settings,
               representativeProjectId,
               row.instanceId,
             ),
             onChange: (next: boolean) => writeProjectOverride(next),
-            onReset: () => writeProjectOverride(undefined),
           };
 
     return (
@@ -1046,11 +961,9 @@ export function EnvironmentProviderSettings({
       >
         <p className="px-3 text-xs text-muted-foreground sm:px-4">
           Harnesses are bundled with the sandbox image. Select a harness to configure it. Accounts,
-          authentication, and compatibility determine which models you can use.
+          authentication, and compatibility determine which models you can use. The toggle applies
+          to this project. Accounts and model preferences are shared across projects.
         </p>
-        {deviceTabs ? (
-          <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 sm:px-4">{deviceTabs}</div>
-        ) : null}
         {readOnly ? (
           <SettingsGroup divided={false} className="overflow-hidden">
             <SettingsRow

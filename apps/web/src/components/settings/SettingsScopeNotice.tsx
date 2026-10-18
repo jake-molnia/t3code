@@ -2,7 +2,6 @@ import { Button } from "../ui/button";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { SettingsPageContainer } from "./settingsLayout";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { useEnvironments } from "../../state/environments";
 import type { SettingsScopeSearch } from "./settingsScope";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 import { useLocation, useNavigate } from "@tanstack/react-router";
@@ -20,47 +19,26 @@ export function SettingsScopeNotice({
   targetId?: string;
   eligibleEnvironmentIds?: readonly EnvironmentId[];
 }) {
-  const { selectScope, search } = useSettingsScope();
+  const { selectScope } = useSettingsScope();
   const navigate = useNavigate({ from: "/settings" });
   const pathname = useLocation({ select: (location) => location.pathname });
-  const { environments } = useEnvironments();
   const groups = useSettingsProjectGroups();
-  const choices: { label: string; search: SettingsScopeSearch }[] =
-    target === "checkout"
-      ? groups
-          .filter((group) => !search.project || group.projectKey === search.project)
-          .flatMap((group) =>
-            group.memberProjects.map((member) => ({
-              label: `${group.displayName} · ${member.environmentLabel ?? "Environment"} · ${member.workspaceRoot}`,
-              search: {
-                project: group.projectKey,
-                machine: member.environmentId,
-                checkout: member.physicalProjectKey,
-              },
-            })),
-          )
-      : target === "project"
-        ? groups.map((group) => ({
-            label: group.displayName,
-            search: { project: group.projectKey },
+  const choices: { label: string; search: SettingsScopeSearch }[] = groups
+    .filter(
+      (group) =>
+        eligibleEnvironmentIds === undefined ||
+        group.memberProjects.some((member) =>
+          eligibleEnvironmentIds.includes(member.environmentId),
+        ),
+    )
+    .flatMap((group) =>
+      target === "checkout"
+        ? group.memberProjects.map((member) => ({
+            label: `${group.displayName} · ${member.workspaceRoot}`,
+            search: { project: group.projectKey, checkout: member.physicalProjectKey },
           }))
-        : target === "environment"
-          ? environments
-              .filter(
-                (entry) =>
-                  eligibleEnvironmentIds === undefined ||
-                  eligibleEnvironmentIds.includes(entry.environmentId),
-              )
-              .map((entry) => ({
-                label: environments.some(
-                  (other) =>
-                    other.environmentId !== entry.environmentId && other.label === entry.label,
-                )
-                  ? `${entry.label} · ${entry.displayUrl || entry.environmentId}`
-                  : entry.label,
-                search: { machine: entry.environmentId },
-              }))
-          : [{ label: "Open all environments", search: {} }];
+        : [{ label: group.displayName, search: { project: group.projectKey } }],
+    );
   return (
     <SettingsPageContainer>
       <Alert role="status">

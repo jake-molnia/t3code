@@ -196,23 +196,15 @@ describe("scoped settings writes", () => {
       },
     ]);
   });
-  it("isolates a formerly shared server preference to the named environment", async () => {
-    const persistServer = vi.fn().mockResolvedValue({ _tag: "Success" });
-    const persistClient = vi.fn();
-    await persistScopedSettingsPatch(
-      planScopedSettingsPatch(named, environments, { sidebarAutoSettleOnMerge: false }),
-      persistServer,
-      persistClient,
-    );
-    expect(persistServer.mock.calls).toEqual([
-      [
-        {
-          environmentId: server.environmentId,
-          input: { patch: { sidebarAutoSettleOnMerge: false } },
-        },
-      ],
-    ]);
-    expect(persistClient).not.toHaveBeenCalled();
+  it("refuses project policy writes without a concrete project", () => {
+    for (const scope of [all, named]) {
+      expect(
+        planScopedSettingsPatch(scope, environments, { sidebarAutoSettleOnMerge: false }),
+      ).toMatchObject({
+        serverWrites: [],
+        unavailableReason: "Select a project to change project settings.",
+      });
+    }
   });
 
   it("writes an aggregate preference only to connected environments with loaded configuration", async () => {
@@ -269,8 +261,14 @@ describe("scoped settings writes", () => {
     it("reports dropped text but accepts the server trimming it", async () => {
       expect(
         await outcome(
-          planScopedSettingsPatch(all, environments, { reviewGuideInstructions: " Read tests " }),
-          upgradedLaptop({ reviewGuideInstructions: "Read tests" }),
+          planScopedSettingsPatch(project, environments, {
+            reviewGuideInstructions: " Read tests ",
+          }),
+          upgradedLaptop({
+            projectSettingsOverrides: {
+              [laptopProjectId]: { reviewGuideInstructions: "Read tests" },
+            },
+          }),
         ),
       ).toEqual({ saved: [laptop.label], failed: unsupported });
     });
@@ -433,17 +431,19 @@ describe("scoped settings writes", () => {
     expect(
       planScopedSettingsPatch(project, [machine, customized], {
         storageCleanup: { browserArtifactsAfterDays: 8 },
-      }).serverWrites,
-    ).toEqual([]);
+      }).serverWrites.map((write) => write.patch),
+    ).toEqual([
+      { storageCleanup: { browserArtifactsAfterDays: 8 } },
+      { storageCleanup: { browserArtifactsAfterDays: 8 } },
+    ]);
   });
 
-  it("refuses environment-wide keys and older servers at project scope", () => {
+  it("keeps shared app settings central and requires project override support for project policy", () => {
     expect(
-      planScopedSettingsPatch(project, environments, { enableProviderUpdateChecks: false }),
-    ).toMatchObject({
-      serverWrites: [],
-      unavailableReason: "This setting is environment-wide and cannot be overridden by a project.",
-    });
+      planScopedSettingsPatch(project, environments, {
+        enableProviderUpdateChecks: false,
+      }).serverWrites.map((write) => write.patch),
+    ).toEqual([{ enableProviderUpdateChecks: false }, { enableProviderUpdateChecks: false }]);
     const legacy = environment("Server", { projectOverrides: false });
     expect(
       planScopedSettingsPatch(checkout, [laptop, legacy], { defaultAutoPull: true }),
@@ -504,7 +504,7 @@ describe("scoped settings writes", () => {
       .mockRejectedValueOnce(new Error("Disconnected during save"))
       .mockResolvedValueOnce({ _tag: "Success" });
     const result = await persistScopedSettingsPatch(
-      planScopedSettingsPatch(scope, selected, { enableAgentBrowserAccess: false }),
+      planScopedSettingsPatch(scope, selected, { enableProviderUpdateChecks: false }),
       persistServer,
       vi.fn(),
     );
@@ -736,4 +736,50 @@ it("routes legacy model preference keys exclusively to the selected environment"
       patch,
     },
   ]);
+});
+
+it("writes project policy and shared preferences separately without changing legacy defaults", () => {
+  const plan = planScopedSettingsPatch(checkout, environments, {
+    defaultAutoPull: true,
+    enableProviderUpdateChecks: false,
+  });
+  expect(plan.serverWrites[0]?.patch).toEqual({
+    enableProviderUpdateChecks: false,
+    projectSettingsOverrides: { [projectId]: { defaultAutoPull: true } },
+  });
+  const saved = applyServerSettingsPatch(
+    server.serverConfig!.settings,
+    plan.serverWrites[0]!.patch,
+  );
+  expect(saved.defaultAutoPull).toBe(server.serverConfig!.settings.defaultAutoPull);
+  expect(saved.projectSettingsOverrides[projectId]?.defaultAutoPull).toBe(true);
+});
+
+it("plans shared writes independently of project override support and retains existing project policy", () => {
+  const legacy = environment("Server", {
+    projectOverrides: false,
+    settings: {
+      projectSettingsOverrides: { [projectId]: { defaultAutoPull: true } },
+    },
+  });
+  for (const patch of [
+    { enableProviderUpdateChecks: false },
+    { enableProviderUpdateChecks: false, defaultAutoPull: false },
+  ]) {
+    const plan = planScopedSettingsPatch(checkout, [legacy], patch);
+    expect(plan.serverWrites.map((write) => write.patch)).toEqual([
+      { enableProviderUpdateChecks: false },
+    ]);
+    const saved = applyServerSettingsPatch(
+      legacy.serverConfig!.settings,
+      plan.serverWrites[0]!.patch,
+    );
+    expect(saved.projectSettingsOverrides).toEqual(
+      legacy.serverConfig!.settings.projectSettingsOverrides,
+    );
+    expect(saved.defaultAutoPull).toBe(legacy.serverConfig!.settings.defaultAutoPull);
+    expect(plan.unavailableReason).toEqual(
+      "defaultAutoPull" in patch ? expect.stringContaining("update") : null,
+    );
+  }
 });

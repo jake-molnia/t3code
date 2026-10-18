@@ -1820,7 +1820,7 @@ export function GeneralSettingsPanel() {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const navigate = useNavigate();
-  const { scope, environment, connectedEnvironments, target } = useSettingsScope();
+  const { scope, environment, connectedEnvironments, target, search } = useSettingsScope();
   // The representative environment supplies the provider list for pickers;
   // a fanned-out model choice is validated against every target before it
   // is written. Per-machine tuning (background activity overrides) still
@@ -2842,7 +2842,7 @@ export function GeneralSettingsPanel() {
                         onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
                           void navigate({
                             to: "/settings/providers",
-                            search: { environmentId, instanceId },
+                            search: { ...search, instanceId },
                           });
                         },
                       }
