@@ -309,10 +309,19 @@ export function SettingsRow({
     mixedOverride ?? (context !== null && scopedSettingsAreMixed(context.targets, settingKeys));
   const source =
     context && isProjectScope ? scopedSettingsSource(context.targets, scopedKeys) : null;
+  const projectUnavailable =
+    context !== null &&
+    scopedKeys.length > 0 &&
+    (!isProjectScope ||
+      context.connectedEnvironments.some(
+        (environment) =>
+          environment.serverConfig?.environment.capabilities.projectSettingsOverrides !== true,
+      ));
   const unavailable =
-    serverScoped &&
-    (!canWriteSettings ||
-      !(context ? context.connectedEnvironments.length > 0 : primarySettingsAvailable));
+    projectUnavailable ||
+    (serverScoped &&
+      (!canWriteSettings ||
+        !(context ? context.connectedEnvironments.length > 0 : primarySettingsAvailable)));
   const environmentSettingsById = useMemo(
     () =>
       new Map(
@@ -386,18 +395,22 @@ export function SettingsRow({
   const renderedControl =
     unavailable && control
       ? inertControl(
-          !canWriteSettings
-            ? `This connection lacks permission to change settings on ${
-                context
-                  ? context.connectedEnvironments
-                      .filter((target) => !writableIds.has(target.environmentId))
-                      .map((target) => target.label)
-                      .join(", ") || "the selected environment"
-                  : (primaryEnvironment?.label ?? "the primary environment")
-              }.`
-            : context
-              ? "Reconnect the selected environment to change this setting."
-              : PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE,
+          projectUnavailable
+            ? !isProjectScope
+              ? "Select a project to change this setting."
+              : "Update T3 Code to change project settings."
+            : !canWriteSettings
+              ? `This connection lacks permission to change settings on ${
+                  context
+                    ? context.connectedEnvironments
+                        .filter((target) => !writableIds.has(target.environmentId))
+                        .map((target) => target.label)
+                        .join(", ") || "the selected environment"
+                    : (primaryEnvironment?.label ?? "the primary environment")
+                }.`
+              : context
+                ? "Reconnect the selected environment to change this setting."
+                : PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE,
         )
       : control;
   // Server rows get an indicator beside the title that opens the resolution

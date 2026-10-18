@@ -56,6 +56,12 @@ export function selectScopedSettingsEnvironments<T extends ScopedSettingsEnviron
   primaryEnvironmentId: EnvironmentId | null,
 ) {
   const selectedIds = new Set(scope.environmentIds);
+  if (scope.kind === "unavailable") {
+    // Missing projects still have shared app settings on the central service.
+    const central =
+      available.find((entry) => entry.environmentId === primaryEnvironmentId) ?? available[0];
+    if (central) selectedIds.add(central.environmentId);
+  }
   const environments = available.filter((environment) =>
     selectedIds.has(environment.environmentId),
   );
@@ -223,7 +229,6 @@ export function planScopedSettingsPatch(
   const serverPatch = Object.fromEntries(
     Object.entries(patch).filter(([key]) => SERVER_KEYS.has(key)),
   ) as ServerSettingsPatch;
-  const serverKeys = Object.keys(serverPatch);
   const { connectedEnvironments } = selectScopedSettingsEnvironments(scope, environments, null);
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
   const projectPatch = Object.fromEntries(
@@ -232,94 +237,107 @@ export function planScopedSettingsPatch(
   const sharedPatch = Object.fromEntries(
     Object.entries(serverPatch).filter(([key]) => !isProjectScopedSettingKey(key)),
   ) as ServerSettingsPatch;
-  const projectRequired = !isProjectScope && Object.keys(projectPatch).length > 0;
-  const serverWrites: ScopedServerWrite[] =
-    serverKeys.length === 0 || projectRequired
-      ? []
-      : isProjectScope
-        ? projectOverrideWrites(scope, environments, (current, settings, projectId) => {
-            // Object-valued keys arrive as partial patches (the writing style
-            // rows send one field); an override entry stores the whole value,
-            // so complete the patch from the target's effective value.
-            const effective = resolveProjectSettings(settings, projectId).settings;
-            const next: Record<string, unknown> = { ...current };
-            for (const [key, value] of Object.entries(projectPatch)) {
-              if (key === "worktreeCleanup" && serverPatch.worktreeCleanup?.mode === "custom") {
-                next[key] = {
-                  mode: "custom",
-                  rules: {
-                    ...resolveWorktreeCleanup(settings, projectId),
-                    ...serverPatch.worktreeCleanup.rules,
-                  },
-                };
-                continue;
-              }
-              // A picker's "Inherit" sends null; for keys whose override
-              // cannot store null that means remove the override.
-              if (
-                value === null &&
-                !isNullableProjectSettingsOverride(key as ProjectScopedServerSettingKey)
-              ) {
-                delete next[key];
-                continue;
-              }
-              const base = effective[key as keyof ServerSettings];
-              next[key] =
-                isPlainObject(value) && isPlainObject(base) ? { ...base, ...value } : value;
-            }
-            return next as ProjectSettingsOverrides;
-          }).map((write) => ({
-            ...write,
-            patch: {
-              ...sharedPatch,
-              ...(Object.keys(projectPatch).length > 0 ? write.patch : {}),
-            },
-          }))
-        : scope.kind === "all" || scope.kind === "environment"
-          ? connectedEnvironments.flatMap((environment) => {
-              const previous = environment.serverConfig?.settings;
-              if (!previous) return [];
-              return [
-                {
-                  environmentId: environment.environmentId,
-                  label: environment.label,
-                  previous,
-                  patch:
-                    previous.worktreeCleanup != null &&
-                    serverPatch.storageCleanup &&
-                    Object.keys(serverPatch.storageCleanup).some((key) =>
-                      key.startsWith("worktree"),
-                    )
-                      ? {
-                          ...serverPatch,
-                          worktreeCleanup: {
-                            mode: "custom",
-                            rules: {
-                              ...resolveWorktreeCleanup(previous, null),
-                              ...Object.fromEntries(
-                                Object.entries(serverPatch.storageCleanup).filter(([key]) =>
-                                  key.startsWith("worktree"),
-                                ),
-                              ),
-                            },
-                          },
-                        }
-                      : serverPatch,
+  const hasProjectPatch = Object.keys(projectPatch).length > 0;
+  const projectRequired = !isProjectScope && hasProjectPatch;
+  const unsupportedProject =
+    hasProjectPatch &&
+    isProjectScope &&
+    scope.members.some(
+      (member) =>
+        !connectedEnvironments.some(
+          (environment) =>
+            environment.environmentId === member.environmentId &&
+            environment.serverConfig?.environment?.capabilities.projectSettingsOverrides === true,
+        ),
+    );
+  const projectWrites =
+    isProjectScope && hasProjectPatch
+      ? projectOverrideWrites(scope, environments, (current, settings, projectId) => {
+          // Object-valued keys arrive as partial patches (the writing style
+          // rows send one field); an override entry stores the whole value,
+          // so complete the patch from the target's effective value.
+          const effective = resolveProjectSettings(settings, projectId).settings;
+          const next: Record<string, unknown> = { ...current };
+          for (const [key, value] of Object.entries(projectPatch)) {
+            if (key === "worktreeCleanup" && serverPatch.worktreeCleanup?.mode === "custom") {
+              next[key] = {
+                mode: "custom",
+                rules: {
+                  ...resolveWorktreeCleanup(settings, projectId),
+                  ...serverPatch.worktreeCleanup.rules,
                 },
-              ];
-            })
-          : [];
+              };
+              continue;
+            }
+            // A picker's "Inherit" sends null; for keys whose override
+            // cannot store null that means remove the override.
+            if (
+              value === null &&
+              !isNullableProjectSettingsOverride(key as ProjectScopedServerSettingKey)
+            ) {
+              delete next[key];
+              continue;
+            }
+            const base = effective[key as keyof ServerSettings];
+            next[key] = isPlainObject(value) && isPlainObject(base) ? { ...base, ...value } : value;
+          }
+          return next as ProjectSettingsOverrides;
+        })
+      : [];
+  const sharedWrites: ScopedServerWrite[] =
+    Object.keys(sharedPatch).length === 0
+      ? []
+      : connectedEnvironments.flatMap((environment) => {
+          const previous = environment.serverConfig?.settings;
+          if (!previous) return [];
+          return [
+            {
+              environmentId: environment.environmentId,
+              label: environment.label,
+              previous,
+              patch:
+                previous.worktreeCleanup != null &&
+                sharedPatch.storageCleanup &&
+                Object.keys(sharedPatch.storageCleanup).some((key) => key.startsWith("worktree"))
+                  ? {
+                      ...sharedPatch,
+                      worktreeCleanup: {
+                        mode: "custom",
+                        rules: {
+                          ...resolveWorktreeCleanup(previous, null),
+                          ...Object.fromEntries(
+                            Object.entries(sharedPatch.storageCleanup).filter(([key]) =>
+                              key.startsWith("worktree"),
+                            ),
+                          ),
+                        },
+                      },
+                    }
+                  : sharedPatch,
+            },
+          ];
+        });
+  const writes = new Map<EnvironmentId, ScopedServerWrite>();
+  for (const write of [...sharedWrites, ...projectWrites]) {
+    writes.set(write.environmentId, {
+      ...write,
+      patch: { ...writes.get(write.environmentId)?.patch, ...write.patch },
+    });
+  }
+  const serverWrites = [...writes.values()];
   const hasClientWrite = Object.keys(clientPatch).length > 0;
   const hasWrite = hasClientWrite || serverWrites.length > 0;
   const unavailableReason = projectRequired
     ? "Select a project to change project settings."
-    : hasWrite || Object.keys(patch).length === 0
-      ? null
-      : scope.kind === "unavailable"
-        ? scope.message
-        : isProjectScope
-          ? "Connect the selected checkouts, or update their environments, to save a project override."
-          : `Connect ${scope.kind === "environment" ? scope.label : "an environment"} to save this setting.`;
+    : unsupportedProject
+      ? "Connect the selected checkouts, or update T3 Code, to save project settings."
+      : hasWrite || Object.keys(patch).length === 0
+        ? null
+        : scope.kind === "unavailable"
+          ? scope.message
+          : isProjectScope
+            ? "Connect the selected checkouts, or update their environments, to save a project override."
+            : `Connect ${scope.kind === "environment" ? scope.label : "an environment"} to save this setting.`;
   return { clientPatch, hasClientWrite, serverWrites, unavailableReason };
 }
 

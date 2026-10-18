@@ -19,10 +19,16 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
   completeAuth: vi.fn(),
   persist: vi.fn(),
+  persistClient: vi.fn(),
+  cleanup: vi.fn(),
+  canWrite: true,
+  canCleanup: true,
+  mixedPatch: false,
   toast: vi.fn(),
   query: Symbol("mcp-state"),
   permission: Symbol("mcp-permission"),
   update: Symbol("update-settings"),
+  runCleanup: { permissionAtom: () => cleanupPermission() },
 }));
 const environmentId = EnvironmentId.make("central");
 const projectId = ProjectId.make("selected-project");
@@ -33,7 +39,15 @@ const environment = {
   serverConfig: {
     providers: [],
     settings: DEFAULT_SERVER_SETTINGS,
-    environment: { capabilities: { projectSettingsOverrides: true } },
+    environment: {
+      platform: { machine: "linux" },
+      capabilities: {
+        projectSettingsOverrides: true,
+        projectWorktreeCleanup: true,
+        storageCleanup: true,
+        storageCleanupRun: true,
+      },
+    },
   },
 };
 const member = {
@@ -78,8 +92,15 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
     };
     return options ? options.select(location) : location;
   },
+  Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
   Outlet: () =>
-    state.pathname === "/settings/mcp" ? (
+    state.mixedPatch ? (
+      <MixedPatchProbe />
+    ) : state.pathname === "/settings/general" ? (
+      <GeneralSettingsPanel />
+    ) : state.pathname === "/settings/storage" ? (
+      <StorageSettingsPanel />
+    ) : state.pathname === "/settings/mcp" ? (
       <McpSettings />
     ) : (
       <SettingsPageContainer>
@@ -90,16 +111,31 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({ environments: [environment] }),
   usePrimaryEnvironmentId: () => environmentId,
+  usePrimaryEnvironment: () => environment,
 }));
 vi.mock("./useSettingsProjectGroups", () => ({ useSettingsProjectGroups: () => state.groups }));
 vi.mock("@effect/atom-react", async () => {
-  const { AsyncResult } = await import("effect/reactivity");
+  const { AsyncResult, Atom, AtomRegistry } = await import("effect/reactivity");
   const data = AsyncResult.success({ available: true, connections: [], access: [] });
-  const files = new Map();
+  const registry = AtomRegistry.make();
   return {
     useAtomValue: (atom: unknown) =>
-      atom === state.permission ? true : atom === state.query ? data : files,
+      atom === state.permission
+        ? true
+        : atom === state.query
+          ? data
+          : Atom.isAtom(atom)
+            ? registry.get(atom)
+            : null,
     useAtomRefresh: () => vi.fn(),
+  };
+});
+vi.mock("../files/projectFilesQueryState", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  return {
+    getProjectFileQueryAtom: () =>
+      Atom.make(AsyncResult.success({ contents: "{}", truncated: false })),
+    optimisticFileAtom: () => Atom.make(null),
   };
 });
 vi.mock("../../state/mcpConnections", () => ({
@@ -112,21 +148,32 @@ vi.mock("../../state/mcpConnections", () => ({
 vi.mock("../../state/server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/server")>()),
   EMPTY_SERVER_PROVIDERS: [],
-  serverEnvironment: { updateSettings: state.update },
+  serverEnvironment: {
+    updateSettings: state.update,
+    runStorageCleanup: state.runCleanup,
+    storageCleanupReport: () => cleanupReport,
+  },
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>
-    command === state.update ? state.persist : state.completeAuth,
+    command === state.update
+      ? state.persist
+      : command === state.runCleanup
+        ? state.cleanup
+        : state.completeAuth,
 }));
 vi.mock("../../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/session")>()),
-  readEnvironmentScope: () => true,
-  useEnvironmentsWithScope: () => new Set([environmentId]),
+  readEnvironmentScope: () => state.canWrite,
+  useEnvironmentScope: () => state.canWrite,
+  useEnvironmentsWithScope: () => new Set(state.canWrite ? [environmentId] : []),
 }));
 vi.mock("../../hooks/useSettings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hooks/useSettings")>()),
   useClientSettings: () => DEFAULT_CLIENT_SETTINGS,
   useMigrateModelPreferences: () => undefined,
+  persistClientSettingsPatch: (patch: unknown) => state.persistClient(patch),
+  usePrimarySettingsAvailable: () => true,
 }));
 vi.mock("../ProjectFavicon", () => ({ ProjectFavicon: () => null }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: (value: unknown) => state.toast(value) } }));
@@ -136,7 +183,9 @@ vi.mock("../ui/sidebar", () => ({
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
-vi.mock("./settingsLayout", () => ({
+vi.mock("./settingsLayout", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./settingsLayout")>()),
+  useRelativeTimeTick: () => undefined,
   SettingsPageContainer: ({ children }: { children: ReactNode }) => (
     <div>
       <SettingsScopeSentence />
@@ -144,19 +193,25 @@ vi.mock("./settingsLayout", () => ({
     </div>
   ),
   SettingsSection: ({ children }: { children: ReactNode }) => <section>{children}</section>,
-  SettingsRow: ({ title, control }: { title: ReactNode; control: ReactNode }) => (
-    <div>
-      {title}
-      {control}
-    </div>
-  ),
   SettingResetButton: () => null,
 }));
 vi.mock("./SettingsBreadcrumb", () => ({ SettingsBreadcrumb: () => null }));
 vi.mock("../sidebar/mainAppLocation", () => ({ useNavigateToMainApp: () => vi.fn() }));
 vi.mock("../../hooks/useNavigateBack", () => ({ useEscapeToGoBack: () => undefined }));
-vi.mock("./SettingsPanels", () => ({ useSettingsRestore: () => ({ changedSettingLabels: [] }) }));
+vi.mock("./SettingsPanels", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./SettingsPanels")>()),
+  useSettingsRestore: () => ({ changedSettingLabels: [] }),
+}));
+vi.mock("./NotificationSettings", () => ({ NotificationSettings: () => null }));
+vi.mock("./ServerVersionSection", () => ({ ServerVersionSection: () => null }));
+vi.mock("./HostedAppChannelSection", () => ({ HostedAppChannelSection: () => null }));
 
+import { Atom, AsyncResult } from "effect/reactivity";
+import { useUpdateScopedSettings } from "./useScopedSettings";
+import { GeneralSettingsPanel } from "./SettingsPanels";
+import { StorageSettingsPanel } from "./StorageSettings";
+const cleanupPermission = () => Atom.make(state.canCleanup);
+const cleanupReport = Atom.make(AsyncResult.success(null));
 import { McpSettings } from "./McpSettings";
 import { SettingsPageContainer } from "./settingsLayout";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
@@ -178,6 +233,14 @@ beforeEach(() => {
     value: applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, input.patch),
   }));
   state.toast.mockReset();
+  state.persistClient.mockReset();
+  state.cleanup.mockReset().mockResolvedValue({ _tag: "Success", value: { entries: [] } });
+  state.canWrite = true;
+  state.mixedPatch = false;
+  state.canCleanup = true;
+  environment.serverConfig.settings = DEFAULT_SERVER_SETTINGS;
+  environment.serverConfig.environment.capabilities.projectSettingsOverrides = true;
+  environment.serverConfig.environment.capabilities.projectWorktreeCleanup = true;
   sessionStorage.clear();
   window.history.replaceState({}, "", "/settings/mcp");
   container = document.createElement("div");
@@ -287,4 +350,186 @@ it.each([
   await render();
   expect(state.completeAuth).not.toHaveBeenCalled();
   expect(container.textContent).toContain("This project is no longer available");
+});
+
+it.each([{}, { project: "deleted" }])(
+  "keeps General client preferences editable without a project (%j)",
+  async (search) => {
+    state.pathname = "/settings/general";
+    state.search = search;
+    await render();
+    const notifications = container.querySelector<HTMLButtonElement>(
+      '[aria-label="In-app notifications"]',
+    );
+    expect(notifications).not.toBeNull();
+    await act(async () => notifications?.click());
+    expect(state.persistClient).toHaveBeenCalledWith({
+      inAppNotificationsEnabled: !DEFAULT_CLIENT_SETTINGS.inAppNotificationsEnabled,
+    });
+    const projectSetting = container.querySelector(
+      '[aria-label="Start new worktrees from origin by default"]',
+    );
+    expect(projectSetting).not.toBeNull();
+    expect(projectSetting?.closest("[inert]")).not.toBeNull();
+    expect(state.persist).not.toHaveBeenCalled();
+  },
+);
+
+it.each([true, false])(
+  "saves shared retention and runs authorized cleanup with project overrides supported=%s",
+  async (projectOverrides) => {
+    state.pathname = "/settings/storage";
+    state.search = { project: "selected" };
+    state.groups = [project];
+    environment.serverConfig.environment.capabilities.projectSettingsOverrides = projectOverrides;
+    environment.serverConfig.environment.capabilities.projectWorktreeCleanup = projectOverrides;
+    environment.serverConfig.settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      storageCleanup: {
+        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        logsAfterDays: 8,
+      },
+    };
+    await render();
+    const retention = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Delete old browser artifacts"]',
+    );
+    expect(retention).not.toBeNull();
+    await act(async () => retention?.click());
+    expect(state.persist).toHaveBeenCalledExactlyOnceWith({
+      environmentId,
+      input: { patch: { storageCleanup: { browserArtifactsAfterDays: 8 } } },
+    });
+    const cleanup = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Delete now",
+    );
+    expect(cleanup).toBeDefined();
+    await act(async () => cleanup?.click());
+    expect(state.cleanup).toHaveBeenCalledExactlyOnceWith({ environmentId, input: {} });
+    expect(container.textContent).toContain("all projects");
+  },
+);
+
+function MixedPatchProbe() {
+  const update = useUpdateScopedSettings();
+  return (
+    <button
+      onClick={() =>
+        update({
+          diffIgnoreWhitespace: false,
+          enableProviderUpdateChecks: false,
+          defaultAutoPull: true,
+        })
+      }
+    >
+      Save mixed settings
+    </button>
+  );
+}
+
+it.each([{}, { project: "deleted" }])(
+  "saves central General settings without a valid project (%j)",
+  async (search) => {
+    state.pathname = "/settings/general";
+    state.search = search;
+    // A stale explicit selection must not borrow this other project's policy.
+    if (search.project) state.groups = [project];
+    await render();
+    const shared = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Auto-resume limited threads"]',
+    );
+    expect(shared).not.toBeNull();
+    expect(shared?.closest("[inert]")).toBeNull();
+    await act(async () => shared?.click());
+    expect(state.persist).toHaveBeenCalledExactlyOnceWith({
+      environmentId,
+      input: {
+        patch: {
+          autoResumeLimitedThreads: !DEFAULT_SERVER_SETTINGS.autoResumeLimitedThreads,
+        },
+      },
+    });
+    expect(
+      container
+        .querySelector('[aria-label="Start new worktrees from origin by default"]')
+        ?.closest("[inert]"),
+    ).not.toBeNull();
+  },
+);
+
+it.each([true, false])(
+  "saves only authorized parts of a mixed patch with unsupported project overrides (write=%s)",
+  async (allowed) => {
+    state.pathname = "/settings/general";
+    state.search = { project: "selected" };
+    state.groups = [project];
+    state.mixedPatch = true;
+    state.canWrite = allowed;
+    environment.serverConfig.environment.capabilities.projectSettingsOverrides = false;
+    await render();
+    const save = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Save mixed settings",
+    );
+    expect(save).toBeDefined();
+    await act(async () => save?.click());
+    expect(state.persistClient).toHaveBeenCalledExactlyOnceWith({ diffIgnoreWhitespace: false });
+    if (allowed)
+      expect(state.persist).toHaveBeenCalledExactlyOnceWith({
+        environmentId,
+        input: { patch: { enableProviderUpdateChecks: false } },
+      });
+    else expect(state.persist).not.toHaveBeenCalled();
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Some settings not saved",
+        description: expect.stringContaining("update"),
+      }),
+    );
+    if (!allowed)
+      expect(state.toast).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Setting not saved" }),
+      );
+  },
+);
+
+it("keeps central retention reachable with no projects and enforces separate cleanup permission", async () => {
+  state.pathname = "/settings/storage";
+  state.canCleanup = false;
+  environment.serverConfig.settings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    storageCleanup: { ...DEFAULT_SERVER_SETTINGS.storageCleanup, logsAfterDays: 8 },
+  };
+  await render();
+  const retention = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Delete old rotated logs"]',
+  );
+  expect(retention).not.toBeNull();
+  await act(async () => retention?.click());
+  expect(state.persist).toHaveBeenCalledExactlyOnceWith({
+    environmentId,
+    input: { patch: { storageCleanup: { logsAfterDays: null } } },
+  });
+  const cleanup = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Delete now",
+  );
+  expect(cleanup?.disabled).toBe(true);
+  await act(async () => cleanup?.click());
+  expect(state.cleanup).not.toHaveBeenCalled();
+  expect(container.querySelector('[aria-label="Automatic worktree cleanup"]')).toBeNull();
+});
+
+it("keeps client preferences usable when shared settings writes are denied", async () => {
+  state.pathname = "/settings/general";
+  state.canWrite = false;
+  await render();
+  const client = container.querySelector<HTMLButtonElement>('[aria-label="In-app notifications"]');
+  await act(async () => client?.click());
+  expect(state.persistClient).toHaveBeenCalledOnce();
+  const shared = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Auto-resume limited threads"]',
+  );
+  expect(shared?.closest("[inert]")).not.toBeNull();
+  // Even a programmatic click that bypasses DOM inertness must not issue an RPC.
+  await act(async () => shared?.click());
+  expect(state.persist).not.toHaveBeenCalled();
 });

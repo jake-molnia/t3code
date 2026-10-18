@@ -95,7 +95,11 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
     return children;
   }
   // Keep the scope sentence on screen so the selection can be changed back.
-  if (scope.kind === "unavailable")
+  if (
+    scope.kind === "unavailable" &&
+    pathname !== "/settings/general" &&
+    pathname !== "/settings/storage"
+  )
     return (
       <SettingsPageContainer>
         <p className="text-sm text-muted-foreground">{scope.message}</p>

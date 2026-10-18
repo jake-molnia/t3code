@@ -754,3 +754,32 @@ it("writes project policy and shared preferences separately without changing leg
   expect(saved.defaultAutoPull).toBe(server.serverConfig!.settings.defaultAutoPull);
   expect(saved.projectSettingsOverrides[projectId]?.defaultAutoPull).toBe(true);
 });
+
+it("plans shared writes independently of project override support and retains existing project policy", () => {
+  const legacy = environment("Server", {
+    projectOverrides: false,
+    settings: {
+      projectSettingsOverrides: { [projectId]: { defaultAutoPull: true } },
+    },
+  });
+  for (const patch of [
+    { enableProviderUpdateChecks: false },
+    { enableProviderUpdateChecks: false, defaultAutoPull: false },
+  ]) {
+    const plan = planScopedSettingsPatch(checkout, [legacy], patch);
+    expect(plan.serverWrites.map((write) => write.patch)).toEqual([
+      { enableProviderUpdateChecks: false },
+    ]);
+    const saved = applyServerSettingsPatch(
+      legacy.serverConfig!.settings,
+      plan.serverWrites[0]!.patch,
+    );
+    expect(saved.projectSettingsOverrides).toEqual(
+      legacy.serverConfig!.settings.projectSettingsOverrides,
+    );
+    expect(saved.defaultAutoPull).toBe(legacy.serverConfig!.settings.defaultAutoPull);
+    expect(plan.unavailableReason).toEqual(
+      "defaultAutoPull" in patch ? expect.stringContaining("update") : null,
+    );
+  }
+});
