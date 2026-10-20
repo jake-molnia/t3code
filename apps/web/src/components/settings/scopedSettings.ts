@@ -1,3 +1,4 @@
+import { isProjectSettingsScope } from "./settingsScope";
 import {
   ClientSettingsSchema,
   type ClientSettingsPatch,
@@ -101,7 +102,7 @@ export function resolveScopedSettingsTargets(
   const byId = new Map(
     connectedEnvironments.map((environment) => [environment.environmentId, environment]),
   );
-  if (scope.kind === "project" || scope.kind === "checkout") {
+  if (isProjectSettingsScope(scope)) {
     return scope.members.flatMap((member) => {
       const environment = byId.get(member.environmentId);
       if (!environment?.serverConfig) return [];
@@ -177,7 +178,7 @@ interface ScopedServerWrite {
 }
 
 function projectOverrideWrites(
-  scope: Extract<ResolvedSettingsScope, { kind: "project" | "checkout" }>,
+  scope: Extract<ResolvedSettingsScope, { kind: "all" | "project" | "checkout" }>,
   environments: readonly ScopedSettingsEnvironment[],
   update: (
     current: ProjectSettingsOverrides,
@@ -230,7 +231,7 @@ export function planScopedSettingsPatch(
     Object.entries(patch).filter(([key]) => SERVER_KEYS.has(key)),
   ) as ServerSettingsPatch;
   const { connectedEnvironments } = selectScopedSettingsEnvironments(scope, environments, null);
-  const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
+  const isProjectScope = isProjectSettingsScope(scope);
   const projectPatch = Object.fromEntries(
     Object.entries(serverPatch).filter(([key]) => isProjectScopedSettingKey(key)),
   ) as ServerSettingsPatch;
@@ -347,12 +348,11 @@ export function planScopedSettingsClear(
   environments: readonly ScopedSettingsEnvironment[],
   keys: readonly ProjectScopedServerSettingKey[],
 ) {
-  const serverWrites =
-    scope.kind === "project" || scope.kind === "checkout"
-      ? projectOverrideWrites(scope, environments, (_current, settings, projectId) =>
-          clearProjectSettingsOverrides(settings, projectId, keys),
-        )
-      : [];
+  const serverWrites = isProjectSettingsScope(scope)
+    ? projectOverrideWrites(scope, environments, (_current, settings, projectId) =>
+        clearProjectSettingsOverrides(settings, projectId, keys),
+      )
+    : [];
   return {
     clientPatch: {} as ClientSettingsPatch,
     hasClientWrite: false,

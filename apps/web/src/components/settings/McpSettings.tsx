@@ -73,6 +73,7 @@ function McpProjectSettings({
   projectIds: readonly ProjectId[];
   completingAuth: boolean;
 }) {
+  const { scope } = useSettingsScope();
   const query = mcpConnections.state({ environmentId, input: {} });
   const result = useAtomValue(query);
   const reload = useAtomRefresh(query);
@@ -151,9 +152,14 @@ function McpProjectSettings({
       >
         <div className="grid gap-4">
           <p className="px-3 text-sm text-muted-foreground sm:px-4">
-            Choose which tools this project can use. Changes apply to the next tool request in new
-            and existing agent sessions. Calls already running can finish.
+            Choose which tools the selected projects can use. Changes apply to the next tool request
+            in new and existing agent sessions. Calls already running can finish.
           </p>
+          {scope.kind === "all" ? (
+            <p className="px-3 text-xs text-muted-foreground sm:px-4">
+              Changes apply to current projects. New projects start with MCP access disabled.
+            </p>
+          ) : null}
           <p className="px-3 text-xs text-muted-foreground sm:px-4">
             Connection accounts are shared. Reconnecting or disconnecting an account affects every
             project that uses it. Adding a connection leaves project access disabled until you
@@ -581,7 +587,7 @@ function McpConnectionCard({
           <div className="grid gap-3">
             <SettingsRow
               title="Project access"
-              description="Enable this connection for the project selected above."
+              description="Enable this connection for the selected projects."
               control={
                 <Select
                   value={mode}
@@ -595,7 +601,7 @@ function McpConnectionCard({
                   <SelectTrigger size="sm" aria-label={`Project access to ${connection.name}`}>
                     <SelectValue>
                       {mode === "mixed"
-                        ? "Different across checkouts"
+                        ? "Different access"
                         : mode === "off"
                           ? "Disabled"
                           : mode === "all"
@@ -606,7 +612,7 @@ function McpConnectionCard({
                   <SelectPopup>
                     {mode === "mixed" ? (
                       <SelectItem value="mixed" disabled>
-                        Different across checkouts
+                        Different access
                       </SelectItem>
                     ) : null}
                     <SelectItem value="off">Disabled</SelectItem>
@@ -654,7 +660,7 @@ function McpTools({
     <div className="grid gap-2">
       {selection.toolIds.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          No tools are enabled. Select tools to give this project access.
+          No tools are enabled. Select tools to give the selected projects access.
         </p>
       ) : null}
       <Input

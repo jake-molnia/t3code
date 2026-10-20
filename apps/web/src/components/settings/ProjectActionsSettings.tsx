@@ -1,3 +1,4 @@
+import { isProjectSettingsScope } from "./settingsScope";
 import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { EnvironmentId, type T3ProjectFileScript } from "@t3tools/contracts";
@@ -43,7 +44,7 @@ import { useSettingsScope } from "./SettingsScopeContext";
 export function ProjectActionsSettings() {
   const { scope, targets, target } = useSettingsScope();
   const { environments } = useEnvironments();
-  const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
+  const isProjectScope = isProjectSettingsScope(scope);
   const representativeConfig = target
     ? environments.find((environment) => environment.environmentId === target.environmentId)
         ?.serverConfig

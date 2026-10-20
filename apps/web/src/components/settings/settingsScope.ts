@@ -6,12 +6,7 @@ import type {
 } from "../../sidebarProjectGrouping";
 import type { EnvironmentPresentation } from "../../state/environments";
 
-/**
- * Two axes. `machine` narrows the environment axis (absent = all
- * environments); `project` and `checkout` narrow the project axis (absent =
- * environment defaults). Device-local preferences are not a scope: they
- * render regardless of the selection because they never touch a server.
- */
+/** Project selection; absent project means all existing projects. Machine is read only for legacy links. */
 export interface SettingsScopeSearch {
   project?: string | undefined;
   machine?: string | undefined;
@@ -60,13 +55,10 @@ export function validateSettingsScopeSearch(raw: Record<string, unknown>): Setti
   };
 }
 
-/** Legacy environment links enter the first project; explicit stale projects stay unavailable. */
-export function selectProjectSettingsScope(
-  search: SettingsScopeSearch,
-  groups: readonly SidebarProjectSnapshot[],
-): SettingsScopeSearch {
+/** Drop legacy machine selection without replacing explicit project or checkout identity. */
+export function selectProjectSettingsScope(search: SettingsScopeSearch): SettingsScopeSearch {
   if (search.checkout && !search.project) return { checkout: search.checkout };
-  const project = search.project ?? groups[0]?.projectKey;
+  const project = search.project;
   return {
     ...(project === undefined ? {} : { project }),
     ...(search.project && search.checkout ? { checkout: search.checkout } : {}),
@@ -160,10 +152,27 @@ export function resolveSettingsScope(
       environmentIds: [environment.environmentId],
     };
   }
+  const members = [
+    ...new Map(
+      groups
+        .flatMap((group) => group.memberProjects)
+        .map((member) => [JSON.stringify([member.environmentId, member.id]), member]),
+    ).values(),
+  ];
   return {
     kind: "all",
-    label: "All environments",
-    members: [],
+    label: "All projects",
+    members,
     environmentIds: environments.map((candidate) => candidate.environmentId),
   };
+}
+
+/** Project policy may fan out only to concrete members, including the All projects selection. */
+export function isProjectSettingsScope(
+  scope: ResolvedSettingsScope,
+): scope is Extract<ResolvedSettingsScope, { kind: "all" | "project" | "checkout" }> {
+  return (
+    (scope.kind === "all" || scope.kind === "project" || scope.kind === "checkout") &&
+    scope.members.length > 0
+  );
 }

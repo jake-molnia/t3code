@@ -24,6 +24,10 @@ const state = vi.hoisted(() => ({
   canWrite: true,
   canCleanup: true,
   mixedPatch: false,
+  inspectTargets: false,
+  fileUnavailable: false,
+  fileContents: "{}",
+  readFile: vi.fn(),
   toast: vi.fn(),
   query: Symbol("mcp-state"),
   permission: Symbol("mcp-permission"),
@@ -94,7 +98,9 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   },
   Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
   Outlet: () =>
-    state.mixedPatch ? (
+    state.inspectTargets ? (
+      <EffectiveSettingsProbe />
+    ) : state.mixedPatch ? (
       <MixedPatchProbe />
     ) : state.pathname === "/settings/general" ? (
       <GeneralSettingsPanel />
@@ -130,14 +136,17 @@ vi.mock("@effect/atom-react", async () => {
     useAtomRefresh: () => vi.fn(),
   };
 });
-vi.mock("../files/projectFilesQueryState", async () => {
-  const { Atom, AsyncResult } = await import("effect/reactivity");
+vi.mock("../files/projectFilesQueryState", async (importOriginal) => {
+  const { Atom } = await import("effect/reactivity");
   return {
-    getProjectFileQueryAtom: () =>
-      Atom.make(AsyncResult.success({ contents: "{}", truncated: false })),
+    ...(await importOriginal<typeof import("../files/projectFilesQueryState")>()),
     optimisticFileAtom: () => Atom.make(null),
   };
 });
+vi.mock("../../state/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/projects")>()),
+  projectEnvironment: { readFile: (...args: unknown[]) => state.readFile(...args) },
+}));
 vi.mock("../../state/mcpConnections", () => ({
   mcpConnections: {
     state: () => state.query,
@@ -207,6 +216,8 @@ vi.mock("./ServerVersionSection", () => ({ ServerVersionSection: () => null }));
 vi.mock("./HostedAppChannelSection", () => ({ HostedAppChannelSection: () => null }));
 
 import { Atom, AsyncResult } from "effect/reactivity";
+import * as Cause from "effect/Cause";
+import { useSettingsScope } from "./SettingsScopeContext";
 import { useUpdateScopedSettings } from "./useScopedSettings";
 import { GeneralSettingsPanel } from "./SettingsPanels";
 import { StorageSettingsPanel } from "./StorageSettings";
@@ -237,6 +248,18 @@ beforeEach(() => {
   state.cleanup.mockReset().mockResolvedValue({ _tag: "Success", value: { entries: [] } });
   state.canWrite = true;
   state.mixedPatch = false;
+  state.inspectTargets = false;
+  state.fileUnavailable = false;
+  state.fileContents = "{}";
+  state.readFile
+    .mockReset()
+    .mockImplementation(() =>
+      Atom.make(
+        state.fileUnavailable
+          ? AsyncResult.failure(Cause.fail(new Error("Workspace is stopped")))
+          : AsyncResult.success({ contents: state.fileContents, truncated: false }),
+      ),
+    );
   state.canCleanup = true;
   environment.serverConfig.settings = DEFAULT_SERVER_SETTINGS;
   environment.serverConfig.environment.capabilities.projectSettingsOverrides = true;
@@ -532,4 +555,109 @@ it("keeps client preferences usable when shared settings writes are denied", asy
   // Even a programmatic click that bypasses DOM inertness must not issue an RPC.
   await act(async () => shared?.click());
   expect(state.persist).not.toHaveBeenCalled();
+});
+
+it("All projects shows mixed browser policy and writes explicit existing-project overrides", async () => {
+  const otherId = ProjectId.make("other-project");
+  const otherMember = { ...member, id: otherId, physicalProjectKey: "central:/other" };
+  state.pathname = "/settings/integrations";
+  state.groups = [project, { ...project, projectKey: "other", memberProjects: [otherMember] }];
+  environment.serverConfig.settings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    projectSettingsOverrides: {
+      [projectId]: { enableAgentBrowserAccess: true },
+      [otherId]: { enableAgentBrowserAccess: false, defaultAutoPull: true },
+    },
+  };
+  await render();
+  const picker = container.querySelector<HTMLButtonElement>('[aria-label="Project: All projects"]');
+  expect(picker).not.toBeNull();
+  const toggle = container.querySelector<HTMLButtonElement>('[aria-label="Agent browser access"]');
+  expect(toggle?.getAttribute("aria-checked")).toBe("mixed");
+  await act(async () => toggle?.click());
+  expect(state.persist).toHaveBeenCalledExactlyOnceWith({
+    environmentId,
+    input: {
+      patch: {
+        projectSettingsOverrides: {
+          [projectId]: { enableAgentBrowserAccess: true },
+          [otherId]: { enableAgentBrowserAccess: true, defaultAutoPull: true },
+        },
+      },
+    },
+  });
+  await act(async () => picker?.click());
+  expect(document.body.textContent).toContain("All projects");
+  expect(document.querySelector('[aria-label^="Environment scope"]')).toBeNull();
+});
+
+function EffectiveSettingsProbe() {
+  const { targets } = useSettingsScope();
+  return (
+    <output>
+      {JSON.stringify(
+        targets.map((target) => ({
+          projectId: target.projectId,
+          submodules: target.settings.worktreeSubmodules,
+          source: target.sources.worktreeSubmodules,
+        })),
+      )}
+    </output>
+  );
+}
+
+it.each([
+  [true, null, "recursive", "environment"],
+  [true, "top-level", "top-level", "environment"],
+  [false, null, "top-level", "t3.json"],
+] as const)(
+  "All-project reads stay passive (unavailable=%s, stored=%s) and respect project overrides",
+  async (unavailable, stored, expected, source) => {
+    const otherId = ProjectId.make("passive-other");
+    const otherMember = {
+      ...member,
+      id: otherId,
+      workspaceRoot: "/other",
+      physicalProjectKey: "central:/other",
+    };
+    state.pathname = "/settings/general";
+    state.groups = [project, { ...project, projectKey: "other", memberProjects: [otherMember] }];
+    state.inspectTargets = true;
+    state.fileUnavailable = unavailable;
+    state.fileContents = '{"worktreeSubmodules":"top-level"}';
+    environment.serverConfig.settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      worktreeSubmodules: stored,
+      projectSettingsOverrides: { [projectId]: { worktreeSubmodules: "none" } },
+    };
+    await render();
+    expect(container.querySelector("output")?.textContent).toBe(
+      JSON.stringify([
+        { projectId, submodules: "none", source: "project" },
+        { projectId: otherId, submodules: expected, source },
+      ]),
+    );
+    expect(state.readFile).toHaveBeenCalled();
+    for (const [request] of state.readFile.mock.calls) {
+      expect(request).toMatchObject({
+        environmentId,
+        input: { relativePath: "t3.json", passive: true },
+      });
+    }
+    expect(new Set(state.readFile.mock.calls.map(([request]) => request.input.cwd))).toEqual(
+      new Set(["/repo", "/other"]),
+    );
+  },
+);
+
+it("keeps selected-project file reads unchanged", async () => {
+  state.pathname = "/settings/general";
+  state.search = { project: "selected" };
+  state.groups = [project];
+  state.inspectTargets = true;
+  await render();
+  expect(state.readFile).toHaveBeenCalled();
+  for (const [request] of state.readFile.mock.calls) {
+    expect(request.input).toEqual({ cwd: "/repo", relativePath: "t3.json" });
+  }
 });

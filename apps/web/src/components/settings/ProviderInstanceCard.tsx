@@ -490,6 +490,7 @@ export function ProviderEnvironmentSection(props: {
 }
 
 interface ProjectOverrideControl {
+  readonly mixed?: boolean;
   readonly effectiveEnabled: boolean;
   readonly onChange: (next: boolean) => void;
 }
@@ -610,8 +611,9 @@ export function ProviderInstanceCard({
           headline: "Disabled",
           detail: "Not used for new sessions. Saved configuration is retained.",
         };
-  const statusHeadline =
-    gatewayManaged && summary.headline === "Disabled"
+  const statusHeadline = projectOverride?.mixed
+    ? "Mixed across selected projects"
+    : gatewayManaged && summary.headline === "Disabled"
       ? "Not used for new sessions"
       : summary.headline;
   const authEmail = liveProvider?.auth.email?.trim();
@@ -837,9 +839,10 @@ export function ProviderInstanceCard({
         <span className="flex h-5 shrink-0 items-center gap-1">
           <Switch
             checked={enabled}
+            mixed={projectOverride?.mixed ?? false}
             disabled={readOnly || !projectOverride || !canWriteSettings}
             onCheckedChange={(checked) => projectOverride?.onChange(Boolean(checked))}
-            aria-label={`Enable ${displayName} for this project`}
+            aria-label={`Enable ${displayName} for selected projects`}
           />
         </span>
       </div>

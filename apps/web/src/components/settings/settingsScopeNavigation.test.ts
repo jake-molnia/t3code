@@ -171,6 +171,20 @@ describe("settings scope navigation", () => {
     },
   );
 
+  it("keeps All projects selected when leaving a checkout and navigating categories", async () => {
+    const router = createSettingsRouter();
+    await router.navigate({ to: "/settings/general", search: checkoutSearch });
+    await router.navigate({
+      to: "/settings/providers",
+      search: () => ({ project: undefined, machine: undefined, checkout: undefined }),
+    });
+    expect(router.state.location.search).toEqual({});
+    await router.navigate({ to: "/settings/integrations" });
+    expect(router.state.location.search).toEqual({});
+    await router.navigate({ to: "/settings/mcp" });
+    expect(router.state.location.search).toEqual({});
+  });
+
   it("keeps the selected project through provider setup and back to common settings", async () => {
     const router = createSettingsRouter();
     const selected = { project: "selected-project", checkout: "server:/repo" };
