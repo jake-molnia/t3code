@@ -3638,6 +3638,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: forkableSourceRunStatusError(sourceRun),
       });
     }
+    if (sessionPlacement === "per-thread") {
+      const checkpoints = sourceProjection.checkpoints.filter((checkpoint) =>
+        sourceRun.checkpointId !== null
+          ? checkpoint.id === sourceRun.checkpointId
+          : checkpoint.runId === sourceRun.id && checkpoint.nodeId === sourceRun.rootNodeId,
+      );
+      if (
+        !sourceProjection.thread.worktreePath ||
+        !checkpoints.some((checkpoint) => checkpoint.status === "ready")
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            sourceProjection.thread.worktreePath &&
+            sourceRun.status === "waiting" &&
+            checkpoints.length === 0
+              ? "The source checkpoint is still preparing. Retry when it is ready."
+              : "No usable checkpoint is available for the selected run.",
+        });
+      }
+    }
     const sourceProviderThread = providerThreadForRun(sourceProjection, sourceRun);
     const now = command.createdAt ?? (yield* DateTime.now);
     const emitEvent = emit(events, command);
