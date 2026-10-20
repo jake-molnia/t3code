@@ -1,3 +1,4 @@
+import { isProjectSettingsScope } from "./settingsScope";
 import type {
   StorageCleanupReport,
   StorageCleanupSettings,
@@ -402,7 +403,7 @@ function CleanupSection() {
 export function StorageSettingsPanel() {
   const { scope, connectedEnvironments, targets, target } = useSettingsScope();
   const scopedSettings = useScopedSettings();
-  const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
+  const isProjectScope = isProjectSettingsScope(scope);
   const settings = {
     ...scopedSettings.storageCleanup,
     ...resolveWorktreeCleanup(scopedSettings, null),

@@ -1,3 +1,4 @@
+import { isProjectSettingsScope } from "./settingsScope";
 import { SettingsGroup } from "./SettingsGroup";
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { usePrimaryEnvironmentId, usePrimaryEnvironment } from "../../state/environments";
@@ -302,8 +303,7 @@ export function SettingsRow({
     : primaryCanWrite;
   const clearOverrides = useClearScopedSettings();
   const clearProjectOverrides = useClearProjectOverrides();
-  const isProjectScope =
-    context !== null && (context.scope.kind === "project" || context.scope.kind === "checkout");
+  const isProjectScope = context !== null && isProjectSettingsScope(context.scope);
   const scopedKeys = settingKeys.filter(isProjectScopedSettingKey);
   const mixed =
     mixedOverride ?? (context !== null && scopedSettingsAreMixed(context.targets, settingKeys));

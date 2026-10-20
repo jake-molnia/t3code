@@ -1,10 +1,10 @@
 # Project settings
 
-Choose a project at the top of Settings to change its behavior. The selection follows you between project settings pages. App preferences and shared accounts do not need a project selector.
+Choose a project at the top of Settings to change its behavior, or choose **All projects** to edit the existing projects together. The selection follows you between project settings pages. App preferences and shared accounts do not need a project selector.
 
-Project settings use saved defaults until you change them. Existing values are preserved when upgrading. Reset restores the saved default or repository value. A change to one project does not change another project.
+Project settings use saved defaults until you change them. Existing values are preserved when upgrading. Reset restores the saved default or repository value. A change to one project does not change another project. **All projects** writes the selected value to each current project; it does not change defaults for future projects. Controls show **Mixed** when the projects disagree.
 
-Harness switches in **Settings → Providers** control whether the selected project can start new turns with each harness. Turning a harness on needs no separate global switch. Authentication and compatibility checks still apply. Turning it off blocks new turns, including queued and delegated work; a running turn finishes. Accounts, credentials, custom models, and model preferences remain shared.
+Harness switches in **Settings → Providers** control whether the selected projects can start new turns with each harness. Turning a harness on needs no separate global switch. Authentication and compatibility checks still apply. Turning it off blocks new turns, including queued and delegated work; a running turn finishes. Accounts, credentials, custom models, and model preferences remain shared.
 
 ## MCP connections
 
@@ -12,7 +12,7 @@ Open **Settings → MCP → Add connection**, enter the server URL, and sign in 
 an access token. Choose **No authentication** for an open server. Services without
 automatic OAuth registration need their own client ID and, when required, client secret.
 
-Choose the project at the top of Settings, then set each connection's **Project access**.
+Choose a project or **All projects** at the top of Settings, then set each connection's **Project access**.
 The selection stays with you across settings pages and sign-in. New connections start disabled
 for every project. **Selected tools only** grants access to the tools you select and keeps newly
 added tools disabled. Selecting no tools grants no access. **All tools** includes new tools.

@@ -783,3 +783,54 @@ it("plans shared writes independently of project override support and retains ex
     );
   }
 });
+
+it("bulk edits current projects and preserves legacy defaults, shared state and future projects", () => {
+  const otherId = ProjectId.make("other-existing");
+  const otherMember = { ...member, id: otherId, physicalProjectKey: "Server:/other" };
+  const otherGroup = { ...group, projectKey: "other", memberProjects: [otherMember] };
+  const allProjects = resolveSettingsScope({}, [group, otherGroup], environments);
+  const configured = environment("Server", {
+    settings: {
+      defaultAutoPull: false,
+      projectSettingsOverrides: {
+        [projectId]: { defaultAutoPull: true, enableAgentBrowserAccess: false },
+        [otherId]: { defaultAutoPull: false },
+      },
+    },
+  });
+  const targets = resolveScopedSettingsTargets(allProjects, [configured, laptop]);
+  expect(targets.map((target) => target.projectId)).toEqual([projectId, laptopProjectId, otherId]);
+  expect(scopedSettingsAreMixed(targets, ["defaultAutoPull"])).toBe(true);
+  const plan = planScopedSettingsPatch(allProjects, [configured, laptop], {
+    defaultAutoPull: true,
+    enableProviderUpdateChecks: false,
+  });
+  expect(plan.unavailableReason).toBeNull();
+  const serverWrite = plan.serverWrites.find(
+    (write) => write.environmentId === server.environmentId,
+  );
+  expect(serverWrite?.patch).toEqual({
+    enableProviderUpdateChecks: false,
+    projectSettingsOverrides: {
+      [projectId]: { defaultAutoPull: true, enableAgentBrowserAccess: false },
+      [otherId]: { defaultAutoPull: true },
+    },
+  });
+  const saved = applyServerSettingsPatch(configured.serverConfig!.settings, serverWrite!.patch);
+  expect(saved.defaultAutoPull).toBe(false);
+  expect(saved.providerInstances).toEqual(configured.serverConfig!.settings.providerInstances);
+  expect(saved.projectSettingsOverrides[ProjectId.make("future")]).toBeUndefined();
+  const cleared = planScopedSettingsClear(
+    allProjects,
+    [environment("Server", { settings: saved }), laptop],
+    ["defaultAutoPull"],
+  );
+  expect(
+    cleared.serverWrites.find((write) => write.environmentId === server.environmentId)?.patch,
+  ).toEqual({
+    projectSettingsOverrides: {
+      [projectId]: { enableAgentBrowserAccess: false },
+      [otherId]: null,
+    },
+  });
+});

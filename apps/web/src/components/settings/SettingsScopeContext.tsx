@@ -11,6 +11,7 @@ import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 import { resolveScopedSettingsTargets, selectScopedSettingsEnvironments } from "./scopedSettings";
 import {
   resolveSettingsScope,
+  isProjectSettingsScope,
   selectProjectSettingsScope,
   type SettingsScopeSearch,
 } from "./settingsScope";
@@ -22,7 +23,9 @@ import { selectSingleEnvironmentScope } from "./settingsScopeAxis";
  * settled; the query atom caches per (environment, cwd).
  */
 function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
-  const members = scope.kind === "project" || scope.kind === "checkout" ? scope.members : [];
+  const members = isProjectSettingsScope(scope) ? scope.members : [];
+  // A bulk settings visit must not start every project workspace.
+  const passive = scope.kind === "all";
   return useAtomValue(
     useMemo(
       () =>
@@ -34,6 +37,7 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
                 member.environmentId,
                 member.workspaceRoot,
                 T3_PROJECT_FILE_NAME,
+                passive ? { passive: true } : undefined,
               ),
             );
             if (result.waiting) continue;
@@ -53,7 +57,7 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
           }
           return files;
         }),
-      [members],
+      [members, passive],
     ),
   );
 }
@@ -65,7 +69,7 @@ function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, projectOnly: b
   const search = useMemo(
     () =>
       projectOnly
-        ? selectProjectSettingsScope(rawSearch, groups)
+        ? selectProjectSettingsScope(rawSearch)
         : selectSingleEnvironmentScope(
             {},
             resolveSettingsScope({}, groups, availableEnvironments),
@@ -74,19 +78,10 @@ function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, projectOnly: b
           ),
     [availableEnvironments, groups, primaryEnvironmentId, rawSearch, projectOnly],
   );
-  const scope = useMemo(() => {
-    if (projectOnly && !search.project) {
-      return {
-        kind: "unavailable" as const,
-        reason: "project-required" as const,
-        label: "Select a project",
-        message: "Add a project to configure its settings.",
-        members: [],
-        environmentIds: [],
-      };
-    }
-    return resolveSettingsScope(search, groups, availableEnvironments);
-  }, [availableEnvironments, groups, search, projectOnly]);
+  const scope = useMemo(
+    () => resolveSettingsScope(search, groups, availableEnvironments),
+    [availableEnvironments, groups, search],
+  );
   const projectFiles = useMemberProjectFiles(scope);
   return useMemo(() => {
     const selected = selectScopedSettingsEnvironments(

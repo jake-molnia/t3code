@@ -36,16 +36,20 @@ export function SettingsScopeSentence() {
       <ScopeMenu
         ariaLabel="Project"
         icon={selected ? <ProjectFavicon project={selected} className="size-3.5 shrink-0" /> : null}
-        label={
-          selected?.displayName ?? (search.project ? "Unavailable project" : "Select a project")
-        }
+        label={selected?.displayName ?? (search.project ? "Unavailable project" : "All projects")}
       >
         <MenuRadioGroup
           value={search.project ?? ""}
           onValueChange={(project) => {
-            if (typeof project === "string") selectScope({ project });
+            if (typeof project === "string") selectScope(project === "" ? {} : { project });
           }}
         >
+          <MenuRadioItem value="" closeOnClick>
+            <span className="flex min-w-0 flex-1 items-center gap-2">
+              All projects
+              <MenuRadioItemIndicator />
+            </span>
+          </MenuRadioItem>
           {groups.map((group) => (
             <MenuRadioItem key={group.projectKey} value={group.projectKey} closeOnClick>
               <span className="flex min-w-0 items-center gap-2">

@@ -1,3 +1,4 @@
+import { isProjectSettingsScope } from "./settingsScope";
 import {
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
@@ -84,7 +85,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedAgentCredits = useScopedSettingsMixed(["removeAgentCreditsOnMerge"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
   const modelSource = useScopedSettingSource(["defaultModelSelection"]);
-  const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
+  const isProjectScope = isProjectSettingsScope(scope);
   const unavailable = connectedEnvironments.length === 0;
   // File-backed keys show their effective value; the target already carries
   // the checkout's t3.json, and a null file here only fills the built-in.

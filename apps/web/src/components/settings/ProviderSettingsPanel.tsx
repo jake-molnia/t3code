@@ -19,7 +19,6 @@ import {
   type ProviderInstanceConfig,
   type ProviderInstanceId,
   resolveEnvironmentMachineKind,
-  resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
@@ -101,6 +100,7 @@ import {
 import {
   buildProviderEnvironmentOptions,
   buildProviderInstanceOverridePatch,
+  resolveProjectProviderEnablement,
   classifyProviderEnvironmentAccess,
   isProviderSettingsEnvironmentAvailable,
   type ProviderEnvironmentAccess,
@@ -734,7 +734,7 @@ export function EnvironmentProviderSettings({
       favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
     );
     const resetLabel = driverOption?.label ?? String(row.driver);
-    const representativeProjectId = projectIds[0];
+    const enablement = resolveProjectProviderEnablement(settings, projectIds, row.instanceId);
     const writeProjectOverride = (next: boolean) => {
       updateSettings({
         projectSettingsOverrides: buildProviderInstanceOverridePatch(
@@ -746,14 +746,10 @@ export function EnvironmentProviderSettings({
       });
     };
     const projectOverride =
-      representativeProjectId === undefined || !supportsProjectProviderOverrides
+      enablement === undefined || !supportsProjectProviderOverrides
         ? undefined
         : {
-            effectiveEnabled: resolveProjectProviderInstanceEnabled(
-              settings,
-              representativeProjectId,
-              row.instanceId,
-            ),
+            ...enablement,
             onChange: (next: boolean) => writeProjectOverride(next),
           };
 
@@ -962,7 +958,7 @@ export function EnvironmentProviderSettings({
         <p className="px-3 text-xs text-muted-foreground sm:px-4">
           Harnesses are bundled with the sandbox image. Select a harness to configure it. Accounts,
           authentication, and compatibility determine which models you can use. The toggle applies
-          to this project. Accounts and model preferences are shared across projects.
+          to the selected projects. Accounts and model preferences are shared across projects.
         </p>
         {readOnly ? (
           <SettingsGroup divided={false} className="overflow-hidden">
