@@ -238,7 +238,10 @@ export function IdeSetupSettingsPanel({
   targetEnvironmentId,
 }: { target?: SandboxIdeTarget; targetEnvironmentId?: EnvironmentId } = {}) {
   const { environment } = useSettingsScope();
-  if (!environment)
+  if (
+    !environment ||
+    (targetEnvironmentId !== undefined && targetEnvironmentId !== environment.environmentId)
+  )
     return (
       <SettingsScopeNotice target="environment">
         Choose an environment to manage its saved VS Code setup.

@@ -30,7 +30,7 @@ export function makeIdeLifecycle(directory: string) {
         "-c",
         [
           "import fcntl, pathlib, sys",
-          "root = pathlib.NodePath(sys.argv[1])",
+          "root = pathlib.Path(sys.argv[1])",
           "root.mkdir(parents=True, exist_ok=True)",
           "with (root / 'control.lock').open('a') as lock:",
           "    fcntl.flock(lock, fcntl.LOCK_EX)",

@@ -13,56 +13,122 @@ spec.loader.exec_module(provision)
 
 class ProvisionTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
         self.bundle = self.root / "bundle"
         self.bundle.mkdir()
         self.ide = self.root / "ide"
-        self.extension = {"id": "example.extension", "version": "1.0.0", "url": "https://example.invalid/extension.vsix", "hash": "unused-by-provisioner"}
+        self.extension = {"id": "example.extension", "version": "1.0.0", "hash": "first-package"}
+        self.installed = {}
+        self.operations = []
         self.declare([self.extension])
+        self.addCleanup(patch.stopall)
+        patch.object(provision.subprocess, "check_output", side_effect=self.list_extensions).start()
+        patch.object(provision.subprocess, "run", side_effect=self.run_native).start()
 
     def declare(self, extensions):
+        self.desired = extensions
         (self.bundle / "extensions.json").write_text(json.dumps(extensions))
 
+    def install(self, item, dependencies=(), pack=()):
+        self.installed[item["id"]] = dict(item, dependencies=list(dependencies), pack=list(pack))
+        directory = self.ide / "extensions" / f'{item["id"]}-{item["version"]}'
+        directory.mkdir(parents=True, exist_ok=True)
+        publisher, name = item["id"].split(".")
+        (directory / "package.json").write_text(json.dumps({
+            "publisher": publisher, "name": name, "version": item["version"],
+            "extensionDependencies": list(dependencies), "extensionPack": list(pack),
+        }))
+
+    def list_extensions(self, command, **kwargs):
+        return "\n".join(f'{name}@{item["version"]}' for name, item in sorted(self.installed.items()))
+
+    def run_native(self, command, **kwargs):
+        if "--uninstall-extension" in command:
+            name = command[command.index("--uninstall-extension") + 1]
+            if name not in self.installed or any(name in item["dependencies"] for item in self.installed.values()):
+                raise subprocess.CalledProcessError(1, command)
+            item = self.installed.pop(name)
+            for member in item["pack"]:
+                self.installed.pop(member, None)
+            self.operations.append(("remove", name))
+        else:
+            for index, argument in enumerate(command):
+                if argument != "--install-extension":
+                    continue
+                archive = Path(command[index + 1]).name
+                item = next(item for item in self.desired if archive == f'{item["id"]}-{item["version"]}.vsix')
+                self.install(item)
+                self.operations.append(("install", item["id"]))
+        return subprocess.CompletedProcess(command, 0)
+
     def test_applies_once_and_removes_a_managed_version(self):
-        with patch.object(provision.subprocess, "check_output", return_value="") as listing, patch.object(provision.subprocess, "run") as run:
-            provision.provision(self.bundle, self.ide)
-            self.assertIn("--install-extension", run.call_args.args[0])
-            self.assertIn(str(self.ide / "user-data"), run.call_args.args[0])
-            provision.provision(self.bundle, self.ide)
-            listing.assert_called_once()
-            run.assert_called_once()
-            self.declare([])
-            listing.return_value = "example.extension@1.0.0\nother.local@2.0.0\n"
-            provision.provision(self.bundle, self.ide)
-            self.assertEqual(run.call_args.args[0][-2:], ["--uninstall-extension", "example.extension"])
+        provision.provision(self.bundle, self.ide)
+        provision.provision(self.bundle, self.ide)
+        self.assertEqual(self.operations, [("install", "example.extension")])
+        self.declare([])
+        provision.provision(self.bundle, self.ide)
+        self.assertEqual(self.installed, {})
 
     def test_keeps_a_locally_changed_version_on_removal(self):
-        with patch.object(provision.subprocess, "check_output", return_value="example.extension@1.0.0\n"), patch.object(provision.subprocess, "run") as run:
-            provision.provision(self.bundle, self.ide)
-            run.assert_not_called()
+        provision.provision(self.bundle, self.ide)
+        self.install(dict(self.extension, version="2.0.0"))
         self.declare([])
-        with patch.object(provision.subprocess, "check_output", return_value="example.extension@2.0.0\n"), patch.object(provision.subprocess, "run") as run:
-            provision.provision(self.bundle, self.ide)
-            run.assert_not_called()
+        provision.provision(self.bundle, self.ide)
+        self.assertEqual(self.installed["example.extension"]["version"], "2.0.0")
 
-    def test_explicit_apply_replaces_local_changes_even_at_same_revision(self):
-        with patch.object(provision.subprocess, "check_output", return_value="example.extension@1.0.0\n"), patch.object(provision.subprocess, "run"):
+    def test_explicit_apply_reinstalls_same_version_and_removes_local_extras(self):
+        provision.provision(self.bundle, self.ide)
+        self.install(dict(self.extension, hash="local-rebuild"))
+        self.install({"id": "local.extra", "version": "1.0.0", "hash": "extra"})
+        provision.provision(self.bundle, self.ide, replace=True)
+        self.assertNotIn("local.extra", self.installed)
+        self.assertEqual(self.installed["example.extension"]["hash"], "first-package")
+
+    def test_reinstalls_a_new_archive_with_the_same_id_and_version(self):
+        provision.provision(self.bundle, self.ide)
+        self.declare([dict(self.extension, hash="rebuilt-package")])
+        provision.provision(self.bundle, self.ide)
+        self.assertEqual(self.installed["example.extension"]["hash"], "rebuilt-package")
+
+    def test_removes_dependents_before_dependencies(self):
+        dependency = dict(self.extension, id="example.a-dependency")
+        dependent = dict(self.extension, id="example.z-dependent")
+        self.declare([dependency, dependent])
+        provision.provision(self.bundle, self.ide)
+        self.install(dependent, dependencies=[dependency["id"]])
+        self.declare([])
+        provision.provision(self.bundle, self.ide)
+        self.assertEqual(self.installed, {})
+        self.assertEqual(self.operations[-2:], [("remove", dependent["id"]), ("remove", dependency["id"])])
+
+    def test_refreshes_inventory_after_extension_pack_cascading(self):
+        pack = dict(self.extension, id="example.a-pack")
+        member = dict(self.extension, id="example.z-member")
+        self.declare([pack, member])
+        provision.provision(self.bundle, self.ide)
+        self.install(pack, pack=[member["id"]])
+        self.declare([member])
+        provision.provision(self.bundle, self.ide)
+        self.assertEqual(set(self.installed), {member["id"]})
+
+    def test_cannot_remove_dependency_of_a_retained_local_extension(self):
+        provision.provision(self.bundle, self.ide)
+        self.install(dict(self.extension, id="local.dependent"), dependencies=["example.extension"])
+        before = (self.ide / "managed-extensions.json").read_bytes()
+        self.declare([])
+        with self.assertRaises(Exception):
             provision.provision(self.bundle, self.ide)
-        with patch.object(provision.subprocess, "check_output", return_value="example.extension@2.0.0\nlocal.extra@1.0.0\n"), patch.object(provision.subprocess, "run") as run:
-            provision.provision(self.bundle, self.ide, replace=True)
-            commands = [call.args[0] for call in run.call_args_list]
-            self.assertTrue(any(command[-2:] == ["--uninstall-extension", "local.extra"] for command in commands))
-            self.assertTrue(any("--install-extension" in command for command in commands))
+        self.assertEqual((self.ide / "managed-extensions.json").read_bytes(), before)
+        self.assertEqual(len(self.installed), 2)
 
     def test_failed_install_can_retry_without_advancing_marker(self):
-        with patch.object(provision.subprocess, "check_output", return_value=""), patch.object(provision.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "code-server")):
+        with patch.object(provision.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "code-server")):
             with self.assertRaises(subprocess.CalledProcessError):
                 provision.provision(self.bundle, self.ide)
         self.assertFalse((self.ide / "managed-extensions.json").exists())
-        with patch.object(provision.subprocess, "check_output", return_value=""), patch.object(provision.subprocess, "run"):
-            provision.provision(self.bundle, self.ide)
+        provision.provision(self.bundle, self.ide)
         self.assertTrue((self.ide / "managed-extensions.json").exists())
 
 

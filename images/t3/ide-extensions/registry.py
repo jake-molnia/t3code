@@ -6,6 +6,7 @@ import io
 import json
 import re
 import urllib.request
+from urllib.error import HTTPError
 import zipfile
 
 ID = re.compile(r"^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$", re.I)
@@ -26,7 +27,13 @@ def resolve(spec):
     if not ID.fullmatch(name) or (version and not VERSION.fullmatch(version)):
         raise ValueError(f"Invalid extension: {spec}")
     publisher, extension = name.split(".")
-    metadata = json.loads(download(f"https://open-vsx.org/api/{publisher}/{extension}/{version or 'latest'}?targetPlatform=linux-x64"))
+    base = f"https://open-vsx.org/api/{publisher}/{extension}"
+    try:
+        metadata = json.loads(download(f"{base}/linux-x64/{version or 'latest'}"))
+    except HTTPError as error:
+        if error.code != 404:
+            raise
+        metadata = json.loads(download(f"{base}/universal/{version or 'latest'}"))
     actual = metadata["version"]
     if not VERSION.fullmatch(actual) or (version and actual != version):
         raise ValueError(f"Unexpected version for {spec}")

@@ -24,21 +24,43 @@ def provision(source, directory, replace=False):
         "--user-data-dir", str(directory / "user-data"),
         "--extensions-dir", str(directory / "extensions"),
     ]
-    installed = {}
-    if desired or previous["extensions"] or replace:
+    def inventory():
+        installed = {}
         output = subprocess.check_output(command + ["--list-extensions", "--show-versions"], text=True)
         for line in output.splitlines():
             if re.fullmatch(r"[\w-]+\.[\w-]+@[^\s]+", line):
                 name, version = line.rsplit("@", 1)
                 installed[name.lower()] = version
+        return installed
+
+    installed = inventory() if desired or previous["extensions"] or replace else {}
+    dependencies = {}
+    for manifest in (directory / "extensions").glob("*/package.json"):
+        package = json.loads(manifest.read_text())
+        name = f'{package["publisher"]}.{package["name"]}'.lower()
+        if installed.get(name) == package["version"]:
+            dependencies[name] = {dependency.lower() for dependency in package.get("extensionDependencies", [])}
     names = {item["id"] for item in desired}
-    removals = [{"id": name, "version": version} for name, version in installed.items()] if replace else previous["extensions"]
-    for item in removals:
-        if item["id"] not in names and installed.get(item["id"]) == item["version"]:
-            subprocess.run(command + ["--uninstall-extension", item["id"]], check=True, stdout=sys.stderr)
+    removals = installed if replace else {item["id"]: item["version"] for item in previous["extensions"]}
+    pending = {name for name, version in removals.items() if name not in names and installed.get(name) == version}
+    while pending:
+        # Native uninstall rejects dependencies with installed dependents.
+        removable = next((name for name in sorted(pending) if not any(
+            name in dependencies.get(dependent, set()) for dependent in installed
+        )), None)
+        if removable is None:
+            raise RuntimeError("Cannot remove extensions with retained dependents: " + ", ".join(sorted(pending)))
+        subprocess.run(command + ["--uninstall-extension", removable], check=True, stdout=sys.stderr)
+        installed = inventory()
+        if removable in installed:
+            raise RuntimeError(f"Extension was not removed: {removable}")
+        # Removing a pack can also remove members, including desired extensions.
+        pending.intersection_update(installed)
+    previous_packages = {item["id"]: item for item in previous["extensions"]}
     install = []
     for item in desired:
-        if installed.get(item["id"]) != item["version"]:
+        if (replace or installed.get(item["id"]) != item["version"]
+                or previous_packages.get(item["id"], {}).get("hash") != item["hash"]):
             archive = source / f'{item["id"]}-{item["version"]}.vsix'
             install.extend(["--install-extension", str(archive)])
     if install:

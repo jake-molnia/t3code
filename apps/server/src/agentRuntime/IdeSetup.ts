@@ -115,6 +115,7 @@ const make = Effect.gen(function* () {
   const stages = new Map<string, IdeSetupStage>();
   const openingTargets = new Map<string, number>();
   const cursors = new Map<string, { incarnation: string; revision: string }>();
+  let savedGeneration = 0;
   for (const file of yield* fs.readDirectory(subscriptions)) {
     if (!/^[a-f0-9]{64}\.json$/.test(file)) continue;
     const workspaceId = yield* fs
@@ -160,6 +161,7 @@ const make = Effect.gen(function* () {
         filePath: pointer,
         contents: encodeManifest({ revision, paths: names }),
       });
+      savedGeneration++;
       cursors.clear();
       const revisions = path.join(directory, "revisions");
       yield* fs.makeDirectory(revisions, { recursive: true });
@@ -223,7 +225,7 @@ const make = Effect.gen(function* () {
             const saved = yield* read;
             const next = mergeIdePreferences(saved, snapshot);
             if (encodeFiles(next.files) !== encodeFiles(saved)) yield* write(next.files);
-            return next;
+            return { ...next, generation: savedGeneration };
           }),
         );
         const baseline = { ...snapshot.baseline };
@@ -253,7 +255,7 @@ const make = Effect.gen(function* () {
           next !== null &&
           encodeFiles(next.files) === encodeFiles(snapshot.files) &&
           encodeFiles(next.baseline ?? {}) === encodeFiles(baseline);
-        if (observedFilesUnchanged)
+        if (observedFilesUnchanged && merged.generation === savedGeneration)
           cursors.set(id, {
             incarnation: client.identity.incarnation,
             revision: acknowledged.revision,
@@ -357,8 +359,10 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.mapError(failure));
   const applyFiles = (client: ExecutionClient) =>
     Effect.gen(function* () {
-      const observation = yield* request(client, "ide.preferences.read", { force: true });
+      let observation = yield* request(client, "ide.preferences.read", { force: true });
       const files = yield* read;
+      if (observation.snapshot?.baseline === null)
+        observation = yield* request(client, "ide.preferences.initialize", { files });
       const snapshot = observation.snapshot;
       if (snapshot === null) return;
       for (const name of new Set([
@@ -465,6 +469,7 @@ const make = Effect.gen(function* () {
                   contents: yield* encodeBoolean(command.enabled),
                 });
                 remembering = command.enabled;
+                savedGeneration++;
                 cursors.clear();
               }),
             );
@@ -532,7 +537,6 @@ const make = Effect.gen(function* () {
           }
           case "apply": {
             const client = yield* observedClient(target);
-            yield* sync(client);
             yield* workspaces.withLock(
               client.identity.workspaceId,
               Effect.gen(function* () {

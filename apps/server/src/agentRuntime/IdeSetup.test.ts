@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { ThreadId } from "@t3tools/contracts";
@@ -41,16 +42,22 @@ it.effect(
             podUid: incarnation,
             protocolVersion: 1 as const,
           };
+          let beforeAcknowledge = () => Promise.resolve();
           const worker = createExecutionWorker({
             identity,
             token: "s".repeat(32),
             journal,
-            execute: (method, input) =>
-              method === "ide.lifecycle.read"
-                ? Promise.resolve({ state: "ready" })
-                : method === "ide.lifecycle.resume"
-                  ? Promise.resolve(null)
-                  : preferences.execute(method, input),
+            execute: async (method, input) => {
+              if (method === "ide.lifecycle.read") return { state: "ready" };
+              if (method === "ide.lifecycle.resume" || method === "ide.lifecycle.pause")
+                return null;
+              if (method === "ide.preferences.acknowledge") {
+                const intercept = beforeAcknowledge;
+                beforeAcknowledge = () => Promise.resolve();
+                await intercept();
+              }
+              return preferences.execute(method, input);
+            },
           });
           const client = createExecutionClient({
             identity,
@@ -59,7 +66,14 @@ it.effect(
             fetch: (url, init) => worker.handle(new Request(url, init)),
           });
           clients.set(workspaceId, client);
-          return { client, journal, directory };
+          return {
+            client,
+            journal,
+            directory,
+            interceptAcknowledgement: (intercept: () => Promise<void>) => {
+              beforeAcknowledge = intercept;
+            },
+          };
         });
       const one = yield* create("one", "original");
       const two = yield* create("two", "original");
@@ -133,6 +147,36 @@ it.effect(
           );
           expect(one.journal.operations.size).toBe(1);
           expect(two.journal.operations.size).toBe(1);
+          // Applying must discard uncaptured local settings without importing them.
+          const beforeApply = yield* service.get();
+          yield* edit(one, '{"editor.fontSize":99}');
+          yield* service.manage({
+            target: { threadId: ThreadId.make("one") },
+            command: { kind: "apply" },
+          });
+          expect((yield* service.get()).settingsRevision).toBe(beforeApply.settingsRevision);
+          expect(yield* fs.readFileString(`${one.directory}/user-data/User/settings.json`)).toBe(
+            '{"editor.fontSize":20}',
+          );
+
+          // Hold a stale conflict acknowledgement while another root resolves it centrally.
+          yield* edit(one, '{"editor.fontSize":21}');
+          yield* service.sync(one.client);
+          yield* edit(two, '{"editor.fontSize":22}');
+          const acknowledging = Promise.withResolvers<void>();
+          const release = Promise.withResolvers<void>();
+          two.interceptAcknowledgement(() => {
+            acknowledging.resolve();
+            return release.promise;
+          });
+          const stale = yield* service.sync(two.client).pipe(Effect.forkScoped);
+          yield* Effect.promise(() => acknowledging.promise);
+          yield* edit(one, '{"editor.fontSize":22}');
+          yield* service.sync(one.client);
+          release.resolve();
+          yield* Fiber.join(stale);
+          yield* service.sync(two.client);
+          expect((yield* service.status({ threadId: ThreadId.make("two") })).issues).toEqual([]);
         }).pipe(Effect.provide(layers)),
       );
       // The central service is recreated while both worker transports remain alive.
