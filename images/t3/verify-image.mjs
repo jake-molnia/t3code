@@ -108,6 +108,27 @@ for (const [name, spec] of Object.entries(manifest.sourceControl)) {
 probe("Go", "go", ["version"], manifest.development.go);
 probe("pnpm", "pnpm", ["--version"], manifest.development.pnpm);
 probe("code-server", "code-server", ["--version"], "4.141.0");
+const editorDefaults = JSON.parse(
+  NodeFS.readFileSync(
+    "/opt/code-server/lib/vscode/extensions/t3-sandbox-defaults/package.json",
+    "utf8",
+  ),
+);
+const editorThemes = JSON.parse(
+  NodeFS.readFileSync("/opt/code-server/lib/vscode/extensions/theme-defaults/package.json", "utf8"),
+);
+const editorSettings = editorDefaults.contributes.configurationDefaults;
+if (
+  !editorThemes.contributes.themes.some(
+    (theme) => theme.id === editorSettings["workbench.colorTheme"] && theme.uiTheme === "vs-dark",
+  )
+)
+  throw new Error("The sandbox editor's default dark theme is missing from the pinned build");
+if (
+  editorSettings["chat.disableAIFeatures"] === true ||
+  editorSettings["editor.inlineSuggest.enabled"] !== true
+)
+  throw new Error("Sandbox editor defaults must preserve inline completions");
 probe("AIO", "aiod", ["version"], "0.9.2");
 console.log(
   JSON.stringify(
