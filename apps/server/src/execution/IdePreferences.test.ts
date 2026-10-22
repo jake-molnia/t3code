@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as Schema from "effect/Schema";
 import { SandboxIdePreferenceRead } from "@t3tools/contracts";
+import { defaultIdePreferences } from "../agentRuntime/portableIdePreferences.ts";
 import { openIdePreferences } from "./IdePreferences.ts";
 
 const decode = Schema.decodeUnknownSync(SandboxIdePreferenceRead);
@@ -154,6 +155,40 @@ it("requires explicit import of existing native files, including after worker re
     expect(resolved.snapshot?.issues).toEqual([]);
   } finally {
     await preferences.close();
+    await NodeFSP.rm(root, { recursive: true, force: true });
+  }
+});
+
+it("seeds startup defaults without creating an import conflict and restores saved choices in a new root", async () => {
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "ide-defaults-"));
+  const first = await openIdePreferences(NodePath.join(root, "one"));
+  const second = await openIdePreferences(NodePath.join(root, "two"));
+  try {
+    const initial = decode(
+      await first.execute("ide.preferences.initialize", { files: defaultIdePreferences }),
+    );
+    expect(initial.snapshot?.issues).toEqual([]);
+    const settings = await NodeFSP.readFile(
+      NodePath.join(root, "one/user-data/User/settings.json"),
+      "utf8",
+    );
+    expect(settings).toContain('"workbench.secondarySideBar.defaultVisibility": "hidden"');
+    expect(settings).toContain('"chat.tips.enabled": false');
+    expect(settings).not.toContain('"workbench.colorTheme"');
+    expect(settings).not.toContain('"chat.disableAIFeatures"');
+    const saved = {
+      "settings.json":
+        '{// chosen in VS Code\n"workbench.colorTheme":"Light Modern","chat.tips.enabled":true}',
+    };
+    const restored = decode(await second.execute("ide.preferences.initialize", { files: saved }));
+    expect(restored.snapshot?.issues).toEqual([]);
+    expect(restored.snapshot?.files).toEqual(saved);
+    expect(
+      await NodeFSP.readFile(NodePath.join(root, "two/user-data/User/settings.json"), "utf8"),
+    ).toBe(saved["settings.json"]);
+  } finally {
+    await first.close();
+    await second.close();
     await NodeFSP.rm(root, { recursive: true, force: true });
   }
 });

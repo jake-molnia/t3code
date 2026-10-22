@@ -3,7 +3,7 @@ import { applyEdits, modify, parse, type ParseError } from "jsonc-parser";
 
 export const defaultIdePreferences: SandboxIdePreferenceFiles = {
   "settings.json":
-    '{\n  "security.workspace.trust.enabled": false,\n  "workbench.startupEditor": "none",\n  "extensions.autoUpdate": false,\n  "extensions.autoCheckUpdates": false\n}\n',
+    '{\n  "security.workspace.trust.enabled": false,\n  "workbench.startupEditor": "none",\n  "workbench.secondarySideBar.defaultVisibility": "hidden",\n  "chat.tips.enabled": false,\n  "extensions.autoUpdate": false,\n  "extensions.autoCheckUpdates": false\n}\n',
 };
 
 const localSettings =

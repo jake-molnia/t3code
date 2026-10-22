@@ -77,6 +77,7 @@ COPY --from=ide-extensions /out/nix /opt/nix
 COPY images/t3/ide-extensions /opt/t3/ide-extensions
 RUN cc -shared -fPIC -Wall -Wextra -Werror /opt/t3/ide-extensions/nix-pty.c -o /opt/t3/ide-extensions/nix-pty.so -ldl
 ENV NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+COPY images/t3/editor-defaults /opt/code-server/lib/vscode/extensions/t3-sandbox-defaults
 COPY --from=go-toolchain /usr/local/go /usr/local/go
 COPY images/t3/harness-configs/gateway.json /opt/t3/gateway-harnesses.json
 COPY --from=harnesses /opt/harnesses /opt/harnesses
