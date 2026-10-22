@@ -8,7 +8,12 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
-import * as ConfigProvider from "effect/ConfigProvider";
+import {
+  SandboxLifecycle,
+  SandboxLifecycleError,
+  type WorkspaceResource,
+} from "../sandbox/SandboxLifecycle.ts";
+import { poolsLayer } from "../agentRuntime/testkit/Sandbox.ts";
 import * as Exit from "effect/Exit";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as Schema from "effect/Schema";
@@ -156,65 +161,63 @@ it.live(
         let controlAvailable = true;
         let observedIdentity = identity;
         let observedEndpoint = `http://127.0.0.1:${workerServer.port}`;
-        const control = yield* Effect.acquireRelease(
-          Effect.tryPromise(() =>
-            listenWorker({
-              host: "127.0.0.1",
-              port: 0,
-              handle: async (request) => {
-                if (!controlAvailable) return new Response(null, { status: 503 });
-                const path = new URL(request.url).pathname;
-                const workspacePath = `/v1/workspaces/${encodeURIComponent(identity.workspaceId)}`;
-                const version = () => `${allocations}:${observedIdentity.incarnation}`;
-                let status = 200;
-                if (request.method === "PUT" && path === workspacePath) {
-                  assert.deepEqual(await request.json(), { pool: "local", profile: "t3" });
-                  status = registered ? 200 : 201;
-                  registered = true;
-                } else if (request.method === "PUT" && path === `${workspacePath}/state`) {
-                  assert.deepEqual(await request.json(), { desiredState: "running" });
-                  assert.equal(request.headers.get("if-match"), `"${version()}"`);
-                  if (!registered) return new Response(null, { status: 404 });
-                  allocations++;
-                  running = true;
-                  status = 202;
-                } else if (request.method !== "GET" || path !== workspacePath || !registered) {
-                  return new Response(null, { status: 404 });
-                }
-                return Response.json(
-                  {
-                    id: identity.workspaceId,
-                    pool: "local",
-                    profile: "t3",
-                    desiredState: running ? "running" : "released",
-                    state: running ? "running" : "released",
-                    version: version(),
-                    progress: null,
-                    error: null,
-                    identity: running ? observedIdentity : null,
-                    execution: running
-                      ? { identity: observedIdentity, endpoint: observedEndpoint, token }
-                      : null,
-                  },
-                  { status, headers: { etag: `"${version()}"` } },
-                );
-              },
-            }),
-          ),
-          (server) => Effect.promise(server.close),
+        const version = () => `${allocations}:${observedIdentity.incarnation}`;
+        const resource = (): WorkspaceResource => ({
+          id: identity.workspaceId,
+          pool: "local",
+          profile: "t3",
+          desiredState: running ? "running" : "released",
+          state: running ? "running" : "released",
+          version: version(),
+          progress: null,
+          error: null,
+          identity: running ? observedIdentity : null,
+          execution: running
+            ? { identity: observedIdentity, endpoint: observedEndpoint, token }
+            : null,
+        });
+        const available = Effect.suspend(() =>
+          controlAvailable
+            ? Effect.void
+            : Effect.fail(
+                new SandboxLifecycleError({
+                  operation: "observe",
+                  httpStatus: 503,
+                  cause: "Kubernetes unavailable",
+                }),
+              ),
         );
+        const lifecycle = Layer.succeed(SandboxLifecycle, {
+          ensure: (workspaceId, placement) =>
+            Effect.gen(function* () {
+              yield* available;
+              assert.equal(workspaceId, identity.workspaceId);
+              assert.equal(placement.id, "local");
+              registered = true;
+              return resource();
+            }),
+          observe: () =>
+            Effect.gen(function* () {
+              yield* available;
+              return resource();
+            }),
+          setDesiredState: (_workspaceId, _placement, desiredState, expectedVersion) =>
+            Effect.gen(function* () {
+              yield* available;
+              assert.isTrue(registered);
+              assert.equal(desiredState, "running");
+              assert.equal(expectedVersion, version());
+              allocations++;
+              running = true;
+              return resource();
+            }),
+        });
         const runtimeContext = yield* Layer.build(
           Runtime.layer.pipe(
             Layer.provide(databaseLayer),
             Layer.provide(NodeHttpClient.layerNodeHttp),
-            Layer.provide(
-              ConfigProvider.layer(
-                ConfigProvider.fromUnknown({
-                  AGENT_RUNTIME_URL: `http://127.0.0.1:${control.port}`,
-                  AGENT_RUNTIME_TOKEN: "control-test-token",
-                }),
-              ),
-            ),
+            Layer.provide(lifecycle),
+            Layer.provide(poolsLayer()),
           ),
         );
         const runtime = Context.get(runtimeContext, Runtime.RuntimeClient);
@@ -391,14 +394,8 @@ it.live(
           Runtime.layer.pipe(
             Layer.provide(lostDatabase),
             Layer.provide(NodeHttpClient.layerNodeHttp),
-            Layer.provide(
-              ConfigProvider.layer(
-                ConfigProvider.fromUnknown({
-                  AGENT_RUNTIME_URL: `http://127.0.0.1:${control.port}`,
-                  AGENT_RUNTIME_TOKEN: "control-test-token",
-                }),
-              ),
-            ),
+            Layer.provide(lifecycle),
+            Layer.provide(poolsLayer()),
           ),
         );
         const lostRuntime = Context.get(lostRuntimeContext, Runtime.RuntimeClient);

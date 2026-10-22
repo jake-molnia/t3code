@@ -1,29 +1,27 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Real controller HTTP and configuration-file boundaries.
-import * as NodeFSP from "node:fs/promises";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   EventId,
   ExecutionPoolId,
-  ProviderDriverKind,
   ThreadId,
   type OrchestrationV2AppThread,
 } from "@t3tools/contracts";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { FetchHttpClient } from "effect/http";
-import { listenWorker } from "../execution/WorkerHttpServer.ts";
+import {
+  SandboxLifecycle,
+  SandboxLifecycleError,
+  type WorkspaceResource,
+} from "../sandbox/SandboxLifecycle.ts";
+import type { Placement } from "../sandbox/Configuration.ts";
+import { placement, poolsLayer } from "./testkit/Sandbox.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import { v2Projection } from "../../../../packages/client-runtime/src/state/orchestrationV2TestFixtures.ts";
-import * as Pools from "./ExecutionPools.ts";
 import * as Runtime from "./RuntimeClient.ts";
 import * as Bindings from "./Bindings.ts";
 
@@ -36,187 +34,140 @@ const services = EventSink.layer.pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(FetchHttpClient.layer),
 );
-const registrationSchema = Schema.Struct({ pool: Schema.String, profile: Schema.String });
-const stateSchema = Schema.Struct({
-  desiredState: Schema.Literals(["running", "suspended", "released"]),
-});
 type Operation = {
   workspaceId: string;
   profile: string;
-  desiredState: typeof stateSchema.Type.desiredState;
+  desiredState: "running" | "suspended" | "released";
   version: string;
 };
-const identity = (workspaceId: string, controller: string) => ({
-  workspaceId,
-  allocationId: `${controller}-allocation`,
-  generation: 1,
-  incarnation: `${controller}-worker`,
-  podUid: `${controller}-pod`,
-  protocolVersion: 1 as const,
-});
-const resourceSample = {
-  sampledAt: 123,
-  cpuCount: 8,
-  cpuUtilization: 0.1,
-  availableMemoryBytes: 24000,
-  totalMemoryBytes: 32000,
+const lifecycleFixture = (name: string) => {
+  const operations: Operation[] = [];
+  const reads: Array<{ workspaceId: string; profile: string }> = [];
+  const states = new Map<string, Operation>();
+  const health: {
+    failNextStop: boolean;
+    workspaceStatus: number;
+    workspacePhase: WorkspaceResource["state"];
+  } = { failNextStop: false, workspaceStatus: 200, workspacePhase: "running" };
+  const resource = (state: Operation): WorkspaceResource => {
+    const identity = {
+      workspaceId: state.workspaceId,
+      allocationId: `${name}-allocation`,
+      generation: 1,
+      incarnation: `${name}-worker`,
+      podUid: `${name}-pod`,
+      protocolVersion: 1 as const,
+    };
+    const phase = state.desiredState === "running" ? health.workspacePhase : state.desiredState;
+    return {
+      id: state.workspaceId,
+      pool: name,
+      profile: state.profile,
+      desiredState: state.desiredState,
+      state: phase,
+      version: state.version,
+      progress: null,
+      error: null,
+      identity,
+      execution:
+        phase === "running"
+          ? {
+              identity,
+              endpoint: `http://worker.invalid/${name}/${encodeURIComponent(state.workspaceId)}`,
+              token: "worker-private-token",
+            }
+          : null,
+    };
+  };
+  const check = (workspaceId: string) =>
+    Effect.gen(function* () {
+      if (health.workspaceStatus !== 200)
+        return yield* new SandboxLifecycleError({
+          operation: "observe",
+          httpStatus: health.workspaceStatus,
+          cause: "unavailable",
+        });
+      const state = states.get(workspaceId);
+      if (!state)
+        return yield* new SandboxLifecycleError({
+          operation: "observe",
+          httpStatus: 404,
+          cause: "missing",
+        });
+      return state;
+    });
+  const lifecycle = SandboxLifecycle.of({
+    ensure: (workspaceId, target) =>
+      Effect.gen(function* () {
+        expect(target.id).toBe(name);
+        if (!states.has(workspaceId))
+          states.set(workspaceId, {
+            workspaceId,
+            profile: target.profile,
+            desiredState: "released",
+            version: "0",
+          });
+        return resource(yield* check(workspaceId));
+      }),
+    observe: (workspaceId) =>
+      Effect.gen(function* () {
+        const state = yield* check(workspaceId);
+        reads.push({ workspaceId, profile: state.profile });
+        return resource(state);
+      }),
+    setDesiredState: (workspaceId, _target, desiredState, version) =>
+      Effect.gen(function* () {
+        const state = yield* check(workspaceId);
+        operations.push({ ...state, desiredState, version });
+        if (health.failNextStop && desiredState !== "running") {
+          health.failNextStop = false;
+          return yield* new SandboxLifecycleError({
+            operation: "setDesiredState",
+            httpStatus: 503,
+            cause: "unavailable",
+          });
+        }
+        if (version !== state.version)
+          return yield* new SandboxLifecycleError({
+            operation: "setDesiredState",
+            httpStatus: 412,
+            cause: "conflict",
+          });
+        const updated = { ...state, desiredState, version: String(Number(state.version) + 1) };
+        states.set(workspaceId, updated);
+        return resource(updated);
+      }),
+  });
+  return { name, operations, reads, health, lifecycle };
 };
 
-const controller = (name: string) =>
-  Effect.acquireRelease(
-    Effect.promise(async () => {
-      const token = `test-${name}-controller-token-at-least-thirty-two-characters`;
-      const operations: Operation[] = [];
-      const reads: Array<{ workspaceId: string; profile: string | null }> = [];
-      const states = new Map<string, Operation>();
-      const health = {
-        status: 200,
-        metricsStatus: 200,
-        metrics: resourceSample,
-        failNextStop: false,
-        workspaceStatus: 200,
-        workspacePhase: "running",
-      };
-      const server = await listenWorker({
-        host: "127.0.0.1",
-        port: 0,
-        handle: async (request) => {
-          if (request.headers.get("authorization") !== `Bearer ${token}`)
-            return new Response(null, { status: 401 });
-          const url = new URL(request.url);
-          if (url.pathname === "/control/healthz")
-            return new Response(null, { status: health.status });
-          if (url.pathname === "/control/v1/resources")
-            return Response.json(
-              {
-                ...health.metrics,
-                requestCapacity: {
-                  profile: name === "portal" ? "wrong-profile" : url.searchParams.get("profile"),
-                  sampledAt: 123,
-                  availableSlots: 0,
-                },
-              },
-              { status: health.metricsStatus },
-            );
-          if (url.pathname.startsWith("/control/v1/workspaces/")) {
-            if (health.workspaceStatus !== 200)
-              return Response.json({}, { status: health.workspaceStatus });
-            const stateRequest = url.pathname.endsWith("/state");
-            const workspaceId = decodeURIComponent(
-              url.pathname.slice("/control/v1/workspaces/".length).replace(/\/state$/, ""),
-            );
-            if (request.method === "PUT" && !stateRequest) {
-              const registration = Schema.decodeUnknownSync(registrationSchema)(
-                await request.json(),
-              );
-              expect(registration.pool).toBe(name);
-              if (!states.has(workspaceId))
-                states.set(workspaceId, {
-                  workspaceId,
-                  profile: registration.profile,
-                  desiredState: "released",
-                  version: "0",
-                });
-            }
-            let state = states.get(workspaceId);
-            if (!state) return Response.json({}, { status: 404 });
-            if (stateRequest && request.method === "PUT") {
-              const update = Schema.decodeUnknownSync(stateSchema)(await request.json());
-              const operation = {
-                ...state,
-                desiredState: update.desiredState,
-                version: request.headers.get("if-match") ?? "",
-              };
-              operations.push(operation);
-              if (health.failNextStop && update.desiredState !== "running") {
-                health.failNextStop = false;
-                return Response.json({}, { status: 503 });
-              }
-              if (request.headers.get("if-match") !== `"${state.version}"`)
-                return Response.json({}, { status: 412 });
-              state = {
-                ...state,
-                desiredState: update.desiredState,
-                version: String(Number(state.version) + 1),
-              };
-              states.set(workspaceId, state);
-            }
-            if (request.method === "GET") reads.push({ workspaceId, profile: state.profile });
-            const workerIdentity = identity(workspaceId, name);
-            const phase =
-              state.desiredState === "running" ? health.workspacePhase : state.desiredState;
-            return Response.json(
-              {
-                id: workspaceId,
-                pool: name,
-                profile: state.profile,
-                desiredState: state.desiredState,
-                state: phase,
-                version: state.version,
-                progress: null,
-                error: null,
-                identity: workerIdentity,
-                execution:
-                  phase === "running"
-                    ? {
-                        identity: workerIdentity,
-                        endpoint: `http://worker.invalid/${name}/${encodeURIComponent(workspaceId)}`,
-                        token: "worker-private-token",
-                      }
-                    : null,
-              },
-              { headers: { etag: `"${state.version}"` } },
-            );
-          }
-          return new Response(null, { status: 404 });
-        },
-      });
-      return {
-        ...server,
-        name,
-        token,
-        url: `http://127.0.0.1:${server.port}/control`,
-        operations,
-        reads,
-        health,
-      };
-    }),
-    (value) => Effect.promise(value.close),
-  );
-
-const fixture = Effect.gen(function* () {
-  const directory = yield* Effect.acquireRelease(
-    Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-pool-routing-"))),
-    (path) => Effect.promise(() => NodeFSP.rm(path, { recursive: true, force: true })),
-  );
-  const a = yield* controller("gompers");
-  const b = yield* controller("portal");
-  const config = NodePath.join(directory, "pools.json");
-  const entries = [a, b].map((server) => ({
-    id: server.name,
-    label: server.name,
-    url: server.url,
-    tokenFile: NodePath.join(directory, `${server.name}.token`),
-    profile: `${server.name}-v1`,
-    providerDrivers: ["codex"],
-    enabled: true,
-  }));
-  yield* Effect.promise(() =>
-    Promise.all(
-      entries.map((entry, index) => NodeFSP.writeFile(entry.tokenFile, [a, b][index]!.token)),
-    ),
-  );
-  const writeConfig = (defaultPoolId: string, pools = entries) =>
-    Effect.promise(() => NodeFSP.writeFile(config, JSON.stringify({ defaultPoolId, pools })));
-  yield* writeConfig("gompers");
-  const provider = ConfigProvider.layer(
-    ConfigProvider.fromEnv({ env: { T3_EXECUTION_POOLS_FILE: config } }),
-  );
+const fixture = Effect.sync(() => {
+  const a = lifecycleFixture("gompers");
+  const b = lifecycleFixture("portal");
+  const entries = [placement(a.name, `${a.name}-v1`), placement(b.name, `${b.name}-v1`)];
+  let configured = entries;
+  let defaultPoolId = entries[0]!.id;
+  const lifecycle = Layer.succeed(SandboxLifecycle, {
+    ensure: (id, target) => (target.id === a.name ? a : b).lifecycle.ensure(id, target),
+    observe: (id, target) => (target.id === a.name ? a : b).lifecycle.observe(id, target),
+    setDesiredState: (id, target, state, version) =>
+      (target.id === a.name ? a : b).lifecycle.setDesiredState(id, target, state, version),
+  });
+  const writeConfig = (id: string, pools: Placement[] = entries) =>
+    Effect.sync(() => {
+      configured = pools;
+      defaultPoolId = ExecutionPoolId.make(id);
+    });
   const runtime = () =>
-    Runtime.RuntimeClient.pipe(Effect.provide(Runtime.layer.pipe(Layer.provide(provider))));
-  const pools = () =>
-    Pools.ExecutionPools.pipe(Effect.provide(Pools.layer.pipe(Layer.provide(provider))));
-  return { a, b, entries, writeConfig, runtime, pools };
+    Runtime.RuntimeClient.pipe(
+      Effect.provide(
+        Runtime.layer.pipe(
+          Layer.provide(poolsLayer(configured, defaultPoolId)),
+          Layer.provide(lifecycle),
+        ),
+      ),
+    );
+  return { a, b, entries, writeConfig, runtime };
 });
 
 function thread(
@@ -254,7 +205,7 @@ const create = (threads: readonly OrchestrationV2AppThread[]) =>
 
 it.layer(services, { excludeTestServices: true })("durable execution pool routing", (it) => {
   it.effect(
-    "routes roots to distinct controllers and all descendants to their owner's controller",
+    "routes roots to distinct sandbox placements and all descendants to their owner's placement",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -289,7 +240,7 @@ it.layer(services, { excludeTestServices: true })("durable execution pool routin
       ),
   );
 
-  it.effect("classifies only pending controller observations for provider acquisition", () =>
+  it.effect("classifies only pending sandbox observations for provider acquisition", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const f = yield* fixture;
@@ -297,13 +248,19 @@ it.layer(services, { excludeTestServices: true })("durable execution pool routin
         yield* create([root]);
         const runtime = yield* f.runtime();
         yield* runtime.forThread(root.id);
-        for (const phase of ["starting", "suspending", "releasing", "failed", "unexpected"]) {
+        for (const phase of [
+          "starting",
+          "suspending",
+          "releasing",
+          "failed",
+          "unavailable",
+        ] as const) {
           f.a.health.workspacePhase = phase;
           expect(
             Runtime.isWorkerObservationPending(
               yield* runtime.observeThread(root.id).pipe(Effect.flip),
             ),
-          ).toBe(["starting", "suspending", "releasing"].includes(phase));
+          ).toBe(["starting", "suspending", "releasing", "unavailable"].includes(phase));
         }
         f.a.health.workspacePhase = "running";
         for (const status of [503, 401, 403, 404, 409]) {
@@ -377,39 +334,6 @@ it.layer(services, { excludeTestServices: true })("durable execution pool routin
         yield* restarted.observeThread(root.id).pipe(Effect.flip);
         expect(f.b.operations).toHaveLength(0);
         expect(f.b.reads).toHaveLength(0);
-      }),
-    ),
-  );
-
-  it.effect("publishes only public pool information and degrades missing health or metrics", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = yield* fixture;
-        const pools = yield* f.pools();
-        const healthy = yield* pools.snapshot;
-        expect(healthy.pools[0]).toEqual({
-          id: "gompers",
-          label: "gompers",
-          available: true,
-          resources: resourceSample,
-          requestCapacity: { profile: "gompers-v1", sampledAt: 123, availableSlots: 0 },
-          providerDrivers: [ProviderDriverKind.make("codex")],
-        });
-        expect(healthy.pools[1]?.requestCapacity).toBeNull();
-        const published = JSON.stringify(healthy);
-        for (const privateValue of [
-          f.a.token,
-          f.b.token,
-          f.a.url,
-          f.b.url,
-          ...f.entries.map((entry) => entry.tokenFile),
-        ])
-          expect(published).not.toContain(privateValue);
-        f.a.health.status = 503;
-        f.b.health.metricsStatus = 503;
-        const degraded = yield* pools.snapshot;
-        expect(degraded.pools[0]).toMatchObject({ available: false, resources: null });
-        expect(degraded.pools[1]).toMatchObject({ available: true, resources: null });
       }),
     ),
   );
