@@ -74,8 +74,8 @@ through `T3_EXECUTION_POOLS_FILE` on the central server and grant its service ac
 access to the configured namespaces. Without configured pools the central web app
 starts, but workspace execution is unavailable. Kubernetes deployment manifests,
 secrets, and image pins remain deployment configuration. There is no separate
-runtime controller or Hatchet service.
-The profile migration script is bundled in the web image because it migrates
+runtime controller or Hatchet service. See the [native deployment guide](../../deploy/t3/README.md).
+The legacy profile migration script is bundled in the web image because it migrates
 T3's SQLite bindings; config retains its migration ledgers and controls when it runs.
 
 ### Configure the bundled model gateway

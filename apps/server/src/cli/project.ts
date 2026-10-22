@@ -213,7 +213,7 @@ const layerProjectCliRuntime = RuntimeLayer.layerProjectService.pipe(
   Layer.provideMerge(WorkspacePaths.layer),
   Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(WorkspaceRouting.layer),
-  Layer.provideMerge(AgentRuntime.layer),
+  Layer.provideMerge(AgentRuntime.layerNative),
   Layer.provideMerge(SqlitePersistence.layerConfig),
   Layer.provideMerge(FetchHttpClient.layer),
 );

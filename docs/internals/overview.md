@@ -2,7 +2,8 @@
 
 T3 Code is a web application. The central service owns SQLite, conversations, authentication,
 and durable orchestration state. Execution belongs to TypeScript workers in Kubernetes Agent
-Sandbox. The agent-runtime repository and Hatchet own sandbox lifecycle.
+Sandbox. T3 owns sandbox lifecycle through the Kubernetes API and builds the worker image.
+The central service is a single writer; deployments use one replica with Recreate rollout.
 
 ## Ownership boundaries
 
@@ -11,6 +12,17 @@ inside the bound execution workspace. New root threads receive independent works
 children inherit the parent's workspace while retaining separate provider and MCP identities.
 An unavailable worker must never redirect execution to the central server's filesystem or binaries.
 Conversation SQLite stays central so replacing a worker cannot replace or fork conversation state.
+
+[Native sandbox lifecycle](../../apps/server/src/sandbox/SandboxLifecycle.ts) persists desired state,
+allocation credentials, and worker identities centrally before creating Kubernetes resources. Passive
+observation can finish an accepted stop but cannot create or resume compute. Explicit acquisition
+reconciles a running request. Stops require worker quiescence and an unchanged lifecycle version;
+worker replacement invalidates a pending stop. Workspace PVCs have no compute owner references and
+survive both suspension and release.
+
+The first native startup records existing workspace bindings as requiring cutover. Those workspaces
+cannot provision empty replacement volumes. Restore their data using the
+[cutover procedure](../../deploy/t3/README.md#move-an-existing-installation) before admitting execution.
 
 Shared browser connection and domain state belongs in `packages/client-runtime`. Sandbox binaries
 come from the pinned image build; authentication, model selection, and compatibility checks remain

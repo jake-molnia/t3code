@@ -247,7 +247,7 @@ const layerUsage = UsageService.layer.pipe(
   Layer.provide(layerServerSettings),
 );
 
-const layerAgentRuntime = AgentRuntimeClient.layer.pipe(Layer.provide(layerPersistence));
+const layerAgentRuntime = AgentRuntimeClient.layerNative.pipe(Layer.provide(layerPersistence));
 const layerWorkspaceRouting = WorkspaceRouting.layer.pipe(
   Layer.provide(layerAgentRuntime),
   Layer.provide(layerPersistence),

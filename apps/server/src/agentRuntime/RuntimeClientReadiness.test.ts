@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -44,7 +45,7 @@ it.live.each([
   },
   {
     scenario: "failed admission",
-    postStatus: 503,
+    postStatus: 403,
     firstReadStatus: 200,
     superseded: false,
     succeeds: false,
@@ -213,4 +214,124 @@ it.live(
       expect(yield* sql`SELECT workspace_id FROM agent_runtime_workspaces`).toEqual([]);
       expect(requests).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live("explicit acquisition resumes a worker that becomes ready after admission", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* RuntimeSchema.migrate;
+    yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id,owner_thread_id) VALUES ('delayed','owner')`;
+    const identity = {
+      workspaceId: "delayed",
+      allocationId: "one",
+      generation: 1,
+      incarnation: "worker",
+      podUid: "pod",
+      protocolVersion: 1 as const,
+    };
+    let admissions = 0;
+    const resource = (): WorkspaceResource => ({
+      id: "delayed",
+      pool: "local",
+      profile: "t3",
+      desiredState: "running",
+      version: "1",
+      state: admissions >= 2 ? "running" : "starting",
+      progress: null,
+      error: null,
+      identity,
+      execution:
+        admissions >= 2 ? { identity, endpoint: "http://worker.test", token: "token" } : null,
+    });
+    const runtime = yield* RuntimeClient.RuntimeClient.pipe(
+      Effect.provide(RuntimeClient.layer.pipe(Layer.provide(poolsLayer()))),
+      Effect.provideService(SandboxLifecycle, {
+        ensure: () => Effect.sync(resource),
+        observe: () => Effect.sync(resource),
+        setDesiredState: () =>
+          Effect.sync(() => {
+            admissions++;
+            return resource();
+          }),
+      }),
+    );
+    const client = yield* runtime.forWorkspace("delayed");
+    expect(client.identity).toEqual(identity);
+    expect(admissions).toBe(2);
+  }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.effect("explains retained workspace cutover without exposing controller diagnostics", () =>
+  Effect.sync(() => {
+    const error = new RuntimeClient.RuntimeClientError({
+      operation: "ensure-running",
+      cause: new SandboxLifecycleError({
+        operation: "cutover",
+        cause: {
+          code: "workspace_cutover_required",
+          message: "private diagnostic",
+          retryable: false,
+        },
+      }),
+    });
+    expect(RuntimeClient.runtimeStartupMessage(error)).toBe(
+      "Restore this workspace into its native sandbox volume before starting execution. See the native sandbox cutover guide.",
+    );
+  }),
+);
+
+it.effect("explicit startup retries pending compute deletion within its acquisition deadline", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* RuntimeSchema.migrate;
+    yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id,owner_thread_id) VALUES ('retry','owner')`;
+    const pending = yield* Deferred.make<void>();
+    const identity = {
+      workspaceId: "retry",
+      allocationId: "one",
+      generation: 1,
+      incarnation: "worker",
+      podUid: "pod",
+      protocolVersion: 1 as const,
+    };
+    let attempts = 0;
+    const resource = (): WorkspaceResource => ({
+      id: "retry",
+      pool: "local",
+      profile: "t3",
+      desiredState: "running",
+      version: "1",
+      state: attempts >= 2 ? "running" : "starting",
+      progress: null,
+      error: null,
+      identity,
+      execution:
+        attempts >= 2 ? { identity, endpoint: "http://worker.test", token: "token" } : null,
+    });
+    const runtime = yield* RuntimeClient.RuntimeClient.pipe(
+      Effect.provide(RuntimeClient.layer.pipe(Layer.provide(poolsLayer()))),
+      Effect.provideService(SandboxLifecycle, {
+        ensure: () => Effect.sync(resource),
+        observe: () => Effect.sync(resource),
+        setDesiredState: () =>
+          Effect.gen(function* () {
+            attempts++;
+            if (attempts === 1) {
+              yield* Deferred.succeed(pending, undefined);
+              return yield* new SandboxLifecycleError({
+                operation: "set-state",
+                httpStatus: 503,
+                cause: "Previous compute is still releasing",
+              });
+            }
+            return resource();
+          }),
+      }),
+    );
+    const acquiring = yield* runtime.forWorkspace("retry").pipe(Effect.forkChild);
+    yield* Deferred.await(pending);
+    yield* TestClock.adjust("250 millis");
+    expect((yield* Fiber.join(acquiring)).identity).toEqual(identity);
+    expect(attempts).toBe(2);
+  }).pipe(Effect.scoped, Effect.provide(services)),
 );

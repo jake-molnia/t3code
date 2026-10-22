@@ -8,7 +8,7 @@
       "sha256": "99fdeb35b5afd49d36c1e250d9941a498146e5823a3c67d5bd9b73e81511f7d2",
       "include": ["pstack"],
       "skill_root": "pstack/skills",
-      "aliases": {"tdd": "pstack-tdd", "teach": "pstack-teach"},
+      "aliases": { "tdd": "pstack-tdd", "teach": "pstack-teach" },
       "replacements": [
         {
           "path": "pstack/skills/poteto-mode/playbooks/bug-fix.md",

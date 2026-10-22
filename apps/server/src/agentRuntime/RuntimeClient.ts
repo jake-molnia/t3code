@@ -16,8 +16,9 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as HttpClient from "effect/http/HttpClient";
-import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as SandboxLifecycle from "../sandbox/SandboxLifecycle.ts";
+import * as Kubernetes from "../sandbox/Kubernetes.ts";
+import type { Placement } from "../sandbox/Configuration.ts";
 import { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import { createExecutionClient, type ExecutionClient } from "../execution/ExecutionClient.ts";
 import * as Bindings from "./Bindings.ts";
@@ -32,29 +33,6 @@ const RuntimeFailure = Schema.Struct({
   message: Schema.String,
   retryable: Schema.Boolean,
 });
-export const WorkspaceResource = Schema.Struct({
-  id: Schema.String,
-  pool: Schema.String,
-  profile: Schema.String,
-  desiredState: Schema.Literals(["running", "suspended", "released"]),
-  state: Schema.Literals([
-    "running",
-    "suspended",
-    "released",
-    "starting",
-    "suspending",
-    "releasing",
-    "failed",
-    "unavailable",
-  ]),
-  version: Schema.NonEmptyString,
-  progress: Schema.NullOr(Schema.Struct({ step: Schema.String, startedAt: Schema.String })),
-  error: Schema.NullOr(RuntimeFailure),
-  identity: Schema.NullOr(ExecutionIdentity),
-  execution: Schema.NullOr(
-    Schema.Struct({ identity: ExecutionIdentity, endpoint: Schema.String, token: Schema.String }),
-  ),
-});
 
 export class RuntimeClientError extends Schema.TaggedError<RuntimeClientError>()(
   "AgentRuntimeClientError",
@@ -65,7 +43,7 @@ export class RuntimeClientError extends Schema.TaggedError<RuntimeClientError>()
   },
 ) {
   override get message() {
-    return `Agent runtime ${this.operation} failed.`;
+    return `Sandbox ${this.operation} failed.`;
   }
 }
 
@@ -74,6 +52,7 @@ export class WorkerNotReady extends Schema.TaggedError<WorkerNotReady>()(
   {},
 ) {}
 
+const isSandboxLifecycleError = Schema.is(SandboxLifecycle.SandboxLifecycleError);
 const isRuntimeClientError = Schema.is(RuntimeClientError);
 const isWorkerNotReady = Schema.is(WorkerNotReady);
 const isRuntimeFailure = Schema.is(RuntimeFailure);
@@ -82,7 +61,7 @@ export function runtimeStartupMessage(error: unknown): string | undefined {
   let cause = error;
   let starting = false;
   let observing = false;
-  while (isRuntimeClientError(cause)) {
+  while (isRuntimeClientError(cause) || isSandboxLifecycleError(cause)) {
     starting ||= cause.operation === "ensure-running";
     observing ||= cause.operation === "observe";
     cause = cause.cause;
@@ -90,6 +69,8 @@ export function runtimeStartupMessage(error: unknown): string | undefined {
   if (!starting && !observing) return undefined;
   if (starting && Cause.isTimeoutError(cause))
     return "Sandbox startup timed out waiting for the execution worker to become ready. Retry the turn.";
+  if (isRuntimeFailure(cause) && cause.code === "workspace_cutover_required")
+    return "Restore this workspace into its native sandbox volume before starting execution. See the native sandbox cutover guide.";
   if (isRuntimeFailure(cause) && cause.code === "lifecycle_failed")
     return (
       (starting
@@ -142,8 +123,6 @@ const LegacyStopReceipt = Schema.Struct({
 export const LifecycleStopReceipt = Schema.Union([SubmittedStopReceipt, LegacyStopReceipt]);
 const decodeStopReceipt = Schema.decodeUnknownEffect(Schema.fromJsonString(LifecycleStopReceipt));
 const encodeStopReceipt = Schema.encodeEffect(Schema.fromJsonString(LifecycleStopReceipt));
-const decodeWorkspace = Schema.decodeUnknownEffect(WorkspaceResource);
-const decodeRuntimeFailure = Schema.decodeUnknownEffect(Schema.Struct({ error: RuntimeFailure }));
 
 export class RuntimeStopRetry extends Schema.TaggedError<RuntimeStopRetry>()(
   "AgentRuntimeStopRetry",
@@ -209,7 +188,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const pools = yield* Pools.ExecutionPools;
     const sql = yield* SqlClient.SqlClient;
-    const httpClient = yield* HttpClient.HttpClient;
+    const lifecycle = yield* SandboxLifecycle.SandboxLifecycle;
     const enabled = pools.enabled;
     const placement = (workspaceId: string) =>
       sql.withTransaction(
@@ -232,44 +211,22 @@ export const layer = Layer.effect(
       );
     const failure = (operation: string) => (cause: unknown) =>
       new RuntimeClientError({ operation, cause });
-    const pathFor = (workspaceId: string) => `/v1/workspaces/${encodeURIComponent(workspaceId)}`;
-    const request = (pool: Pools.PoolConnection, path: string, body?: unknown, version?: string) =>
-      Effect.gen(function* () {
-        if (!enabled)
-          return yield* new RuntimeClientError({
-            operation: "request",
-            cause: "Remote execution is not configured",
-          });
-        const target = new URL(path.replace(/^\//, ""), pool.url.replace(/\/?$/, "/")).toString();
-        let base = (
-          body === undefined ? HttpClientRequest.get(target) : HttpClientRequest.put(target)
-        ).pipe(HttpClientRequest.setHeader("authorization", `Bearer ${pool.token}`));
-        if (version !== undefined)
-          base = base.pipe(HttpClientRequest.setHeader("if-match", `"${version}"`));
-        const outgoing = body === undefined ? base : yield* HttpClientRequest.bodyJson(base, body);
-        const result = yield* httpClient.execute(outgoing);
-        if (result.status < 200 || result.status >= 300) {
-          const detail = yield* result.json.pipe(
-            Effect.flatMap(decodeRuntimeFailure),
-            Effect.map((body) => body.error),
-            Effect.catch(() => Effect.succeed(null)),
-          );
-          return yield* new RuntimeClientError({
-            operation: "request",
-            cause: detail ?? `Runtime HTTP ${result.status}`,
-            httpStatus: result.status,
-          });
-        }
-        const resource = yield* result.json.pipe(Effect.flatMap(decodeWorkspace));
-        if (result.headers.etag !== `"${resource.version}"`)
-          return yield* new RuntimeClientError({
-            operation: "request",
-            cause: "Runtime resource ETag mismatch",
-          });
-        return resource;
+    const lifecycleError = (cause: SandboxLifecycle.SandboxLifecycleError) =>
+      new RuntimeClientError({
+        operation: "request",
+        ...(cause.httpStatus === undefined ? {} : { httpStatus: cause.httpStatus }),
+        cause,
       });
-    const readWorkspace = (pool: Pools.PoolConnection, workspaceId: string) =>
-      request(pool, pathFor(workspaceId)).pipe(
+    const retryPending = <A, R>(effect: Effect.Effect<A, RuntimeClientError, R>) =>
+      effect.pipe(
+        Effect.retry({
+          while: (error) => error.httpStatus === 503,
+          schedule: Schedule.spaced("250 millis"),
+        }),
+      );
+    const readWorkspace = (pool: Placement, workspaceId: string) =>
+      lifecycle.observe(workspaceId, pool).pipe(
+        Effect.mapError(lifecycleError),
         Effect.flatMap((resource) =>
           resource.id === workspaceId &&
           resource.pool === pool.id &&
@@ -296,22 +253,23 @@ export const layer = Layer.effect(
             operation: "ensure-running",
             cause: "Local admission superseded",
           });
-        yield* request(pool, pathFor(workspaceId), { pool: pool.id, profile: pool.profile });
+        yield* lifecycle
+          .ensure(workspaceId, pool)
+          .pipe(Effect.mapError(lifecycleError), retryPending);
         let accepted = false;
         for (let attempt = 0; attempt < 4 && !accepted; attempt++) {
           const current = yield* readWorkspace(pool, workspaceId);
-          accepted = yield* request(
-            pool,
-            `${pathFor(workspaceId)}/state`,
-            { desiredState: "running" },
-            current.version,
-          ).pipe(
-            Effect.as(true),
-            Effect.catchTags({
-              AgentRuntimeClientError: (error) =>
-                error.httpStatus === 412 ? Effect.succeed(false) : Effect.fail(error),
-            }),
-          );
+          accepted = yield* lifecycle
+            .setDesiredState(workspaceId, pool, "running", current.version)
+            .pipe(
+              Effect.mapError(lifecycleError),
+              retryPending,
+              Effect.as(true),
+              Effect.catchTags({
+                AgentRuntimeClientError: (error) =>
+                  error.httpStatus === 412 ? Effect.succeed(false) : Effect.fail(error),
+              }),
+            );
         }
         if (!accepted)
           return yield* new RuntimeClientError({
@@ -338,9 +296,13 @@ export const layer = Layer.effect(
                 operation: "ensure-running",
                 cause: current.error ?? "Runtime allocation failed",
               });
+            const ready = yield* lifecycle
+              .setDesiredState(workspaceId, pool, "running", current.version)
+              .pipe(Effect.mapError(lifecycleError), retryPending);
+            if (ready.state === "running" && ready.execution) return ready.execution;
             yield* Effect.sleep("250 millis");
           }
-        }).pipe(Effect.timeout("5 minutes"));
+        });
         if (access.identity.workspaceId !== workspaceId)
           return yield* new RuntimeClientError({
             operation: "identity",
@@ -350,6 +312,7 @@ export const layer = Layer.effect(
         return createExecutionClient(access);
       }).pipe(
         (effect) => withWorkspaceActivity(workspaceId, effect),
+        Effect.timeout("5 minutes"),
         Effect.mapError(failure("ensure-running")),
       );
     // Concurrent Git, file, and provider operations share readiness, not their results.
@@ -496,7 +459,7 @@ export const layer = Layer.effect(
             cause: "Admission changed before submission",
           });
         // A lost response may have accepted this intent. Observing the same stopped
-        // identity is sufficient; a running resource must pass the original ETag.
+        // identity is sufficient; a running resource must pass the original version.
         const accepted =
           current.desiredState === desiredState &&
           current.state !== "failed" &&
@@ -504,27 +467,31 @@ export const layer = Layer.effect(
           ((current.identity === null && current.state === "released") ||
             (current.identity !== null && sameIdentity(current.identity, receipt.expectedIdentity)))
             ? current
-            : yield* request(
-                pool,
-                `${pathFor(workspaceId)}/state`,
-                { desiredState },
-                (current.state === "failed" || current.progress?.step === "queued") &&
-                  current.desiredState === desiredState &&
-                  current.identity !== null &&
-                  sameIdentity(current.identity, receipt.expectedIdentity) &&
-                  (receipt.acceptedVersion === null || receipt.acceptedVersion === current.version)
-                  ? current.version
-                  : (receipt.acceptedVersion ?? receipt.version),
-              ).pipe(
-                Effect.catchTags({
-                  AgentRuntimeClientError: (error) =>
-                    Effect.gen(function* () {
-                      if (error.httpStatus === 412)
-                        yield* sql`UPDATE agent_runtime_workspaces SET lifecycle_request_json=NULL WHERE workspace_id=${workspaceId} AND admission_revision=${receipt.revision}`;
-                      return yield* error;
-                    }),
-                }),
-              );
+            : yield* lifecycle
+                .setDesiredState(
+                  workspaceId,
+                  pool,
+                  desiredState,
+                  (current.state === "failed" || current.progress?.step === "queued") &&
+                    current.desiredState === desiredState &&
+                    current.identity !== null &&
+                    sameIdentity(current.identity, receipt.expectedIdentity) &&
+                    (receipt.acceptedVersion === null ||
+                      receipt.acceptedVersion === current.version)
+                    ? current.version
+                    : (receipt.acceptedVersion ?? receipt.version),
+                )
+                .pipe(
+                  Effect.mapError(lifecycleError),
+                  Effect.catchTags({
+                    AgentRuntimeClientError: (error) =>
+                      Effect.gen(function* () {
+                        if (error.httpStatus === 412)
+                          yield* sql`UPDATE agent_runtime_workspaces SET lifecycle_request_json=NULL WHERE workspace_id=${workspaceId} AND admission_revision=${receipt.revision}`;
+                        return yield* error;
+                      }),
+                  }),
+                );
         const encoded = yield* encodeStopReceipt({
           ...receipt,
           acceptedVersion: accepted.version,
@@ -649,4 +616,10 @@ export const layer = Layer.effect(
       stop,
     });
   }),
-).pipe(Layer.provideMerge(Pools.layer));
+);
+
+export const layerNative = layer.pipe(
+  Layer.provideMerge(Pools.layer),
+  Layer.provide(SandboxLifecycle.layer),
+  Layer.provide(Kubernetes.layer),
+);

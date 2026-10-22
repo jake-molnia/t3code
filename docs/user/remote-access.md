@@ -28,4 +28,4 @@ If the application cannot connect, check that you are using the deployment's cur
 
 If authorization has expired or been revoked, request a new pairing link. Reconnecting does not change an existing session's permissions.
 
-For version mismatch messages after maintenance, follow [updates](./updating.md). Deployment administrators can find network and service configuration in the agent-runtime [deployment guide](https://github.com/jake-molnia/agent-runtime/blob/t3/sandbox-session-lifecycle/deploy/t3/README.md).
+For version mismatch messages after maintenance, follow [updates](./updating.md). Deployment administrators can find network and service configuration in the [native sandbox deployment guide](../../deploy/t3/README.md).
