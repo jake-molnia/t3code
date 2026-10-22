@@ -7,6 +7,8 @@ import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ProjectId,
+  ThreadId,
+  type IdeSetupState,
 } from "@t3tools/contracts";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
@@ -25,6 +27,11 @@ const state = vi.hoisted(() => ({
   canCleanup: true,
   mixedPatch: false,
   inspectTargets: false,
+  inspectIde: false,
+  remoteConnected: true,
+  ideSetup: vi.fn(),
+  ideManage: vi.fn(),
+  ideManageCommand: { permissionAtom: () => state.permission },
   fileUnavailable: false,
   fileContents: "{}",
   readFile: vi.fn(),
@@ -98,7 +105,12 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   },
   Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
   Outlet: () =>
-    state.inspectTargets ? (
+    state.inspectIde ? (
+      <IdeSetupSettingsPanel
+        target={{ threadId: ThreadId.make("remote-thread") }}
+        targetEnvironmentId={EnvironmentId.make("remote")}
+      />
+    ) : state.inspectTargets ? (
       <EffectiveSettingsProbe />
     ) : state.mixedPatch ? (
       <MixedPatchProbe />
@@ -115,7 +127,15 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
     ),
 }));
 vi.mock("../../state/environments", () => ({
-  useEnvironments: () => ({ environments: [environment] }),
+  useEnvironments: () => ({
+    environments:
+      state.inspectIde && state.remoteConnected
+        ? [
+            environment,
+            { ...environment, environmentId: EnvironmentId.make("remote"), label: "Remote" },
+          ]
+        : [environment],
+  }),
   usePrimaryEnvironmentId: () => environmentId,
   usePrimaryEnvironment: () => environment,
 }));
@@ -147,6 +167,18 @@ vi.mock("../../state/projects", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/projects")>()),
   projectEnvironment: { readFile: (...args: unknown[]) => state.readFile(...args) },
 }));
+vi.mock("../../state/shell", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../state/shell")>();
+  return {
+    ...original,
+    shellEnvironment: {
+      ...original.shellEnvironment,
+      ideSetup: (...args: unknown[]) => state.ideSetup(...args),
+      manageIdeSetup: state.ideManageCommand,
+    },
+  };
+});
+vi.mock("../../assets/assetUrls", () => ({ useAssetUrlState: () => ({ url: null }) }));
 vi.mock("../../state/mcpConnections", () => ({
   mcpConnections: {
     state: () => state.query,
@@ -165,11 +197,13 @@ vi.mock("../../state/server", async (importOriginal) => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>
-    command === state.update
-      ? state.persist
-      : command === state.runCleanup
-        ? state.cleanup
-        : state.completeAuth,
+    command === state.ideManageCommand
+      ? state.ideManage
+      : command === state.update
+        ? state.persist
+        : command === state.runCleanup
+          ? state.cleanup
+          : state.completeAuth,
 }));
 vi.mock("../../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/session")>()),
@@ -223,6 +257,7 @@ import { GeneralSettingsPanel } from "./SettingsPanels";
 import { StorageSettingsPanel } from "./StorageSettings";
 const cleanupPermission = () => Atom.make(state.canCleanup);
 const cleanupReport = Atom.make(AsyncResult.success(null));
+import { IdeSetupSettingsPanel } from "./IdeSetupSettings";
 import { McpSettings } from "./McpSettings";
 import { SettingsPageContainer } from "./settingsLayout";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
@@ -249,6 +284,23 @@ beforeEach(() => {
   state.canWrite = true;
   state.mixedPatch = false;
   state.inspectTargets = false;
+  state.inspectIde = false;
+  state.remoteConnected = true;
+  state.ideManage.mockReset().mockResolvedValue({ _tag: "Success" });
+  const ideState: IdeSetupState = {
+    stage: "ready",
+    remembering: true,
+    settingsRevision: "saved",
+    settingsMatch: true,
+    previousSettingsRevision: null,
+    extensions: [],
+    build: { state: "idle" },
+    publishedRevision: null,
+    previousPublishedRevision: null,
+    appliedRevision: null,
+    preferences: { state: "saved", issues: [] },
+  };
+  state.ideSetup.mockReset().mockReturnValue(Atom.make(AsyncResult.success(ideState)));
   state.fileUnavailable = false;
   state.fileContents = "{}";
   state.readFile
@@ -660,4 +712,34 @@ it("keeps selected-project file reads unchanged", async () => {
   for (const [request] of state.readFile.mock.calls) {
     expect(request.input).toEqual({ cwd: "/repo", relativePath: "t3.json" });
   }
+});
+
+it("manages the linked remote IDE setup rather than the primary environment", async () => {
+  state.pathname = "/settings/ide";
+  state.search = { machine: "remote" };
+  state.inspectIde = true;
+  await render();
+  expect(state.ideSetup).toHaveBeenCalledWith({
+    environmentId: "remote",
+    input: { target: { threadId: "remote-thread" } },
+  });
+  const pause = Array.from(container.querySelectorAll("button")).find((button) =>
+    button.textContent?.includes("Pause remembering"),
+  );
+  expect(pause).toBeDefined();
+  await act(async () => pause?.click());
+  expect(state.ideManage).toHaveBeenCalledWith({
+    environmentId: "remote",
+    input: { target: { threadId: "remote-thread" }, command: { kind: "remember", enabled: false } },
+  });
+});
+
+it("does not fall back to primary settings when the linked IDE environment is unavailable", async () => {
+  state.pathname = "/settings/ide";
+  state.search = { machine: "remote" };
+  state.inspectIde = true;
+  state.remoteConnected = false;
+  await render();
+  expect(state.ideSetup).not.toHaveBeenCalled();
+  expect(state.ideManage).not.toHaveBeenCalled();
 });

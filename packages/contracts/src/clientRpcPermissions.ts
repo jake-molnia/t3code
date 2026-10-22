@@ -25,6 +25,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.mcpConnectionsRefresh]: AuthSettingsWriteScope,
   [WS_METHODS.mcpConnectionsSetAccess]: AuthSettingsWriteScope,
 
+  [WS_METHODS.sandboxIdeSetupManage]: AuthSettingsWriteScope,
+  [WS_METHODS.sandboxIdeSetupExport]: AuthSettingsWriteScope,
+  [WS_METHODS.sandboxIdePreferenceResolve]: AuthSettingsWriteScope,
   [WS_METHODS.sandboxIdeOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   // Endpoint checks exist to configure exports, so they need the same grant as saving them.

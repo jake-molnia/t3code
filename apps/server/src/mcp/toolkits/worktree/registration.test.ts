@@ -1,3 +1,4 @@
+import * as IdeSetup from "../../../agentRuntime/IdeSetup.ts";
 import * as McpConnections from "../../McpConnections.ts";
 import * as SandboxComputer from "../../../computer/SandboxComputer.ts";
 import { NodeHttpServer } from "@effect/platform-node";
@@ -50,6 +51,7 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(ProjectService.ProjectService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   ServerSettings.layerTest({}),
+  Layer.mock(IdeSetup.IdeSetup)({}),
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
   Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({}),

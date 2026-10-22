@@ -37,3 +37,19 @@ export function isMcpAuthCallback(pathname: string, searchStr: string): boolean 
   const params = new URLSearchParams(searchStr);
   return params.get("state") !== null && (params.has("code") || params.has("error"));
 }
+
+/** Keep the sandbox and its owning environment together when opening IDE settings. */
+export function validateIdeSettingsSearch(raw: Record<string, unknown>) {
+  const value = (input: unknown) =>
+    typeof input === "string" && input.length > 0 && input.length < 256 ? input : undefined;
+  const ideThread = value(raw.ideThread);
+  const ideProject = value(raw.ideProject);
+  const ideEnvironment = value(raw.ideEnvironment);
+  const machine = value(raw.machine) ?? ideEnvironment;
+  return {
+    ...(machine === undefined ? {} : { machine }),
+    ...(ideThread === undefined ? {} : { ideThread }),
+    ...(ideProject === undefined ? {} : { ideProject }),
+    ...(ideEnvironment === undefined ? {} : { ideEnvironment }),
+  };
+}

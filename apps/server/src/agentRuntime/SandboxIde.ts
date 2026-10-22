@@ -1,3 +1,4 @@
+import { IdeSetup } from "./IdeSetup.ts";
 import {
   SandboxIdeError,
   SandboxIdeOpenInput,
@@ -77,6 +78,7 @@ export class SandboxIde extends Context.Service<
 export const layer = Layer.effect(
   SandboxIde,
   Effect.gen(function* () {
+    const preferences = yield* IdeSetup;
     const runtime = yield* RuntimeClient.RuntimeClient;
     const crypto = yield* Crypto.Crypto;
     const serviceScope = yield* Effect.scope;
@@ -95,6 +97,7 @@ export const layer = Layer.effect(
           const activity = yield* Scope.fork(serviceScope);
           return yield* Effect.gen(function* () {
             const target = input.target;
+            yield* preferences.opening(target);
             const client = yield* (
               "threadId" in target
                 ? runtime.forThread(target.threadId, undefined, activity)
@@ -108,6 +111,7 @@ export const layer = Layer.effect(
             ).pipe(
               Effect.mapError((cause) => new SandboxIdeError({ reason: "unavailable", cause })),
             );
+            yield* preferences.prepare(client);
             const identity = client.identity;
             // Stable URLs let later windows reuse the versioned editor assets. Credentials
             // remain random, and a different client, origin, or worker gets a different path.

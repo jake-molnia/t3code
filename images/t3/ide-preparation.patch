@@ -1,0 +1,200 @@
+diff --git a/command/t3_ide.go b/command/t3_ide.go
+index f582366..12f3e4b 100644
+--- a/command/t3_ide.go
++++ b/command/t3_ide.go
+@@ -10,6 +10,7 @@ import (
+ 	"os/exec"
+ 	"path/filepath"
+ 	"sync"
++	"syscall"
+ 	"time"
+ )
+ 
+@@ -20,11 +21,30 @@ func t3IDE(ctx context.Context) error {
+ 	logPath := filepath.Join(state, "ide", "code-server.log")
+ 	log := newIDELog(logPath, 1<<20)
+ 	defer log.Close()
++	receipt := filepath.Join(state, "ide", "prepared")
++	status := filepath.Join(state, "ide", "running")
++	os.MkdirAll(filepath.Dir(status), 0700)
++	os.Remove(status)
++	defer os.Remove(status)
+ 	for ctx.Err() == nil {
++		for {
++			prepared, err := claimPreparedIDE(receipt, status)
++			if err != nil {
++				return err
++			}
++			if prepared {
++				break
++			}
++			select {
++			case <-ctx.Done():
++				return ctx.Err()
++			case <-time.After(200 * time.Millisecond):
++			}
++		}
+ 		attempt, cancel := context.WithCancel(ctx)
+ 		cmd := exec.Command(env("T3_IDE_BINARY", "code-server"),
+ 			"--bind-addr", "127.0.0.1:8085", "--auth", "none",
+-			"--disable-telemetry", "--disable-update-check", "--disable-proxy", "--disable-workspace-trust",
++			"--disable-telemetry", "--disable-update-check", "--disable-proxy",
+ 			"--config", filepath.Join(state, "ide", "config.yaml"),
+ 			"--user-data-dir", filepath.Join(state, "ide", "user-data"),
+ 			"--extensions-dir", filepath.Join(state, "ide", "extensions"), root)
+@@ -36,6 +56,21 @@ func t3IDE(ctx context.Context) error {
+ 		cmd.Stdout, cmd.Stderr = log, log
+ 		var warming chan struct{}
+ 		err := runChildUntilExitStarted(attempt, cmd, func(int) {
++			go func() {
++				ticker := time.NewTicker(200 * time.Millisecond)
++				defer ticker.Stop()
++				for {
++					select {
++					case <-attempt.Done():
++						return
++					case <-ticker.C:
++						if _, err := os.Stat(receipt); err != nil {
++							cancel()
++							return
++						}
++					}
++				}
++			}()
+ 			warming = make(chan struct{})
+ 			go func() {
+ 				defer close(warming)
+@@ -44,6 +79,8 @@ func t3IDE(ctx context.Context) error {
+ 						fmt.Fprintln(log, warmErr)
+ 					}
+ 					cancel()
++				} else {
++					os.WriteFile(status, []byte("ready"), 0600)
+ 				}
+ 			}()
+ 		}, 2*time.Second)
+@@ -51,6 +88,7 @@ func t3IDE(ctx context.Context) error {
+ 		if warming != nil {
+ 			<-warming
+ 		}
++		os.Remove(status)
+ 		if ctx.Err() != nil {
+ 			return ctx.Err()
+ 		}
+@@ -69,6 +107,30 @@ func t3IDE(ctx context.Context) error {
+ 	return ctx.Err()
+ }
+ 
++// Serialize the preparation check and launch claim with the worker's pause request.
++// A pause can then wait for running to disappear without racing a not-yet-started child.
++func claimPreparedIDE(receipt, status string) (bool, error) {
++	lock, err := os.OpenFile(filepath.Join(filepath.Dir(receipt), "control.lock"), os.O_CREATE|os.O_RDWR, 0600)
++	if err != nil {
++		return false, err
++	}
++	defer lock.Close()
++	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
++		return false, err
++	}
++	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
++	if _, err = os.Stat(receipt); os.IsNotExist(err) {
++		return false, nil
++	}
++	if err != nil {
++		return false, err
++	}
++	if err = os.WriteFile(status, []byte("starting"), 0600); err != nil {
++		return false, err
++	}
++	return true, nil
++}
++
+ func warmT3IDE(ctx context.Context, origin string) error {
+ 	// /healthz only checks code-server's listener. GET / loads the VS Code backend
+ 	// before redirecting to the last workspace. Do not follow that redirect or
+diff --git a/command/t3_ide_test.go b/command/t3_ide_test.go
+index b69eb61..e5c1807 100644
+--- a/command/t3_ide_test.go
++++ b/command/t3_ide_test.go
+@@ -77,13 +77,14 @@ func testT3IDERestart(t *testing.T, failStartup, failLogging bool) {
+ 	}
+ 	for path, script := range map[string]string{
+ 		ide:    "#!/bin/sh\necho diagnostic-stdout\necho diagnostic-stderr >&2\nprintf '%s\\n' \"$@\" > \"$T3_WORKSPACE_ROOT/ide-args\"\necho \"ide $$ $PPID\" > \"$T3_WORKSPACE_ROOT/events\"\n" + ideLifetime,
+-		worker: "#!/bin/sh\necho \"worker $$ $T3_IDE_PID\" > \"$T3_WORKSPACE_ROOT/events\"\nexec sleep 60\n",
++		worker: "#!/bin/sh\nmkdir -p \"$T3_WORKER_STATE_DIR/ide\"\ntouch \"$T3_WORKER_STATE_DIR/ide/prepared\"\necho \"worker $$ $T3_IDE_PID\" > \"$T3_WORKSPACE_ROOT/events\"\nexec sleep 60\n",
+ 	} {
+ 		if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+ 			t.Fatal(err)
+ 		}
+ 	}
+ 	t.Setenv("T3_WORKSPACE_ROOT", root)
++	t.Setenv("T3_WORKER_STATE_DIR", filepath.Join(root, "state"))
+ 	t.Setenv("T3_IDE_BINARY", ide)
+ 	t.Setenv("T3_WORKER_NODE", worker)
+ 	ctx, cancel := context.WithCancel(context.Background())
+@@ -150,8 +151,8 @@ func testT3IDERestart(t *testing.T, failStartup, failLogging bool) {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if !strings.Contains(string(args), "--disable-workspace-trust\n") {
+-		t.Fatal("workspace trust still enabled")
++	if strings.Contains(string(args), "--disable-workspace-trust\n") {
++		t.Fatal("workspace trust must use the editable native setting")
+ 	}
+ 	if failLogging {
+ 		return
+@@ -196,6 +197,8 @@ func TestT3IDELogRetainsBoundedPrivateDiagnostics(t *testing.T) {
+ 
+ func TestT3IDEShutdownReapsEditorBeforeOuterDeadline(t *testing.T) {
+ 	root := t.TempDir()
++	os.MkdirAll(filepath.Join(root, "state", "ide"), 0700)
++	os.WriteFile(filepath.Join(root, "state", "ide", "prepared"), []byte("prepared"), 0600)
+ 	eventsPath := filepath.Join(root, "ready")
+ 	if err := syscall.Mkfifo(eventsPath, 0600); err != nil {
+ 		t.Fatal(err)
+@@ -295,3 +298,26 @@ func TestT3IDELogRecoversAfterInitializationFailure(t *testing.T) {
+ 		t.Fatalf("logging did not recover: %q %v", data, err)
+ 	}
+ }
++
++func TestT3IDEPreparationClaimPrecedesLaunch(t *testing.T) {
++	root := t.TempDir()
++	receipt, status := filepath.Join(root, "prepared"), filepath.Join(root, "running")
++	ready, err := claimPreparedIDE(receipt, status)
++	if err != nil || ready {
++		t.Fatalf("unprepared editor claimed: %v %v", ready, err)
++	}
++	if _, err := os.Stat(status); !os.IsNotExist(err) {
++		t.Fatal("unprepared editor published a running status")
++	}
++	if err := os.WriteFile(receipt, []byte("prepared"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	ready, err = claimPreparedIDE(receipt, status)
++	if err != nil || !ready {
++		t.Fatalf("prepared editor not claimed: %v %v", ready, err)
++	}
++	contents, err := os.ReadFile(status)
++	if err != nil || string(contents) != "starting" {
++		t.Fatal("launch claim is not visible before spawning the child")
++	}
++}
+diff --git a/command/t3_session_test.go b/command/t3_session_test.go
+index 931bf1c..c20ecfb 100644
+--- a/command/t3_session_test.go
++++ b/command/t3_session_test.go
+@@ -84,12 +84,13 @@ func TestT3ExecutionWorkerStartsBeforeIDEHealth(t *testing.T) {
+ 	if err := os.WriteFile(ide, []byte("#!/bin/sh\nexec sleep 60\n"), 0700); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if err := os.WriteFile(worker, []byte("#!/bin/sh\nprintf '%s' \"$DISPLAY $HOME $T3_IDE_PID\" > \"$T3_TEST_CAPTURE\"\nexec sleep 60\n"), 0700); err != nil {
++	if err := os.WriteFile(worker, []byte("#!/bin/sh\nmkdir -p \"$T3_WORKER_STATE_DIR/ide\"\ntouch \"$T3_WORKER_STATE_DIR/ide/prepared\"\nprintf '%s' \"$DISPLAY $HOME $T3_IDE_PID\" > \"$T3_TEST_CAPTURE\"\nexec sleep 60\n"), 0700); err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	t.Setenv("T3_IDE_BINARY", ide)
+ 	t.Setenv("T3_WORKER_NODE", worker)
+ 	t.Setenv("T3_TEST_CAPTURE", marker)
++	t.Setenv("T3_WORKER_STATE_DIR", root)
+ 	t.Setenv("HOME", filepath.Join(root, "home"))
+ 	ctx, cancel := context.WithCancel(context.Background())
+ 	done := make(chan error, 1)

@@ -54,7 +54,57 @@ archives are checked against fixed SHA-256 hashes by `install-code-server.sh`.
 The Go `t3-session` supervisor starts these services on loopback, then launches
 the TypeScript execution worker with their addresses and desktop environment.
 The real-entrypoint image smoke checks verify the IDE HTML, computer API, and
-browser CDP endpoint before accepting the worker as ready. Jupyter is excluded.
+browser CDP endpoint after the worker is ready. Jupyter is excluded.
+
+## Saved IDE setup and Nix extensions
+
+The image contains the pinned Nix builder, a seed `flake.lock`, and the worker's
+native extension adapter. User extension sets are durable central state, not image
+inputs. Installing, uninstalling or updating an extension in VS Code queues a build
+in the dedicated `t3:utility:ide-extension-build` workspace. Central never executes
+Nix or code-server.
+
+The builder resolves exact Open VSX versions, validates package identities and
+hashes, includes dependencies and extension packs, and runs `nix build` with
+`--no-update-lock-file`. It checks the result with the pinned code-server CLI in a
+fresh validation directory. A successful bundle contains the declaration, flake,
+lock and original VSIX files. Later builds reuse retained packages and the previous
+lock. A failed or superseded build leaves the last published bundle available.
+
+Private VSIX installs require the original archive. Import it through the sandbox's
+VS Code setup controls or `t3_ide_setup_manage`. T3 retains those bytes centrally;
+it does not recreate archives from installed directories or substitute a registry
+package with the same ID.
+
+Back up both `${stateDir}/ide-preferences` and `${stateDir}/ide-extensions` with
+central application state. These hold native settings revisions, management state,
+extension build intent and retained artifacts, including private VSIX packages.
+Workers hold independent native directories and merge baselines. Restoring or
+replacing a worker does not move conversation SQLite into it.
+
+The pinned agent-runtime supervisor is built with `ide-preparation.patch`. The
+worker starts independently; the editor waits for a preparation receipt. Retained
+receipts permit normal restarts without reinstalling extensions. Applying a saved
+setup pauses only the editor, prepares native files and extensions, then resumes
+it. A shared file lock closes the race between an editor launch and a pause request.
+The native Workspace Trust setting remains editable.
+
+`nix-pty.c` handles gVisor's initial PTY read returning EIO before a builder opens
+the slave. It is loaded only for the Nix subprocess, retries only the initial
+handshake, and preserves subsequent terminal-close errors. It does not turn build
+failures into successful publications. Build and installation diagnostics are
+bounded in the affected worker's `ide/extensions-error.log`.
+
+To deliberately update the image's seed Nix dependency lock, run:
+
+```sh
+nix --extra-experimental-features 'nix-command flakes' flake update --flake ./images/t3/ide-extensions
+```
+
+Deploy matching central and worker versions for the setup protocol and preparation
+gate. The real-session smoke script prepares the IDE through worker operations
+before checking its HTTP endpoint. It is a test-container script, not a command to
+run against an active user's sandbox.
 
 ## Check the Git credential helper
 

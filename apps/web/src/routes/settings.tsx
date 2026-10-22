@@ -161,8 +161,15 @@ function SettingsRouteLayout() {
   return (
     <SettingsScopeProvider
       search={rawSearch}
+      {...(pathname === "/settings/ide" && rawSearch.machine
+        ? { environmentId: rawSearch.machine }
+        : {})}
       projectOnly={!SETTINGS_DEVICE_ONLY_PATHS.has(pathname)}
-      singleEnvironment={pathname === "/settings/providers" || pathname === "/settings/mcp"}
+      singleEnvironment={
+        pathname === "/settings/providers" ||
+        pathname === "/settings/mcp" ||
+        pathname === "/settings/ide"
+      }
       onChange={(next) => {
         // Send every axis so the retain middleware sees an explicit target
         // even when the choice is "all", which is the absence of a key.
