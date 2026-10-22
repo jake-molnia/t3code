@@ -48,6 +48,7 @@ const firstProject = ProjectId.make("c0a80101-1234-4567-89ab-000000000001");
 const secondProject = ProjectId.make("c0a80101-1234-4567-89ab-000000000002");
 const firstThread = ThreadId.make("thread:executor-first");
 const secondThread = ThreadId.make("thread:executor-second");
+const childThread = ThreadId.make("thread:executor-child");
 const project = (projectId: ProjectId): ProjectStore.ProjectRow => ({
   projectId,
   title: projectId,
@@ -84,10 +85,19 @@ const domain = McpConnections.layer.pipe(
       Layer.mock(ThreadManagement.ThreadManagementService)({
         getThreadShell: (id) =>
           Effect.succeed(
-            id === firstThread || id === secondThread
+            id === firstThread || id === secondThread || id === childThread
               ? {
                   ...liveThreadShell(id),
-                  projectId: id === firstThread ? firstProject : secondProject,
+                  projectId: id === secondThread ? secondProject : firstProject,
+                  ...(id === childThread
+                    ? {
+                        lineage: {
+                          rootThreadId: firstThread,
+                          parentThreadId: firstThread,
+                          relationshipToParent: "subagent" as const,
+                        },
+                      }
+                    : {}),
                   worktreePath: "/workspace/shared-path",
                 }
               : null,
@@ -101,6 +111,7 @@ const domain = McpConnections.layer.pipe(
 const remoteMcp = Effect.acquireRelease(
   Effect.promise(async () => {
     const calls: string[] = [];
+    const toolNames = ["read", "write", "approve"];
     let token: string | undefined;
     const server = NodeHttp.createServer(async (request, response) => {
       if (request.method === "GET") {
@@ -132,7 +143,7 @@ const remoteMcp = Effect.acquireRelease(
         };
       else if (rpc.method === "tools/list")
         result = {
-          tools: ["read", "write", "approve"].map((name) => ({
+          tools: toolNames.map((name) => ({
             name,
             description: `${name} fixture data`,
             inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -161,6 +172,7 @@ const remoteMcp = Effect.acquireRelease(
     return {
       server,
       calls,
+      toolNames,
       setToken: (value: string) => {
         token = value;
       },
@@ -349,6 +361,72 @@ if (installedRuntime) {
             structuredContent: { status: "completed" },
           });
           expect(fixture.calls.at(-1)).toBe("approve");
+
+          // A cached provider session and a fresh session both read current project policy.
+          yield* service.setAccess({
+            projectIds: [firstProject],
+            connectionId: connection.id,
+            tools: { mode: "all" },
+          });
+          fixture.toolNames.push("new_tool");
+          yield* service.refresh(connection.id);
+          const newTool = (yield* service.tools(connection.id)).find(
+            (tool) => tool.name === "new_tool",
+          );
+          if (!newTool) throw new Error("Refreshed tool missing");
+          const newPath = newTool.id.replace(/^tools\./, "");
+          const searchPaths = (threadId: ThreadId) =>
+            call(threadId, "search", "fixture").pipe(
+              Effect.map((result) =>
+                decodeSearch(result).structuredContent.result.items.map((item) => item.path),
+              ),
+            );
+          expect(yield* searchPaths(firstThread)).toContain(newPath);
+          expect(yield* searchPaths(secondThread)).toEqual([writePath]);
+          expect(JSON.stringify(yield* call(secondThread, "schema", newPath))).toContain(
+            "tool_not_found",
+          );
+          const executeNewTool = `return await tools.${newPath}({});`;
+          yield* call(firstThread, "execute", executeNewTool);
+          yield* service.call({
+            threadId: firstThread,
+            sessionId: "new-provider-session",
+            operation: "execute",
+            value: executeNewTool,
+          });
+          yield* call(childThread, "execute", executeNewTool);
+          expect(fixture.calls.slice(-3)).toEqual(["new_tool", "new_tool", "new_tool"]);
+          const callsBeforeBlock = [...fixture.calls];
+          yield* service.setAccess({
+            projectIds: [firstProject],
+            connectionId: connection.id,
+            tools: { mode: "selected", toolIds: [] },
+          });
+          expect(yield* searchPaths(firstThread)).toEqual([]);
+          expect(JSON.stringify(yield* call(firstThread, "execute", executeNewTool))).toContain(
+            "tool_blocked",
+          );
+          expect(JSON.stringify(yield* call(childThread, "execute", executeNewTool))).toContain(
+            "tool_blocked",
+          );
+          expect(fixture.calls).toEqual(callsBeforeBlock);
+          expect(yield* searchPaths(secondThread)).toEqual([writePath]);
+
+          yield* service.setAccess({
+            projectIds: [firstProject],
+            connectionId: connection.id,
+            tools: null,
+          });
+          expect(yield* searchPaths(firstThread)).toEqual([]);
+          yield* service.setAccess({
+            projectIds: [firstProject],
+            connectionId: connection.id,
+            tools: { mode: "selected", toolIds: [read.id] },
+          });
+          expect(yield* searchPaths(firstThread)).toEqual([readPath]);
+          yield* call(firstThread, "execute", `return await tools.${readPath}({});`);
+          expect(fixture.calls.at(-1)).toBe("read");
+          expect(yield* searchPaths(secondThread)).toEqual([writePath]);
         }).pipe(Effect.provide(domain), Effect.provideService(FetchHttpClient.Fetch, fetch));
       }).pipe(
         Effect.scoped,

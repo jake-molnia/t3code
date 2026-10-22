@@ -797,8 +797,57 @@ index 0000000..f41f319
 +		})
 +	}
 +}
+diff --git a/internal/registry/model_definitions.go b/internal/registry/model_definitions.go
+index f2dbce0..3c0f142 100644
+--- a/internal/registry/model_definitions.go
++++ b/internal/registry/model_definitions.go
+@@ -280,6 +280,8 @@ func codexBuiltinImage15ModelInfo() *ModelInfo {
+ 		Type:        "openai",
+ 		DisplayName: "GPT Image 1.5",
+ 		Version:     codexBuiltinImage15ModelID,
++
++		SupportedOutputModalities: []string{"image"},
+ 	}
+ }
+ 
+@@ -292,6 +294,8 @@ func codexBuiltinImageModelInfo() *ModelInfo {
+ 		Type:        "openai",
+ 		DisplayName: "GPT Image 2",
+ 		Version:     codexBuiltinImageModelID,
++
++		SupportedOutputModalities: []string{"image"},
+ 	}
+ }
+ 
+@@ -304,6 +308,8 @@ func codexBuiltinImage25FlareModelInfo() *ModelInfo {
+ 		Type:        "openai",
+ 		DisplayName: "GPT Image 2.5 Flare",
+ 		Version:     codexBuiltinImage25FlareModelID,
++
++		SupportedOutputModalities: []string{"image"},
+ 	}
+ }
+ 
+@@ -316,6 +322,8 @@ func codexBuiltinImage25SunburstModelInfo() *ModelInfo {
+ 		Type:        "openai",
+ 		DisplayName: "GPT Image 2.5 Sunburst",
+ 		Version:     codexBuiltinImage25SunburstModelID,
++
++		SupportedOutputModalities: []string{"image"},
+ 	}
+ }
+ 
+@@ -328,6 +336,8 @@ func codexBuiltinImage25ModelInfo() *ModelInfo {
+ 		Type:        "openai",
+ 		DisplayName: "GPT Image 2.5",
+ 		Version:     codexBuiltinImage25ModelID,
++
++		SupportedOutputModalities: []string{"image"},
+ 	}
+ }
+ 
 diff --git a/sdk/api/handlers/openai/openai_handlers.go b/sdk/api/handlers/openai/openai_handlers.go
-index 4077ee5..88d8eb4 100644
+index 4077ee5..e8e0c85 100644
 --- a/sdk/api/handlers/openai/openai_handlers.go
 +++ b/sdk/api/handlers/openai/openai_handlers.go
 @@ -81,7 +81,7 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
@@ -806,17 +855,22 @@ index 4077ee5..88d8eb4 100644
  	allModels := h.Models()
  
 -	// Filter to only include the 4 required fields: id, object, created, owned_by
-+	// Preserve known input modalities alongside the OpenAI identity fields.
++	// Preserve known input and output modalities alongside the OpenAI identity fields.
  	filteredModels := make([]map[string]any, len(allModels))
  	for i, model := range allModels {
  		filteredModel := map[string]any{
-@@ -99,6 +99,12 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
+@@ -99,6 +99,17 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
  			filteredModel["owned_by"] = ownedBy
  		}
  
 +		if id, ok := model["id"].(string); ok {
-+			if info := registry.GetGlobalRegistry().GetModelInfo(id, ""); info != nil && len(info.SupportedInputModalities) > 0 {
-+				filteredModel["supported_input_modalities"] = append([]string(nil), info.SupportedInputModalities...)
++			if info := registry.GetGlobalRegistry().GetModelInfo(id, ""); info != nil {
++				if len(info.SupportedInputModalities) > 0 {
++					filteredModel["supported_input_modalities"] = append([]string(nil), info.SupportedInputModalities...)
++				}
++				if len(info.SupportedOutputModalities) > 0 {
++					filteredModel["supported_output_modalities"] = append([]string(nil), info.SupportedOutputModalities...)
++				}
 +			}
 +		}
 +
@@ -825,16 +879,17 @@ index 4077ee5..88d8eb4 100644
  
 diff --git a/sdk/api/handlers/openai/t3_model_modalities_test.go b/sdk/api/handlers/openai/t3_model_modalities_test.go
 new file mode 100644
-index 0000000..182cc4d
+index 0000000..3e29b01
 --- /dev/null
 +++ b/sdk/api/handlers/openai/t3_model_modalities_test.go
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,70 @@
 +package openai
 +
 +import (
 +	"encoding/json"
 +	"net/http/httptest"
 +	"reflect"
++	"strings"
 +	"testing"
 +
 +	"github.com/gin-gonic/gin"
@@ -843,13 +898,13 @@ index 0000000..182cc4d
 +	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 +)
 +
-+func TestT3ModelsPreserveKnownInputModalities(t *testing.T) {
++func TestT3ModelsPreserveKnownModalities(t *testing.T) {
 +	r := registry.GetGlobalRegistry()
 +	client := "t3-modalities-test"
-+	r.RegisterClient(client, "openai-compatibility", []*registry.ModelInfo{
-+		{ID: "t3-image-model", SupportedInputModalities: []string{"text", "image"}},
++	r.RegisterClient(client, "openai-compatibility", registry.WithCodexBuiltins([]*registry.ModelInfo{
++		{ID: "t3-image-model", SupportedInputModalities: []string{"text", "image"}, SupportedOutputModalities: []string{"text", "image"}},
 +		{ID: "t3-unknown-model"},
-+	})
++	}))
 +	t.Cleanup(func() { r.UnregisterClient(client) })
 +	handler := NewOpenAIAPIHandler(handlers.NewBaseAPIHandlers(&config.SDKConfig{}, nil))
 +	response := httptest.NewRecorder()
@@ -861,14 +916,16 @@ index 0000000..182cc4d
 +	}
 +	var result struct {
 +		Data []struct {
-+			ID    string   `json:"id"`
-+			Input []string `json:"supported_input_modalities"`
++			ID     string   `json:"id"`
++			Input  []string `json:"supported_input_modalities"`
++			Output []string `json:"supported_output_modalities"`
 +		} `json:"data"`
 +	}
 +	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 +		t.Fatal(err)
 +	}
 +	seen := false
++	imageModels := 0
 +	for _, model := range result.Data {
 +		if model.ID == "t3-image-model" {
 +			seen = true
@@ -876,9 +933,21 @@ index 0000000..182cc4d
 +				t.Fatalf("image support lost: %v", model.Input)
 +			}
 +		}
-+		if model.ID == "t3-unknown-model" && len(model.Input) != 0 {
++		if strings.HasPrefix(model.ID, "gpt-image-") {
++			imageModels++
++			if !reflect.DeepEqual(model.Output, []string{"image"}) {
++				t.Fatalf("image-only output lost for %s: %v", model.ID, model.Output)
++			}
++		}
++		if model.ID == "t3-image-model" && !reflect.DeepEqual(model.Output, []string{"text", "image"}) {
++			t.Fatalf("mixed output lost: %v", model.Output)
++		}
++		if model.ID == "t3-unknown-model" && (len(model.Input) != 0 || len(model.Output) != 0) {
 +			t.Fatalf("invented modalities: %v", model.Input)
 +		}
++	}
++	if imageModels != 5 {
++		t.Fatalf("image model count = %d, want 5", imageModels)
 +	}
 +	if !seen {
 +		t.Fatal("missing image model")

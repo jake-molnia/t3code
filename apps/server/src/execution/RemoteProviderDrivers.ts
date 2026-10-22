@@ -1,3 +1,4 @@
+import { createGatewayCatalogReader, projectGatewaySnapshot } from "./ModelGatewayCatalog.ts";
 import { isAntigravityLogoutPrompt } from "../provider/AntigravityAuth.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import {
@@ -10,6 +11,7 @@ import { trackRemoteSessionSetup } from "./RemoteSessionSetup.ts";
 import * as AttachmentStaging from "../agentRuntime/AttachmentStaging.ts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as Config from "effect/Config";
+import * as Cause from "effect/Cause";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
@@ -42,7 +44,11 @@ import {
   ConfigureProvider,
 } from "./WorkerProviders.ts";
 import { sameIdentity } from "./ExecutionWorker.ts";
-import type { ExecutionClient } from "./ExecutionClient.ts";
+import {
+  type ExecutionClient,
+  ExecutionOperationError,
+  ExecutionTransportError,
+} from "./ExecutionClient.ts";
 
 const decodeSnapshot = Schema.decodeUnknownEffect(Schema.toCodecJson(C.ServerProvider));
 const isCodexSettings = Schema.is(C.CodexSettings);
@@ -55,6 +61,14 @@ const encodeRpcValueSync = Schema.encodeUnknownSync(Schema.toCodecJson(CommitInp
 const encodeRpcValueSync2 = Schema.encodeUnknownSync(Schema.toCodecJson(PrInput));
 const encodeRpcValueSync3 = Schema.encodeUnknownSync(Schema.toCodecJson(BranchInput));
 const encodeRpcValueSync4 = Schema.encodeUnknownSync(Schema.toCodecJson(TitleInput));
+const isProviderDriverError = Schema.is(ProviderDriverError);
+
+function snapshotExecutionFailure(cause: unknown) {
+  while (Cause.isUnknownError(cause) || isProviderDriverError(cause)) cause = cause.cause;
+  return cause instanceof ExecutionOperationError || cause instanceof ExecutionTransportError
+    ? cause
+    : undefined;
+}
 
 /** Keep upstream driver schemas and metadata; replace only their execution factory. */
 export const makeRemoteDrivers = Effect.gen(function* () {
@@ -81,13 +95,19 @@ export const makeRemoteDrivers = Effect.gen(function* () {
   const setupTracker = yield* Effect.serviceOption(WorktreeSetupTracker.WorktreeSetupTracker);
   const attachments = yield* Effect.serviceOption(AttachmentStaging.AttachmentStaging);
   const advertisedMcp = yield* Config.option(Config.String("T3_MCP_ADVERTISED_URL"));
-  const gatewayManaged = Option.isSome(yield* Config.option(Config.String("T3_GATEWAY_API_KEY")));
+  const gatewayKey = yield* Config.option(Config.String("T3_GATEWAY_API_KEY"));
+  const gatewayUrl = yield* Config.option(Config.String("T3_GATEWAY_MANAGEMENT_URL"));
+  const readGatewayCatalog =
+    Option.isSome(gatewayKey) && Option.isSome(gatewayUrl)
+      ? createGatewayCatalogReader(gatewayUrl.value, gatewayKey.value)
+      : undefined;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   return BUILT_IN_DRIVERS.map((driver): AnyProviderDriver => ({
     ...driver,
     create: (input) =>
       Effect.gen(function* () {
         const instanceId = input.instanceId;
+        const gatewayManaged = Option.isSome(gatewayKey) && driver.driverKind !== "antigravity";
         const credentialRecipients = new Map<string, ExecutionClient>();
         let configuredUtility: ExecutionClient["identity"] | undefined;
         const authPolicy = gatewayManaged
@@ -356,22 +376,66 @@ export const makeRemoteDrivers = Effect.gen(function* () {
                 .observeWorkspace(`t3:utility:${instanceId}`)
                 .pipe(
                   Effect.catch((error) =>
-                    Runtime.isWorkerObservationPending(error)
+                    Runtime.isWorkerObservationPending(error) ||
+                    Runtime.isWorkerObservationStopping(error)
                       ? Effect.succeed(null)
                       : Effect.fail(error),
                   ),
                 );
               if (observation === null || observation.kind === "stopped") return lastSnapshot;
               client = observation.client;
+            }
+            return yield* Effect.gen(function* () {
               if (!configuredUtility || !sameIdentity(configuredUtility, client.identity)) {
                 yield* configure(client, false);
                 configuredUtility = client.identity;
               }
-            }
-            const raw = yield* Effect.tryPromise(() =>
-              client.call(method, { instanceId, input: null }),
+              const raw = yield* Effect.tryPromise(() =>
+                client.call(method, { instanceId, input: null }),
+              );
+              return yield* decodeSnapshot(raw);
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.gen(function* () {
+                  if (wake || lastSnapshot === undefined) return yield* Effect.fail(error);
+                  const executionFailure = snapshotExecutionFailure(error);
+                  if (
+                    (executionFailure instanceof ExecutionOperationError &&
+                      (executionFailure.code === "worker_quiescent" ||
+                        executionFailure.code === "worker_not_admitting" ||
+                        executionFailure.code === "stale_identity")) ||
+                    (executionFailure instanceof ExecutionTransportError &&
+                      executionFailure.code === "identity_changed")
+                  )
+                    return lastSnapshot;
+                  if (
+                    executionFailure instanceof ExecutionTransportError &&
+                    (executionFailure.code === "unavailable" ||
+                      executionFailure.code === "timeout" ||
+                      executionFailure.code === "authorization")
+                  ) {
+                    const requiresStop = executionFailure.code === "authorization";
+                    const latest = yield* runtime
+                      .observeWorkspace(`t3:utility:${instanceId}`)
+                      .pipe(
+                        Effect.catch((cause) =>
+                          Runtime.isWorkerObservationStopping(cause) ||
+                          (!requiresStop && Runtime.isWorkerObservationPending(cause))
+                            ? Effect.succeed(null)
+                            : Effect.fail(cause),
+                        ),
+                      );
+                    if (
+                      latest === null ||
+                      latest.kind === "stopped" ||
+                      (!requiresStop && !sameIdentity(client.identity, latest.client.identity))
+                    )
+                      return lastSnapshot;
+                  }
+                  return yield* Effect.fail(error);
+                }),
+              ),
             );
-            return yield* decodeSnapshot(raw);
           }).pipe(
             Effect.catch(() =>
               lastSnapshot !== undefined && !gatewayManaged
@@ -388,6 +452,13 @@ export const makeRemoteDrivers = Effect.gen(function* () {
               Effect.sync(() => {
                 lastSnapshot = value;
               }),
+            ),
+            Effect.flatMap((value) =>
+              gatewayManaged && readGatewayCatalog && input.enabled
+                ? Effect.promise(readGatewayCatalog).pipe(
+                    Effect.map((catalog) => projectGatewaySnapshot(value, catalog)),
+                  )
+                : Effect.succeed(value),
             ),
           );
         const getSnapshot = snapshot("provider.snapshot", false);

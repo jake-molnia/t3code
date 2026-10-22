@@ -44,6 +44,7 @@ import {
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolvePendingHandoff } from "@t3tools/client-runtime/handoff";
+import { resolveLatestWorktreeSetup } from "@t3tools/client-runtime/worktree-setup";
 import { HandoffRow } from "./chat/V2LifecycleRow";
 import {
   codexFeedbackMessage,
@@ -329,6 +330,8 @@ import { environmentCatalog } from "../connection/catalog";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useEnvironmentDisconnectDelay } from "../hooks/useEnvironmentDisconnectDelay";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useDraftWorkspaceDefaults } from "../hooks/useDraftWorkspaceDefaults";
+import { guardDraftSend } from "../lib/draftSend";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { useRemoveClonedProject } from "../hooks/useRemoveClonedProject";
@@ -479,6 +482,7 @@ import {
   resolveFileAttachmentUrl,
   resolveProactiveTurnDiffAction,
   resolveSendEnvMode,
+  resolveWorktreeBootstrap,
   resolveThreadMetadataUpdateForNextTurn,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
@@ -1566,6 +1570,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const canReadTerminal = useEnvironmentScope(environmentId, AuthTerminalReadScope);
   const draftId = routeKind === "draft" ? props.draftId : null;
+  useDraftWorkspaceDefaults(draftId);
   const handleNewThread = useNewThreadHandler();
   const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
   const routeThreadRef = useMemo(
@@ -3788,10 +3793,7 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     if (!latestWorktreeSetup) return;
     setHeldWorktreeSetup((current) =>
-      current?.threadId === latestWorktreeSetup.threadId &&
-      current.sequence > latestWorktreeSetup.sequence
-        ? current
-        : latestWorktreeSetup,
+      resolveLatestWorktreeSetup({ latest: latestWorktreeSetup, previous: current }),
     );
   }, [latestWorktreeSetup]);
   useEffect(() => {
@@ -5076,10 +5078,20 @@ export default function ChatView(props: ChatViewProps) {
     (instanceId: ProviderInstanceId) => {
       void navigate({
         to: "/settings/providers",
-        search: { environmentId, instanceId },
+        search: {
+          instanceId,
+          ...(activeProject
+            ? {
+                project: deriveLogicalProjectKeyFromSettings(
+                  activeProject,
+                  projectGroupingSettings,
+                ),
+              }
+            : {}),
+        },
       });
     },
-    [environmentId, navigate],
+    [activeProject, projectGroupingSettings, navigate],
   );
   const canOperatePreview = useEnvironmentScope(
     activeThreadRef?.environmentId ?? null,
@@ -8368,8 +8380,8 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
-  const onSend = async (
-    e?: { preventDefault: () => void },
+  const sendWithResolvedDefaults = async (
+    _event?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
     submissionIntent: ComposerSubmissionIntent = "foreground",
     directAnnotation?: {
@@ -8377,7 +8389,6 @@ export default function ChatView(props: ChatViewProps) {
       image: ComposerImageAttachment | null;
     },
   ) => {
-    e?.preventDefault();
     // Typed out in full rather than picked from the menu. Attachments or contexts
     // mean the user is sending a prompt, so those go through as usual.
     if (
@@ -8863,10 +8874,15 @@ export default function ChatView(props: ChatViewProps) {
     }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !sendQueuesBehindSetup && (!isServerThread || activeMessageCount === 0);
-    const baseBranchForWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
-        ? activeThreadBranch
-        : null;
+    const worktreeBootstrap = resolveWorktreeBootstrap({
+      isFirstMessage,
+      envMode: sendEnvMode,
+      worktreePath: activeThread.worktreePath,
+      branch: activeThreadBranch,
+      projectCwd: activeProject.workspaceRoot,
+      startFromOrigin,
+    });
+    const baseBranchForWorktree = worktreeBootstrap?.prepareWorktree.baseBranch ?? null;
 
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
@@ -9565,16 +9581,7 @@ export default function ChatView(props: ChatViewProps) {
                     },
                   }
                 : {}),
-              ...(baseBranchForWorktree
-                ? {
-                    prepareWorktree: {
-                      projectCwd: activeProject.workspaceRoot,
-                      baseBranch: baseBranchForWorktree,
-                      ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                    },
-                    runSetupScript: true,
-                  }
-                : {}),
+              ...worktreeBootstrap,
             }
           : undefined;
       const backgroundThreadRef =
@@ -9784,6 +9791,13 @@ export default function ChatView(props: ChatViewProps) {
       if (!sendQueuesBehindSetup) resetLocalDispatch();
     }
   };
+
+  const onSend = (...args: Parameters<typeof sendWithResolvedDefaults>) =>
+    guardDraftSend(
+      draftId,
+      Boolean(draftThread?.pendingWorkspaceDefaults),
+      sendWithResolvedDefaults,
+    )(...args);
 
   const onRespondToApproval = useCallback(
     async (requestId: RuntimeRequestId, decision: ProviderApprovalDecision) => {
@@ -10588,6 +10602,7 @@ export default function ChatView(props: ChatViewProps) {
     workLocallyResendDraftId !== null &&
     workLocallyResendDraftId === draftId &&
     isLocalDraftThread &&
+    !draftThread?.pendingWorkspaceDefaults &&
     !isSendBusy &&
     !isConnecting &&
     !isRevertingCheckpoint &&
@@ -11362,23 +11377,25 @@ export default function ChatView(props: ChatViewProps) {
                               canResume={resumableRunId !== null || hasHeldQueuedRuns}
                               isRevertingCheckpoint={isRevertingCheckpoint}
                               sendDisabledReason={
-                                !canOperateThread
-                                  ? "This connection cannot change threads."
-                                  : needsLoadBalancing
-                                    ? poolCatalog.pending
-                                      ? "Checking pool resources"
-                                      : "Choose a pool to continue"
-                                    : poolCompatibilitySendBlock
-                                      ? poolCompatibilitySendBlock
-                                      : isRevertingCheckpoint
-                                        ? "Rewinding conversation"
-                                        : feedbackUploading
-                                          ? "Sending feedback"
-                                          : threadDetailLoading
-                                            ? "Messages loading"
-                                            : worktreeSetupBlocksSend
-                                              ? "Preparing worktree"
-                                              : projectCloneSendBlockReason
+                                draftThread?.pendingWorkspaceDefaults
+                                  ? "Loading project defaults"
+                                  : !canOperateThread
+                                    ? "This connection cannot change threads."
+                                    : needsLoadBalancing
+                                      ? poolCatalog.pending
+                                        ? "Checking pool resources"
+                                        : "Choose a pool to continue"
+                                      : poolCompatibilitySendBlock
+                                        ? poolCompatibilitySendBlock
+                                        : isRevertingCheckpoint
+                                          ? "Rewinding conversation"
+                                          : feedbackUploading
+                                            ? "Sending feedback"
+                                            : threadDetailLoading
+                                              ? "Messages loading"
+                                              : worktreeSetupBlocksSend
+                                                ? "Preparing worktree"
+                                                : projectCloneSendBlockReason
                               }
                               isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                               queuedRunsControl={queuedRunsControl}

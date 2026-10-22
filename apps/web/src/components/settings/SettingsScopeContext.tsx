@@ -9,7 +9,12 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environmen
 import { getProjectFileQueryAtom, optimisticFileAtom } from "../files/projectFilesQueryState";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 import { resolveScopedSettingsTargets, selectScopedSettingsEnvironments } from "./scopedSettings";
-import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope";
+import {
+  resolveSettingsScope,
+  isProjectSettingsScope,
+  selectProjectSettingsScope,
+  type SettingsScopeSearch,
+} from "./settingsScope";
 import { selectSingleEnvironmentScope } from "./settingsScopeAxis";
 
 /**
@@ -18,7 +23,9 @@ import { selectSingleEnvironmentScope } from "./settingsScopeAxis";
  * settled; the query atom caches per (environment, cwd).
  */
 function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
-  const members = scope.kind === "project" || scope.kind === "checkout" ? scope.members : [];
+  const members = isProjectSettingsScope(scope) ? scope.members : [];
+  // A bulk settings visit must not start every project workspace.
+  const passive = scope.kind === "all";
   return useAtomValue(
     useMemo(
       () =>
@@ -30,6 +37,7 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
                 member.environmentId,
                 member.workspaceRoot,
                 T3_PROJECT_FILE_NAME,
+                passive ? { passive: true } : undefined,
               ),
             );
             if (result.waiting) continue;
@@ -49,26 +57,26 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
           }
           return files;
         }),
-      [members],
+      [members, passive],
     ),
   );
 }
 
-function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, singleEnvironment: boolean) {
+function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, projectOnly: boolean) {
   const groups = useSettingsProjectGroups();
   const { environments: availableEnvironments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const search = useMemo(
     () =>
-      singleEnvironment
-        ? selectSingleEnvironmentScope(
-            rawSearch,
-            resolveSettingsScope(rawSearch, groups, availableEnvironments),
+      projectOnly
+        ? selectProjectSettingsScope(rawSearch)
+        : selectSingleEnvironmentScope(
+            {},
+            resolveSettingsScope({}, groups, availableEnvironments),
             availableEnvironments,
             primaryEnvironmentId,
-          )
-        : rawSearch,
-    [availableEnvironments, groups, primaryEnvironmentId, rawSearch, singleEnvironment],
+          ),
+    [availableEnvironments, groups, primaryEnvironmentId, rawSearch, projectOnly],
   );
   const scope = useMemo(
     () => resolveSettingsScope(search, groups, availableEnvironments),
@@ -112,13 +120,15 @@ export function SettingsScopeProvider({
   onChange,
   children,
   singleEnvironment = false,
+  projectOnly = true,
 }: {
   singleEnvironment?: boolean;
+  projectOnly?: boolean;
   search: SettingsScopeSearch;
   onChange: (next: SettingsScopeSearch) => void;
   children: ReactNode;
 }) {
-  const resolved = useResolvedSettingsScope(search, singleEnvironment);
+  const resolved = useResolvedSettingsScope(search, projectOnly);
   const value = useMemo(
     () => ({ ...resolved, singleEnvironment, selectScope: onChange }),
     [onChange, resolved, singleEnvironment],

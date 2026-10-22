@@ -10,6 +10,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
@@ -23,6 +24,7 @@ import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import * as WorkspaceRouting from "./agentRuntime/WorkspaceRouting.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -131,6 +133,7 @@ export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
   settings = DEFAULT_SERVER_SETTINGS,
 ) {
   const git = yield* GitVcsDriver.GitVcsDriver;
+  const routes = yield* Effect.serviceOption(WorkspaceRouting.WorkspaceRouting);
   const workspaceRoots = [
     ...new Set(
       projects
@@ -175,6 +178,8 @@ export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
           refName: result.refName,
         });
       }).pipe(
+        (pull) =>
+          Option.isSome(routes) && routes.value.enabled ? routes.value.observe(cwd, pull) : pull,
         Effect.catch((cause) =>
           Effect.logWarning("Automatic project pull failed", {
             cwd,

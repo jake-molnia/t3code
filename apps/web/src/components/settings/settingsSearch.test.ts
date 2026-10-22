@@ -366,13 +366,13 @@ describe("searchSettings", () => {
 });
 
 describe("settings search targets", () => {
-  it("requires an environment for the resolved telemetry export destination", () => {
+  it("resolves shared telemetry export without an environment picker", () => {
     const result = searchSettings("OpenTelemetry export").find(
       (item) => item.id === "telemetry-export",
     )!;
     const target = getSettingsSearchTargetScope(result.targetId ?? result.id)!;
-    expect(isSettingsSearchScopeAvailable(target.scope, "all")).toBe(false);
-    expect(isSettingsSearchScopeAvailable(target.scope, "project")).toBe(false);
+    expect(isSettingsSearchScopeAvailable(target.scope, "all")).toBe(true);
+    expect(isSettingsSearchScopeAvailable(target.scope, "project")).toBe(true);
     expect(isSettingsSearchScopeAvailable(target.scope, "environment")).toBe(true);
   });
   it.each([
@@ -416,16 +416,16 @@ describe("settings search targets", () => {
       const item = getSettingsSearchTargetScope(id)!;
       expect(isSettingsSearchScopeAvailable(item.scope, "all")).toBe(true);
       expect(isSettingsSearchScopeAvailable(item.scope, "environment")).toBe(true);
-      expect(isSettingsSearchScopeAvailable(item.scope, "project")).toBe(false);
+      expect(isSettingsSearchScopeAvailable(item.scope, "project")).toBe(true);
     }
   });
 
-  it("keeps environment-wide settings out of project scopes", () => {
+  it("keeps shared app settings reachable from project scopes", () => {
     const updates = getSettingsSearchTargetScope("git-fetch-interval")!;
     expect(updates.scope).toBe("environment-defaults");
     expect(isSettingsSearchScopeAvailable(updates.scope, "environment")).toBe(true);
     expect(isSettingsSearchScopeAvailable(updates.scope, "all")).toBe(true);
-    expect(isSettingsSearchScopeAvailable(updates.scope, "project")).toBe(false);
+    expect(isSettingsSearchScopeAvailable(updates.scope, "project")).toBe(true);
     const streaming = getSettingsSearchTargetScope("response-streaming")!;
     expect(streaming.scope).toBe("project-defaults");
     expect(isSettingsSearchScopeAvailable(streaming.scope, "project")).toBe(true);

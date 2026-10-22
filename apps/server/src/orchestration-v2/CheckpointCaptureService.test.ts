@@ -17,7 +17,11 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -52,10 +56,11 @@ const modelSelection = {
 } as const;
 
 it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
-  it.effect.each([false, true])(
-    "captures without decoding history or losing newer delegated completion, ref lookup fails=%s",
-    (refLookupFails) =>
+  it.effect.each(["captured", "ref-lookup-failed", "capture-failed"] as const)(
+    "records checkpoint completion after capture without decoding history or losing newer delegated completion: %s",
+    (scenario) =>
       Effect.gen(function* () {
+        const refLookupFails = scenario === "ref-lookup-failed";
         const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
         const now = yield* DateTime.now;
         const later = DateTime.add(now, { seconds: 1 });
@@ -266,6 +271,12 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
         );
 
         const committed = yield* Ref.make<ReadonlyArray<OrchestrationV2DomainEvent>>([]);
+        const acceptedAt = yield* Ref.make<DateTime.Utc | null>(null);
+        const captureEntered = yield* Deferred.make<void>();
+        const captureReleased = yield* Deferred.make<void>();
+        const waitForCapture = Deferred.succeed(captureEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(captureReleased)),
+        );
         const layerCapture = CheckpointCaptureService.layer.pipe(
           Layer.provide(
             Layer.mergeAll(
@@ -279,7 +290,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
                         Layer.mock(CheckpointStore.CheckpointStore)({
                           listAuthoredPaths: () => Effect.succeed(null),
                           isGitRepository: () => Effect.succeed(true),
-                          captureCheckpoint: () => Effect.void,
+                          captureCheckpoint: () => waitForCapture,
                           hasCheckpointRef: () =>
                             Effect.fail(
                               new VcsProcessTimeoutError({
@@ -298,11 +309,24 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
                       Effect.die(
                         "baseline materialization must be skipped when ordinal 0 is ready",
                       ),
-                    capture: () => Effect.succeed(captured),
+                    capture: () =>
+                      waitForCapture.pipe(
+                        Effect.andThen(
+                          scenario === "capture-failed"
+                            ? Effect.fail(
+                                new CheckpointService.CheckpointCaptureError({
+                                  scopeId,
+                                  cause: "fixture capture failure",
+                                }),
+                              )
+                            : Effect.succeed(captured),
+                        ),
+                      ),
                   }),
               Layer.mock(EventSink.EventSinkV2)({
                 commitCommand: (input) =>
                   Ref.set(committed, input.events).pipe(
+                    Effect.andThen(Ref.set(acceptedAt, input.acceptedAt)),
                     Effect.as({
                       commandId: input.commandId,
                       committed: true,
@@ -323,16 +347,50 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
             .pipe(Effect.flip);
           assert.instanceOf(incomplete, CheckpointCaptureService.CheckpointCaptureExecutionError);
           // Capture reads the waiting run while the projection still holds the stale cohort.
-          yield* service.execute({ threadId, runId, scopeId });
+          const captureFiber = yield* service
+            .execute({ threadId, runId, scopeId })
+            .pipe(Effect.exit, Effect.forkChild);
+          yield* Deferred.await(captureEntered);
+          yield* TestClock.adjust("39 seconds");
+          assert.deepEqual(yield* Ref.get(committed), []);
+          assert.isNull(yield* Ref.get(acceptedAt));
+          yield* Deferred.succeed(captureReleased, undefined);
+          const captureExit = yield* Fiber.join(captureFiber);
+          if (scenario === "capture-failed") {
+            assert.isTrue(Exit.isFailure(captureExit));
+            assert.deepEqual(yield* Ref.get(committed), []);
+            assert.isNull(yield* Ref.get(acceptedAt));
+            const unchanged = yield* projectionStore.getCheckpointCaptureContext(threadId, {
+              runId,
+              scopeId,
+            });
+            assert.equal(unchanged.run?.status, "waiting");
+            assert.isNull(unchanged.run?.completedAt);
+            assert.isNull(unchanged.run?.checkpointId);
+            assert.equal(unchanged.rootNode?.status, "waiting");
+            return;
+          }
+          assert.isTrue(Exit.isSuccess(captureExit));
+          const finishedAt = DateTime.add(now, { seconds: 39 });
+          assert.deepEqual(yield* Ref.get(acceptedAt), finishedAt);
 
           const events = yield* Ref.get(committed);
+          for (const event of events) assert.deepEqual(event.occurredAt, finishedAt);
+          const nodeUpdated = events.find((event) => event.type === "node.updated");
+          assert.deepEqual(nodeUpdated?.payload.completedAt, finishedAt);
+          const checkpointItem = events.find((event) => event.type === "turn-item.updated");
+          assert.deepEqual(checkpointItem?.payload.startedAt, now);
+          assert.deepEqual(checkpointItem?.payload.completedAt, finishedAt);
+          assert.deepEqual(checkpointItem?.payload.updatedAt, finishedAt);
           const runUpdated = events.find((event) => event.type === "run.updated");
           assert.isDefined(runUpdated);
           if (runUpdated?.type !== "run.updated") {
             return;
           }
           assert.equal(runUpdated.payload.status, "completed");
+          assert.deepEqual(runUpdated.payload.completedAt, finishedAt);
           const capturedEvent = events.find((event) => event.type === "checkpoint.captured");
+          assert.deepEqual(capturedEvent?.payload.capturedAt, finishedAt);
           assert.equal(
             runUpdated.payload.checkpointId,
             refLookupFails ? capturedEvent?.payload.id : captured.id,

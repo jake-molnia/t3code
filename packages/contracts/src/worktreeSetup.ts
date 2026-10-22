@@ -12,9 +12,19 @@ export const WORKTREE_SETUP_DETAIL_MAX_LENGTH = 200;
 export const WORKTREE_SETUP_TAIL_LINE_MAX_LENGTH = 400;
 export const WORKTREE_SETUP_ERROR_MAX_LENGTH = 1000;
 
+export const WORKSPACE_SEED_STAGE_ORDER = [
+  "seed-source",
+  "seed-checkpoint",
+  "seed-bundle",
+  "seed-transfer",
+  "seed-import",
+] as const;
+export type WorkspaceSeedStageId = (typeof WORKSPACE_SEED_STAGE_ORDER)[number];
+
 export const WorktreeSetupStageId = Schema.Literals([
   "sandbox",
   "seed",
+  ...WORKSPACE_SEED_STAGE_ORDER,
   "fetch",
   "checkout",
   "submodules",
@@ -107,6 +117,7 @@ export type WorktreeSetupCancelResult = typeof WorktreeSetupCancelResult.Type;
 export const WORKTREE_SETUP_STAGE_ORDER: ReadonlyArray<WorktreeSetupStageId> = [
   "sandbox",
   "seed",
+  ...WORKSPACE_SEED_STAGE_ORDER,
   "fetch",
   "checkout",
   "submodules",
@@ -120,6 +131,16 @@ export function worktreeSetupStageLabel(id: WorktreeSetupStageId): string {
       return "Start sandbox";
     case "seed":
       return "Prepare workspace";
+    case "seed-source":
+      return "Start source sandbox";
+    case "seed-checkpoint":
+      return "Capture workspace snapshot";
+    case "seed-bundle":
+      return "Bundle repository";
+    case "seed-transfer":
+      return "Transfer workspace";
+    case "seed-import":
+      return "Import workspace";
     case "fetch":
       return "Fetch base branch";
     case "checkout":

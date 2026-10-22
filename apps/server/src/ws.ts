@@ -1069,6 +1069,7 @@ const layerWsRpc = (
   clientOrigin: OrchestrationClientOrigin,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
+  serverOrigin: string,
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -2569,7 +2570,8 @@ const layerWsRpc = (
         [WS_METHODS.sandboxIdeSetupExport]: (input) => ideSetup.export(input.target),
         [WS_METHODS.sandboxIdePreferenceStatus]: (input) => ideSetup.status(input.target),
         [WS_METHODS.sandboxIdePreferenceResolve]: (input) => ideSetup.resolve(input),
-        [WS_METHODS.sandboxIdeOpen]: (input) => sandboxIde.open(input),
+        [WS_METHODS.sandboxIdeOpen]: (input) =>
+          sandboxIde.open(input, { authSessionId: currentSessionId, origin: serverOrigin }),
         [WS_METHODS.filesystemGetMetadata]: (input) => workspaceFileSystem.getMetadata(input),
         [WS_METHODS.filesystemBrowse]: (input) =>
           workspaceEntries.browse(input).pipe(
@@ -3097,7 +3099,13 @@ export const layer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            layerWsRpc(session, clientOrigin, previewAutomationBroker, serverBrowser).pipe(
+            layerWsRpc(
+              session,
+              clientOrigin,
+              previewAutomationBroker,
+              serverBrowser,
+              requestUrl.value.origin,
+            ).pipe(
               Layer.provide(Layer.succeed(McpConnections.McpConnections, mcpConnections)),
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees

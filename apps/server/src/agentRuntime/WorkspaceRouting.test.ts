@@ -214,7 +214,11 @@ it.layer(layer, { excludeTestServices: true })("registered workspace routing", (
         expect(childStages).toEqual([
           "sandbox:running",
           "sandbox:done",
-          "seed:skipped",
+          "seed-source:skipped",
+          "seed-checkpoint:skipped",
+          "seed-bundle:skipped",
+          "seed-transfer:skipped",
+          "seed-import:skipped",
           "checkout:skipped",
         ]);
         const owner = yield* sql<{

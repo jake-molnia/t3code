@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ProjectId } from "@t3tools/contracts";
-import { commonMcpSelection } from "./McpSettings.logic";
+import { commonMcpSelection, readMcpAuthReturnScope } from "./McpSettings.logic";
 
 const a = ProjectId.make("project-a");
 const b = ProjectId.make("project-b");
@@ -51,5 +51,38 @@ describe("bulk MCP project access", () => {
   it("keeps empty and unassigned selections disabled", () => {
     expect(commonMcpSelection([], [], "shared")).toBeNull();
     expect(commonMcpSelection([a, b], [], "shared")).toBeNull();
+  });
+});
+
+describe("MCP sign-in project return", () => {
+  it("restores the shared project and checkout selection after OAuth", () => {
+    const search = new URLSearchParams({
+      project: "repo:team/my project",
+      checkout: "central:123",
+    });
+    expect(readMcpAuthReturnScope(search.toString())).toEqual({
+      project: "repo:team/my project",
+      checkout: "central:123",
+    });
+  });
+
+  it("preserves a stale explicit project instead of redirecting access edits to another project", () => {
+    expect(readMcpAuthReturnScope("project=removed-project")).toEqual({
+      project: "removed-project",
+    });
+  });
+
+  it("drops OAuth callback fields and the old environment selector", () => {
+    expect(
+      readMcpAuthReturnScope("project=chosen&machine=old&code=secret&state=state&error=denied"),
+    ).toEqual({
+      project: "chosen",
+    });
+  });
+
+  it("keeps All projects selected when OAuth returns without a project", () => {
+    expect(readMcpAuthReturnScope("")).toEqual({});
+    expect(readMcpAuthReturnScope(null)).toEqual({});
+    expect(readMcpAuthReturnScope("project=%20")).toEqual({});
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, type WorktreeSetupSnapshot } from "@t3tools/contracts";
-import { resolveVisibleWorktreeSetup } from "./worktreeSetup.ts";
+import { resolveLatestWorktreeSetup, resolveVisibleWorktreeSetup } from "./worktreeSetup.ts";
 
 const snapshot: WorktreeSetupSnapshot = {
   threadId: ThreadId.make("resumed-thread"),
@@ -22,6 +22,48 @@ const input = {
   followUpSent: true,
   latestUserMessageAt: "2026-10-13T12:00:00.000Z",
 };
+
+describe("setup attempt reconciliation", () => {
+  const previous = { ...snapshot, phase: "failed" as const, sequence: 9 };
+  const retry = { ...snapshot, startedAt: "2026-10-13T12:01:00.000Z", sequence: 0 };
+
+  it("keeps the new attempt through reset counters, late events, and stream gaps", () => {
+    let held: WorktreeSetupSnapshot | null = previous;
+    for (const latest of [null, retry, { ...previous, sequence: 10 }, undefined]) {
+      held = resolveLatestWorktreeSetup({ latest, previous: held });
+      expect(held).toBe(latest === null ? previous : retry);
+    }
+    const completed = { ...retry, phase: "done" as const, sequence: 2 };
+    held = resolveLatestWorktreeSetup({ latest: completed, previous: held });
+    expect(held).toBe(completed);
+    expect(resolveLatestWorktreeSetup({ latest: retry, previous: held })).toBe(completed);
+  });
+
+  it("uses sequence order within an attempt and timestamps across attempts", () => {
+    const updated = { ...retry, sequence: 1 };
+    expect(resolveLatestWorktreeSetup({ latest: updated, previous: retry })).toBe(updated);
+    expect(resolveLatestWorktreeSetup({ latest: retry, previous: updated })).toBe(updated);
+    expect(resolveLatestWorktreeSetup({ latest: retry, previous })).toBe(retry);
+    expect(resolveLatestWorktreeSetup({ latest: previous, previous: retry })).toBe(retry);
+  });
+
+  it("does not carry a previous thread's setup into a different thread", () => {
+    const other = { ...snapshot, threadId: ThreadId.make("other-thread"), sequence: 0 };
+    expect(resolveLatestWorktreeSetup({ latest: other, previous })).toBe(other);
+  });
+
+  it("reconciles live and recorded attempts before deciding visibility", () => {
+    expect(resolveVisibleWorktreeSetup({ ...input, live: retry, recorded: previous })).toBe(retry);
+    expect(resolveVisibleWorktreeSetup({ ...input, live: previous, recorded: retry })).toBe(retry);
+    expect(
+      resolveVisibleWorktreeSetup({
+        ...input,
+        live: { ...retry, phase: "done" },
+        recorded: previous,
+      }),
+    ).toBeNull();
+  });
+});
 
 describe("resumed sandbox progress visibility", () => {
   it.each(["running", "failed", "cancelled"] as const)("shows %s on a later turn", (phase) => {

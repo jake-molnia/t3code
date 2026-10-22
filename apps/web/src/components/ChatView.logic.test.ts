@@ -1832,6 +1832,24 @@ describe("worktree setup visibility", () => {
     expect(resolve(other, other)).toEqual({ snapshot: null, isPreparingWorktree: false });
   });
 
+  it("shows a new setup attempt after the server resets its sequence counter", () => {
+    const previous = { ...settledDone, sequence: 9 };
+    const retry = {
+      ...base,
+      startedAt: new Date(Date.parse(base.startedAt) + 60_000).toISOString(),
+      sequence: 0,
+    };
+    expect(
+      resolveWorktreeSetupProgress({
+        threadId,
+        localPreparing: false,
+        runStatus: "preparing",
+        latest: retry,
+        held: previous,
+      }).snapshot,
+    ).toEqual(retry);
+  });
+
   it.each(["failed", "cancelled"] as const)(
     "does not keep %s setup in the preparing state",
     (phase) => {

@@ -103,7 +103,7 @@ export const layer: Layer.Layer<
         });
       }
 
-      const capturedAt = yield* DateTime.now;
+      const captureStartedAt = yield* DateTime.now;
       const baselineOrdinalWithinScope = Math.max(0, run.ordinal - 1);
       const hasReadyCheckpoint = (ordinalWithinScope: number) =>
         readyCheckpointOrdinals.includes(ordinalWithinScope);
@@ -120,14 +120,16 @@ export const layer: Layer.Layer<
             scope,
             ordinalWithinScope: baselineOrdinalWithinScope,
           });
-      const checkpoint = yield* checkpoints.capture({
+      const captureResult = yield* checkpoints.capture({
         scope,
         runId: run.id,
         nodeId: rootNode.id,
         ordinalWithinScope: run.ordinal,
         appRunOrdinal: run.ordinal,
-        capturedAt,
+        capturedAt: captureStartedAt,
       });
+      const capturedAt = yield* DateTime.now;
+      const checkpoint = { ...captureResult, capturedAt };
       // Match RunExecutionService: capture loaded the waiting run before
       // materializing baselines. Omit delegatedCompletion so a newer cohort
       // write during capture is not overwritten by this stale snapshot
@@ -195,6 +197,7 @@ export const layer: Layer.Layer<
               rootNode,
               providerThread,
               checkpoint,
+              startedAt: captureStartedAt,
               completedAt: capturedAt,
             }),
           },
@@ -257,6 +260,7 @@ function makeCheckpointTurnItem(input: {
   readonly rootNode: OrchestrationV2ExecutionNode;
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly checkpoint: OrchestrationV2Checkpoint;
+  readonly startedAt: DateTime.Utc;
   readonly completedAt: DateTime.Utc;
 }): OrchestrationV2TurnItem {
   return {
@@ -274,7 +278,7 @@ function makeCheckpointTurnItem(input: {
     ordinal: input.run.ordinal * 100 + 99,
     status: "completed",
     title: null,
-    startedAt: input.completedAt,
+    startedAt: input.startedAt,
     completedAt: input.completedAt,
     updatedAt: input.completedAt,
     type: "checkpoint",

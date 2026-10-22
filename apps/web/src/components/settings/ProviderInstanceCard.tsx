@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckIcon, ExternalLinkIcon, LayersIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
+import { ExternalLinkIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { Lock as LockGlyph, LockOpen } from "lucide";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
@@ -31,7 +31,6 @@ import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { DraftInput } from "../ui/draft-input";
 import { SecretInput } from "./SecretInput";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type {
@@ -43,7 +42,7 @@ import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
-import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
+import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
@@ -490,91 +489,10 @@ export function ProviderEnvironmentSection(props: {
   );
 }
 
-/**
- * When a project is in scope, the enable control reads and writes that
- * project's override instead of the environment's `instance.enabled`.
- * `value` is the project's explicit override (`undefined` means it
- * inherits the environment); `effectiveEnabled` is what the Switch shows.
- */
-/**
- * The project-scope counterpart of a settings row's inheritance indicator:
- * hover for the summary, open for the project and device values side by side.
- */
-function ProjectOverrideInheritance({
-  projectEnabled,
-  deviceEnabled,
-}: {
-  readonly projectEnabled: boolean;
-  readonly deviceEnabled: boolean;
-}) {
-  const layers = [
-    { key: "project", label: "Project", enabled: projectEnabled, effective: true },
-    { key: "device", label: "Device", enabled: deviceEnabled, effective: false },
-  ];
-  return (
-    <Popover>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <PopoverTrigger
-              render={
-                <Button
-                  size="icon-micro"
-                  variant="ghost-muted"
-                  aria-label="Overridden for this project. Show where this value comes from"
-                />
-              }
-            />
-          }
-        >
-          <LayersIcon className="size-3 text-primary" />
-        </TooltipTrigger>
-        <TooltipPopup side="top">Overridden for this project</TooltipPopup>
-      </Tooltip>
-      <PopoverPopup align="end" width="md" padding="none">
-        <ol role="list" className="px-3 py-2.5 text-sm">
-          {layers.map((layer) => (
-            <li
-              key={layer.key}
-              className={cn(
-                "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-2 py-1",
-                layer.effective && "bg-foreground/[0.06]",
-              )}
-            >
-              <span
-                className={cn(
-                  "min-w-0 truncate",
-                  layer.effective ? "font-medium text-foreground" : "text-muted-foreground",
-                )}
-              >
-                {layer.label}
-              </span>
-              <span
-                className={cn(
-                  "flex items-center gap-1.5",
-                  layer.effective ? "text-foreground" : "text-muted-foreground",
-                )}
-              >
-                {layer.enabled ? "On" : "Off"}
-                {layer.effective ? (
-                  <CheckIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
-                ) : (
-                  <span aria-hidden className="size-3.5 shrink-0" />
-                )}
-              </span>
-            </li>
-          ))}
-        </ol>
-      </PopoverPopup>
-    </Popover>
-  );
-}
-
 interface ProjectOverrideControl {
-  readonly value: boolean | undefined;
+  readonly mixed?: boolean;
   readonly effectiveEnabled: boolean;
   readonly onChange: (next: boolean) => void;
-  readonly onReset: () => void;
 }
 
 interface ProviderInstanceCardProps {
@@ -618,7 +536,7 @@ interface ProviderInstanceCardProps {
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
   readonly onAcceptUrlAuth?: ((action: AcpRegistryUrlAuthAction) => void) | undefined;
   readonly environmentId?: EnvironmentId | undefined;
-  /** Omit this prop entirely for environment-wide editing. */
+  /** Required to change project enablement. */
   readonly projectOverride?: ProjectOverrideControl | undefined;
   readonly acpProjects?:
     | ReadonlyArray<{
@@ -644,14 +562,8 @@ const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> 
  *   - Unknown drivers (`driverOption === undefined`) get a read-only
  *     notice instead of editable fields, so fork instances round-trip
  *     without accidentally destroying their config.
- *   - The enabled Switch writes to the envelope's `instance.enabled`
- *     field, which is the single enabled flag: the server folds any legacy
- *     driver-specific `config.enabled` into the envelope on load and both
- *     sides resolve through `resolveProviderInstanceEnabled` (an explicit
- *     false wins, then envelope, then config, then the driver default).
- *     With `projectOverride` set, the Switch instead reads and writes
- *     that project's override, leaving the environment's `instance.enabled`
- *     untouched.
+ *   - Enablement writes only the selected project's policy. Shared account
+ *     configuration and model preferences remain on the provider instance.
  */
 export function ProviderInstanceCard({
   instanceId,
@@ -681,6 +593,7 @@ export function ProviderInstanceCard({
   acpProjects = EMPTY_ACP_PROJECTS,
   projectOverride,
 }: ProviderInstanceCardProps) {
+  const usesGatewayCredentials = gatewayManaged && instance.driver !== "antigravity";
   const enabled = projectOverride?.effectiveEnabled ?? resolveProviderInstanceEnabled(instance);
   const compatibility = enabled ? liveProvider?.compatibilityAdvisory : undefined;
   // A locally disabled provider reads "Disabled" with a muted dot even if its
@@ -690,11 +603,26 @@ export function ProviderInstanceCard({
     : "disabled";
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   // `liveProvider.enabled` is machine-wide; a project override can turn it on.
-  const summary = enabled
-    ? getProviderSummary(liveProvider && { ...liveProvider, enabled: true })
-    : { headline: "Disabled", detail: null };
+  const summary = liveProvider
+    ? getProviderSummary({ ...liveProvider, enabled })
+    : enabled
+      ? getProviderSummary(undefined)
+      : {
+          headline: "Disabled",
+          detail: "Not used for new sessions. Saved configuration is retained.",
+        };
+  const statusHeadline = projectOverride?.mixed
+    ? "Mixed across selected projects"
+    : gatewayManaged && summary.headline === "Disabled"
+      ? "Not used for new sessions"
+      : summary.headline;
   const authEmail = liveProvider?.auth.email?.trim();
-  const isAuthenticated = enabled && liveProvider?.auth.status === "authenticated";
+  const isAuthenticated =
+    enabled &&
+    liveProvider?.installed === true &&
+    liveProvider.status === "ready" &&
+    liveProvider.availability !== "unavailable" &&
+    liveProvider.auth.status === "authenticated";
   const authLabel =
     enabled && liveProvider?.auth.status === "authenticated"
       ? (liveProvider.auth.label ?? liveProvider.auth.type ?? null)
@@ -715,7 +643,7 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  const customModels = gatewayManaged ? [] : readConfigCustomModels(instance.config);
+  const customModels = usesGatewayCredentials ? [] : readConfigCustomModels(instance.config);
   // Server-returned models may lag behind settings writes. Treat server
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
@@ -731,14 +659,6 @@ export function ProviderInstanceCard({
         ? ({ ...rest, displayName: trimmed } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
     );
-  };
-
-  const updateEnabled = (value: boolean) => {
-    if (projectOverride) {
-      projectOverride.onChange(value);
-      return;
-    }
-    onUpdate({ ...instance, enabled: value });
   };
 
   const updateAccentColor = (value: string) => {
@@ -861,7 +781,7 @@ export function ProviderInstanceCard({
     ) : (
       <>
         {statusDotNode}
-        <span>{summary.headline}</span>
+        <span>{statusHeadline}</span>
         {inlineStatusDetail ? (
           <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
         ) : null}
@@ -909,7 +829,7 @@ export function ProviderInstanceCard({
                   aria-live="polite"
                   className="pointer-events-auto line-clamp-2 [overflow-wrap:anywhere]"
                 >
-                  {summary.headline}
+                  {statusHeadline}
                   {needsAttention && inlineStatusDetail ? ` · ${inlineStatusDetail}` : null}
                 </span>
               </ProviderStatusDiagnostic>
@@ -917,25 +837,12 @@ export function ProviderInstanceCard({
           </span>
         </div>
         <span className="flex h-5 shrink-0 items-center gap-1">
-          {projectOverride?.value !== undefined ? (
-            <span className="flex items-center">
-              <ProjectOverrideInheritance
-                projectEnabled={projectOverride.value}
-                deviceEnabled={resolveProviderInstanceEnabled(instance)}
-              />
-              <SettingResetButton
-                label={`${displayName} enablement`}
-                tooltip="Reset to the device setting"
-                disabled={readOnly || !canWriteSettings}
-                onClick={projectOverride.onReset}
-              />
-            </span>
-          ) : null}
           <Switch
             checked={enabled}
-            disabled={readOnly || (projectOverride !== undefined && !canWriteSettings)}
-            onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-            aria-label={`Enable ${displayName}`}
+            mixed={projectOverride?.mixed ?? false}
+            disabled={readOnly || !projectOverride || !canWriteSettings}
+            onCheckedChange={(checked) => projectOverride?.onChange(Boolean(checked))}
+            aria-label={`Enable ${displayName} for selected projects`}
           />
         </span>
       </div>
@@ -975,7 +882,7 @@ export function ProviderInstanceCard({
   const runtimeFields = driverOption ? (
     <ProviderSettingsForm
       definition={driverOption}
-      fieldKeys={gatewayManaged ? HARNESS_EXECUTION_FIELDS : undefined}
+      fieldKeys={usesGatewayCredentials ? HARNESS_EXECUTION_FIELDS : undefined}
       value={instance.config}
       idPrefix={`provider-instance-${instanceId}`}
       variant="settings"
@@ -1063,7 +970,16 @@ export function ProviderInstanceCard({
         />
       </SettingsSection>
 
-      {!gatewayManaged && (setup || environmentFields.length > 0) ? (
+      {gatewayManaged && instance.driver === "antigravity" ? (
+        <SettingsSection title="Antigravity account">
+          <SettingsRow
+            title="Native authentication"
+            description="Sign in to Antigravity or configure its Gemini or Vertex AI credentials below. A Google account connected to the model gateway does not sign in to this harness."
+          />
+        </SettingsSection>
+      ) : null}
+
+      {!usesGatewayCredentials && (setup || environmentFields.length > 0) ? (
         <SettingsSection title="Setup">
           {setup}
           <div
@@ -1089,7 +1005,7 @@ export function ProviderInstanceCard({
         </SettingsSection>
       ) : null}
 
-      {gatewayManaged ? (
+      {usesGatewayCredentials ? (
         <SettingsSection title="Execution" inert={readOnly} aria-disabled={readOnly || undefined}>
           {runtimeFields}
         </SettingsSection>
@@ -1119,9 +1035,9 @@ export function ProviderInstanceCard({
         </SettingsSection>
       ) : null}
 
-      {!gatewayManaged ? (
+      {!usesGatewayCredentials ? (
         <SettingsSection
-          title="Environment"
+          title="Shell environment variables"
           inert={readOnly}
           aria-disabled={readOnly || undefined}
           className={readOnly ? "opacity-50 select-none" : undefined}
@@ -1132,7 +1048,9 @@ export function ProviderInstanceCard({
           />
         </SettingsSection>
       ) : null}
-      {!gatewayManaged && environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
+      {!usesGatewayCredentials &&
+      environmentId !== undefined &&
+      liveProvider?.driver === "acpRegistry" ? (
         <AcpSessionManagementSection
           environmentId={environmentId}
           instanceId={instanceId}
@@ -1146,12 +1064,12 @@ export function ProviderInstanceCard({
         <SettingsSection title="Models">
           <div className="px-3 py-3 sm:px-4">
             <p className="mb-3 text-xs text-muted-foreground">
-              {gatewayManaged
+              {usesGatewayCredentials
                 ? "Models are discovered from your connected accounts. Favorites and visibility are shared across your devices."
-                : "Model preferences and custom models are saved on the selected environment and shared across connected devices."}
+                : "Model preferences and custom models are shared across projects and connected devices."}
             </p>
             <ProviderModelsSection
-              canManageCustomModels={!readOnly && !gatewayManaged}
+              canManageCustomModels={!readOnly && !usesGatewayCredentials}
               canWritePreferences={canWriteSettings}
               instanceId={instanceId}
               driverKind={driverKind}

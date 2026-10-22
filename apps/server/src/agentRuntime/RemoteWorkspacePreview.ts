@@ -228,6 +228,9 @@ const layerCore = Layer.effect(
       close: (input) => invoke("preview.close", input, Schema.Null).pipe(Effect.asVoid),
       list: (input) =>
         Effect.gen(function* () {
+          const bindings = yield* sql`SELECT thread_id FROM agent_runtime_thread_bindings
+            WHERE thread_id = ${input.threadId}`;
+          if (bindings.length === 0) return { sessions: [], serverEpoch: epoch, revision };
           const current = yield* runtime.observeThread(input.threadId);
           if (current.kind === "stopped") return { sessions: [], serverEpoch: epoch, revision };
           const result = yield* Effect.tryPromise(() =>

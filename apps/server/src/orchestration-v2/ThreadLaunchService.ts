@@ -1,3 +1,4 @@
+import { WORKSPACE_SEED_STAGE_ORDER } from "@t3tools/contracts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import { resolveProjectScripts, setupProjectScript } from "@t3tools/shared/projectScripts";
 import * as WorkerProtocol from "../agentRuntime/worker/Protocol.ts";
@@ -324,7 +325,7 @@ const make = Effect.gen(function* () {
         branch: input.workspaceStrategy.branch ?? null,
         baseRef:
           input.workspaceStrategy.type === "worktree" ? input.workspaceStrategy.baseRef : null,
-        stages: ["sandbox", "seed", "checkout", "setup-script", "agent"],
+        stages: ["sandbox", ...WORKSPACE_SEED_STAGE_ORDER, "checkout", "setup-script", "agent"],
         fiber: yield* Effect.fiber,
       });
       return yield* Effect.gen(function* () {
@@ -352,7 +353,8 @@ const make = Effect.gen(function* () {
           .prepareThread({
             threadId,
             projectCwd: project.workspaceRoot,
-            onStage: (stage, status) => setupTracker.stageStatus(threadId, stage, status),
+            onStage: (stage, status, detail) =>
+              setupTracker.stageStatus(threadId, stage, status, detail),
             ...(resolved.worktreeSubmodules !== null
               ? { submodules: resolved.worktreeSubmodules }
               : {}),

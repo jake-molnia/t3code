@@ -892,3 +892,105 @@ it.effect.each(
       expect(h.methods).toEqual([]);
     }).pipe(Effect.scoped),
 );
+
+it.effect("suspends a newly used utility after one idle interval", () =>
+  Effect.gen(function* () {
+    const h = harness({ ...snapshot(), kind: "utility", members: [], settleScript: null });
+    const policy = yield* Policy.makePolicy({ ...h.ports, idleMs: 300_000 });
+    yield* withWorkspaceActivity("workspace", Effect.void);
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    yield* TestClock.adjust("299 seconds");
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    expect(h.stops).toHaveLength(0);
+    yield* TestClock.adjust("1 second");
+    expect(yield* policy.reconcileThread(root)).toBe("suspend-submitted");
+    expect(h.stops).toHaveLength(1);
+  }).pipe(
+    Effect.provideService(WorkspaceActivity, new Map()),
+    Effect.provideService(WorkspaceRecentActivity, new Map()),
+    Effect.scoped,
+  ),
+);
+
+it.effect("later explicit utility use extends idle grace from completion", () =>
+  Effect.gen(function* () {
+    const h = harness({ ...snapshot(), kind: "utility", members: [], settleScript: null });
+    const policy = yield* Policy.makePolicy({ ...h.ports, idleMs: 300_000 });
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    yield* TestClock.adjust("4 minutes");
+    yield* withWorkspaceActivity("workspace", Effect.void);
+    yield* TestClock.adjust("1 minute");
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    yield* TestClock.adjust("239 seconds");
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    expect(h.stops).toHaveLength(0);
+    yield* TestClock.adjust("1 second");
+    expect(yield* policy.reconcileThread(root)).toBe("suspend-submitted");
+    expect(h.stops).toHaveLength(1);
+  }).pipe(
+    Effect.provideService(WorkspaceActivity, new Map()),
+    Effect.provideService(WorkspaceRecentActivity, new Map()),
+    Effect.scoped,
+  ),
+);
+
+it.effect("active utility operations block suspension and receive one grace after completion", () =>
+  Effect.gen(function* () {
+    const h = harness({ ...snapshot(), kind: "utility", members: [], settleScript: null });
+    const policy = yield* Policy.makePolicy({ ...h.ports, idleMs: 300_000 });
+    const started = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
+    const operation = yield* withWorkspaceActivity(
+      "workspace",
+      Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(finish))),
+    ).pipe(Effect.forkChild);
+    yield* Deferred.await(started);
+    expect(yield* policy.reconcileThread(root)).toBe("busy");
+    yield* TestClock.adjust("10 minutes");
+    expect(yield* policy.reconcileThread(root)).toBe("busy");
+    expect(h.methods).toEqual([]);
+    expect(h.stops).toHaveLength(0);
+    yield* Deferred.succeed(finish, undefined);
+    yield* Fiber.join(operation);
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    yield* TestClock.adjust("5 minutes");
+    expect(yield* policy.reconcileThread(root)).toBe("suspend-submitted");
+    expect(h.stops).toHaveLength(1);
+  }).pipe(
+    Effect.provideService(WorkspaceActivity, new Map()),
+    Effect.provideService(WorkspaceRecentActivity, new Map()),
+    Effect.scoped,
+  ),
+);
+
+it.effect("a replacement utility incarnation receives its own observed idle interval", () =>
+  Effect.gen(function* () {
+    const h = harness({ ...snapshot(), kind: "utility", members: [], settleScript: null });
+    const original = yield* h.ports.observe("workspace");
+    if (original.kind !== "running") return yield* Effect.die("Expected running fixture");
+    let incarnation = "first";
+    const policy = yield* Policy.makePolicy({
+      ...h.ports,
+      idleMs: 300_000,
+      observe: () =>
+        Effect.sync(() => ({
+          kind: "running" as const,
+          client: { ...original.client, identity: { ...original.client.identity, incarnation } },
+        })),
+    });
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    yield* TestClock.adjust("5 minutes");
+    incarnation = "replacement";
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    yield* TestClock.adjust("299 seconds");
+    expect(yield* policy.reconcileThread(root)).toBe("grace");
+    expect(h.stops).toHaveLength(0);
+    yield* TestClock.adjust("1 second");
+    expect(yield* policy.reconcileThread(root)).toBe("suspend-submitted");
+    expect(h.stops).toHaveLength(1);
+  }).pipe(
+    Effect.provideService(WorkspaceActivity, new Map()),
+    Effect.provideService(WorkspaceRecentActivity, new Map()),
+    Effect.scoped,
+  ),
+);
