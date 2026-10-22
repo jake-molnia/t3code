@@ -53,6 +53,9 @@ export type T3McpToolSummaryAction =
   | "project-clone"
   | "environment-read"
   | "environment-update"
+  | "ide-setup-read"
+  | "ide-setup-manage"
+  | "ide-setup-export"
   | "attachment-prepare"
   | "attachment-discard"
   | "attachment-send"
@@ -324,6 +327,15 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_environment_read: tool(
     ["Read", "Reading", "Read", "environment preferences"],
     "environment-read",
+  ),
+  t3_ide_setup_read: tool(["Read", "Reading", "Read", "saved IDE setup"], "ide-setup-read"),
+  t3_ide_setup_manage: tool(
+    ["Manage", "Managing", "Managed", "saved IDE setup"],
+    "ide-setup-manage",
+  ),
+  t3_ide_setup_export: tool(
+    ["Export", "Exporting", "Exported", "saved IDE setup"],
+    "ide-setup-export",
   ),
   t3_environment_preferences_update: tool(
     ["Update", "Updating", "Updated", "environment preferences"],
