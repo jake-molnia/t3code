@@ -1,3 +1,4 @@
+import { IdeSetup } from "./agentRuntime/IdeSetup.ts";
 import * as ModelGateway from "./modelGateway/ModelGateway.ts";
 import * as McpConnections from "./mcp/McpConnections.ts";
 import * as ServerVersion from "./environment/ServerVersion.ts";
@@ -1125,6 +1126,7 @@ const layerWsRpc = (
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
+      const ideSetup = yield* IdeSetup;
       const sandboxIde = yield* SandboxIde.SandboxIde;
       const directEndpoints = yield* DirectEndpoints.DirectEndpoints;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -2562,6 +2564,11 @@ const layerWsRpc = (
                 }),
             ),
           ),
+        [WS_METHODS.sandboxIdeSetupGet]: (input) => ideSetup.get(input.target),
+        [WS_METHODS.sandboxIdeSetupManage]: (input) => ideSetup.manage(input),
+        [WS_METHODS.sandboxIdeSetupExport]: (input) => ideSetup.export(input.target),
+        [WS_METHODS.sandboxIdePreferenceStatus]: (input) => ideSetup.status(input.target),
+        [WS_METHODS.sandboxIdePreferenceResolve]: (input) => ideSetup.resolve(input),
         [WS_METHODS.sandboxIdeOpen]: (input) => sandboxIde.open(input),
         [WS_METHODS.filesystemGetMetadata]: (input) => workspaceFileSystem.getMetadata(input),
         [WS_METHODS.filesystemBrowse]: (input) =>

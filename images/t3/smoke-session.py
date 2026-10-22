@@ -36,6 +36,11 @@ def verify():
         assert result['ok'], (method, result)
         return result['value']
 
+    with request('/v1/transient', {'identity': identity, 'method': 'ide.preferences.initialize',
+            'input': {'files': {'settings.json': '{"security.workspace.trust.enabled":false}'}}}) as response:
+        assert json.load(response)['ok']
+    call('ide.lifecycle.resume', {})
+
     status = call('computer.status', {})
     assert status['available'] and status['resolution'] == {'width': 1440, 'height': 900}, status
     for action in [{'kind': 'wait', 'seconds': 0}, {'kind': 'move', 'x': 450, 'y': 450},

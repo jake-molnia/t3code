@@ -1,3 +1,5 @@
+import * as IdeExtensions from "./agentRuntime/IdeExtensions.ts";
+import * as IdeSetup from "./agentRuntime/IdeSetup.ts";
 import * as InferenceProxy from "./modelGateway/InferenceProxy.ts";
 import * as ModelGateway from "./modelGateway/ModelGateway.ts";
 import * as McpConnections from "./mcp/McpConnections.ts";
@@ -525,6 +527,8 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(SandboxIde.layer),
+  Layer.provideMerge(IdeSetup.layer),
+  Layer.provideMerge(IdeExtensions.layer),
   Layer.provideMerge(DirectEndpoints.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provideMerge(layerRemoteAssets),

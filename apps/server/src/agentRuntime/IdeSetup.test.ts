@@ -1,0 +1,167 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Real worker transport and native files in disposable roots.
+import { expect, it } from "@effect/vitest";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import { ThreadId } from "@t3tools/contracts";
+import * as ServerConfig from "../config.ts";
+import { openIdePreferences } from "../execution/IdePreferences.ts";
+import { createExecutionClient, type ExecutionClient } from "../execution/ExecutionClient.ts";
+import { createExecutionWorker } from "../execution/ExecutionWorker.ts";
+import { openWorkerJournal } from "../execution/WorkerJournal.ts";
+import * as RuntimeClient from "./RuntimeClient.ts";
+import * as IdeExtensions from "./IdeExtensions.ts";
+import * as Preferences from "./IdeSetup.ts";
+
+it.effect(
+  "syncs separate roots and inherited children, survives central restart, and rejects replaced workers",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "ide-central-" });
+      const clients = new Map<string, ExecutionClient>();
+      const create = (workspaceId: string, incarnation: string) =>
+        Effect.gen(function* () {
+          const directory = `${root}/${workspaceId}/ide`;
+          const preferences = yield* Effect.acquireRelease(
+            Effect.promise(() => openIdePreferences(directory)),
+            (value) => Effect.promise(value.close),
+          );
+          const journal = yield* Effect.acquireRelease(
+            Effect.promise(() => openWorkerJournal(`${root}/${workspaceId}/${incarnation}.jsonl`)),
+            (value) => Effect.promise(value.close),
+          );
+          const identity = {
+            workspaceId,
+            incarnation,
+            allocationId: workspaceId,
+            generation: 1,
+            podUid: incarnation,
+            protocolVersion: 1 as const,
+          };
+          const worker = createExecutionWorker({
+            identity,
+            token: "s".repeat(32),
+            journal,
+            execute: (method, input) =>
+              method === "ide.lifecycle.read"
+                ? Promise.resolve({ state: "ready" })
+                : method === "ide.lifecycle.resume"
+                  ? Promise.resolve(null)
+                  : preferences.execute(method, input),
+          });
+          const client = createExecutionClient({
+            identity,
+            token: "s".repeat(32),
+            endpoint: "http://worker",
+            fetch: (url, init) => worker.handle(new Request(url, init)),
+          });
+          clients.set(workspaceId, client);
+          return { client, journal, directory };
+        });
+      const one = yield* create("one", "original");
+      const two = yield* create("two", "original");
+      const current = (id: string) => {
+        const found = clients.get(id === "child" ? "one" : id);
+        if (!found) throw new Error(`Unexpected workspace ${id}`);
+        return found;
+      };
+      const runtime = RuntimeClient.RuntimeClient.of({
+        enabled: true,
+        forThread: (id) => Effect.succeed(current(id)),
+        forWorkspace: (id) => Effect.succeed(current(id)),
+        forUtility: (id) => Effect.succeed(current(id)),
+        observeThread: (id) => Effect.succeed({ kind: "running", client: current(id) }),
+        observeWorkspace: (id) => Effect.succeed({ kind: "running", client: current(id) }),
+        sessionResidency: () => Effect.succeed(null),
+        rememberSession: () => Effect.void,
+        getEventCursor: () => Effect.succeed(0),
+        stop: () => Effect.void,
+      });
+      const layers = Preferences.layer.pipe(
+        Layer.provide(
+          Layer.mock(IdeExtensions.IdeExtensions)({
+            observe: () => Effect.void,
+            apply: () => Effect.void,
+            applied: () => null,
+            pending: () => false,
+            read: Effect.succeed({
+              attempt: 0,
+              sources: [],
+              build: { state: "idle" },
+              published: null,
+              previous: null,
+            }),
+          }),
+        ),
+        Layer.provide(Layer.succeed(RuntimeClient.RuntimeClient, runtime)),
+        Layer.provide(ServerConfig.layerTest(root, `${root}/central`)),
+      );
+      const edit = (value: typeof one, text: string) =>
+        Effect.promise(async () => {
+          await NodeFSP.writeFile(`${value.directory}/user-data/User/settings.json`, text);
+          await value.client.transient("ide.preferences.read", { force: true });
+        });
+      const initial = '{// preserved comment\n"editor.fontSize":18}';
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* Preferences.IdeSetup;
+          yield* service.prepare(one.client);
+          yield* edit(one, initial);
+          yield* service.sync(one.client);
+          yield* service.prepare(two.client);
+          expect(yield* fs.readFileString(`${two.directory}/user-data/User/settings.json`)).toBe(
+            initial,
+          );
+          expect((yield* service.status({ threadId: ThreadId.make("child") })).state).toBe("saved");
+          yield* edit(one, '{"editor.fontSize":20}');
+          yield* service.sync(one.client);
+          yield* edit(two, '{"editor.fontSize":22}');
+          yield* service.sync(two.client);
+          expect((yield* service.status({ threadId: ThreadId.make("two") })).issues).toContainEqual(
+            { path: "settings.json", reason: "conflict" },
+          );
+          yield* service.resolve({
+            target: { threadId: ThreadId.make("two") },
+            path: "settings.json",
+            choice: "saved",
+          });
+          expect(yield* fs.readFileString(`${two.directory}/user-data/User/settings.json`)).toBe(
+            '{"editor.fontSize":20}',
+          );
+          expect(one.journal.operations.size).toBe(1);
+          expect(two.journal.operations.size).toBe(1);
+        }).pipe(Effect.provide(layers)),
+      );
+      // The central service is recreated while both worker transports remain alive.
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* Preferences.IdeSetup;
+          const beforePause = yield* service.get();
+          yield* service.manage({ command: { kind: "remember", enabled: false } });
+          yield* edit(one, '{"editor.fontSize":24}');
+          yield* service.sync(one.client);
+          expect((yield* service.get()).settingsRevision).toBe(beforePause.settingsRevision);
+          yield* service.manage({ command: { kind: "remember", enabled: true } });
+          yield* service.sync(one.client);
+          const replacement = yield* create("one", "replacement");
+          expect((yield* service.sync(one.client).pipe(Effect.exit))._tag).toBe("Failure");
+          yield* service.sync(replacement.client);
+          const three = yield* create("three", "new");
+          yield* service.prepare(three.client);
+          expect(yield* fs.readFileString(`${three.directory}/user-data/User/settings.json`)).toBe(
+            '{"editor.fontSize":24}',
+          );
+          expect((yield* service.status({ threadId: ThreadId.make("child") })).state).toBe("saved");
+          const beforeReset = yield* service.get();
+          yield* service.manage({ command: { kind: "reset_settings" } });
+          yield* service.manage({ command: { kind: "reset_settings" } });
+          expect((yield* service.get()).settingsRevision).not.toBe(beforeReset.settingsRevision);
+          yield* service.manage({ command: { kind: "rollback_settings" } });
+          expect((yield* service.get()).settingsRevision).toBe(beforeReset.settingsRevision);
+        }).pipe(Effect.provide(layers)),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

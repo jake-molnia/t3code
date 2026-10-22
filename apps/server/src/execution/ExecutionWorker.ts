@@ -145,6 +145,10 @@ export function createExecutionWorker(options: {
         "asset.stage",
         "input.stage",
       ].includes(operation.method) ||
+      operation.method.startsWith("ide.preferences.") ||
+      ["ide.extensions.read", "ide.extensions.acknowledge", "ide.extensions.export"].includes(
+        operation.method,
+      ) ||
       operation.method.startsWith("auth.") ||
       operation.method === "configureProvider"
     )
@@ -286,6 +290,16 @@ export function createExecutionWorker(options: {
           input: Schema.Unknown,
         });
         const permitted = (method: string) =>
+          [
+            "ide.lifecycle.read",
+            "ide.extensions.export",
+            "ide.extensions.read",
+            "ide.extensions.acknowledge",
+            "ide.preferences.read",
+            "ide.preferences.initialize",
+            "ide.preferences.acknowledge",
+            "ide.preferences.resolve",
+          ].includes(method) ||
           method.startsWith("auth.") ||
           method === "configureProvider" ||
           [
@@ -307,6 +321,8 @@ export function createExecutionWorker(options: {
         if (!sameIdentity(input.identity, options.identity))
           return Response.json({ ok: false, code: "stale_identity" }, { status: 409 });
         const mutation =
+          input.method.startsWith("ide.preferences.") ||
+          input.method.startsWith("ide.extensions.") ||
           input.method === "vcs.process.probe" ||
           input.method === "preview.viewerInput" ||
           input.method === "asset.stage" ||

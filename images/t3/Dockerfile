@@ -1,6 +1,13 @@
 # syntax=docker/dockerfile:1.7
 FROM golang:1.27.1-trixie@sha256:9baa6b4187bbb98d240372a8a235ac0bb6b5ddd52bba1431dc2f7c0705862728 AS go-toolchain
 
+FROM go-toolchain AS ide-runtime
+WORKDIR /src/runtime
+ADD --checksum=sha256:320d646c7aa7c82ed0daba00a596f340d92293d2b07d29019e2a45078445048e https://codeload.github.com/jake-molnia/agent-runtime/tar.gz/080701503fb4df3534a37cb81d79a7ac8edf6136 /tmp/runtime.tar.gz
+RUN tar -xzf /tmp/runtime.tar.gz --strip-components=1
+COPY images/t3/ide-preparation.patch /tmp/ide-preparation.patch
+RUN git apply /tmp/ide-preparation.patch && CGO_ENABLED=0 go build -trimpath -o /out/agent-runtime ./cmd/agent-runtime
+
 FROM go-toolchain AS cliproxy-build
 WORKDIR /src/cliproxy
 ADD --checksum=sha256:a1af572340e4cd58ca2bc08c2206657a696c2eb8560fa4870a2354ee9323412e https://codeload.github.com/jake-molnia/CLIProxyAPI/tar.gz/bf9341629ef2300ac9d846a2e80fe2756f63a671 /tmp/cliproxy.tar.gz
@@ -45,6 +52,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY images/t3/install-code-server.sh /tmp/
 RUN sh /tmp/install-code-server.sh "${TARGETARCH}" /opt/code-server
 
+FROM desktop-tools AS ide-extensions
+RUN apt-get update && apt-get install -y --no-install-recommends nix-bin \
+    && rm -rf /var/lib/apt/lists/*
+COPY images/t3/ide-extensions /src/ide-extensions
+RUN nix --extra-experimental-features 'nix-command flakes' \
+      --option sandbox false --option build-users-group '' \
+      build --no-update-lock-file --out-link /tmp/nix-builder /src/ide-extensions#nix-builder \
+    && mkdir -p /out/nix && cp -a /tmp/nix-builder/. /out/nix/
+
 FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:3ef66b7877049c3a81d2dba0a32425bd6c84fa0e4dfb8dcd5f7604619f597806 AS t3-worker
 USER 0:0
 ARG TARGETARCH
@@ -54,6 +70,12 @@ RUN test "$TARGETARCH" = amd64 \
     && npm install --global --ignore-scripts pnpm@11.10.0 \
     && mkdir -p /workspace && chown node:node /workspace
 COPY --from=desktop-tools /opt/code-server /opt/code-server
+COPY --from=ide-runtime /out/agent-runtime /usr/local/bin/agent-runtime
+COPY --from=ide-extensions /nix /nix
+COPY --from=ide-extensions /out/nix /opt/nix
+COPY images/t3/ide-extensions /opt/t3/ide-extensions
+RUN cc -shared -fPIC -Wall -Wextra -Werror /opt/t3/ide-extensions/nix-pty.c -o /opt/t3/ide-extensions/nix-pty.so -ldl
+ENV NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 COPY --from=go-toolchain /usr/local/go /usr/local/go
 COPY images/t3/harness-configs/gateway.json /opt/t3/gateway-harnesses.json
 COPY --from=worker-package /out/worker /opt/t3
@@ -68,7 +90,7 @@ RUN mv /usr/local/bin/opencode /usr/local/bin/opencode2 \
     && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs
 ARG T3_SOURCE_REVISION
-ENV PATH=/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_modules/.bin:/opt/native/bin:$PATH \
+ENV PATH=/opt/nix/bin:/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_modules/.bin:/opt/native/bin:$PATH \
     T3_SOURCE_REVISION=${T3_SOURCE_REVISION} \
     AZURE_EXTENSION_DIR=/opt/azure/extensions AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no AZURE_CORE_COLLECT_TELEMETRY=no \
     T3_WORKSPACE_ROOT=/workspace T3_WORKER_STATE_DIR=/workspace/.t3-worker \

@@ -317,6 +317,38 @@ opens its workspace; before starting a thread, it opens the project's workspace.
 Previews use the original file, even outside the workspace. Moving or deleting it
 can break the preview, so save a copy if you need to keep it.
 
+## Remember your VS Code setup
+
+Change settings, keyboard shortcuts and snippets through the normal VS Code UI.
+After opening the IDE from T3, valid changes save to your environment and are
+restored when you first open the IDE in a new sandbox. Existing sandboxes keep
+their local setup. Settings are shared by users of the same environment.
+
+The status beside **Open in VS Code** shows whether changes have saved. Invalid
+JSON stays local while the last valid saved version remains available. If two
+sandboxes change the same file, choose which version to keep. Choosing the saved
+version backs up the local file first. Executable paths and terminal environment
+settings that belong to one sandbox remain local. An existing setup must be
+imported explicitly before its files become shared defaults.
+
+Install, remove and update extensions in VS Code. T3 builds a saved Nix extension
+set with exact versions and package hashes. New sandboxes receive the last
+successful set while a newer build runs. If a build fails, you can keep working
+with the extensions already installed. For a private VSIX, save the original
+archive through the sandbox's setup controls so future sandboxes can reinstall it.
+
+Use **Settings → VS Code** to pause remembering, retry a build, reset saved settings
+or extensions separately, or restore the previous saved revision. The setup menu
+beside **Open in VS Code** also lets you import the current sandbox, apply the saved
+setup, or export native files and extension packages. Applying restarts the editor
+and can interrupt its terminals and tasks; it does not restart the agent. Resets
+and rollbacks affect new sandboxes until you explicitly apply them to an existing
+one. Project `.vscode` files stay with the project.
+
+Fresh IDE setups disable Workspace Trust prompts through VS Code's native setting.
+You can enable Workspace Trust in VS Code settings. Extension automatic updates
+are disabled by default; successful manual updates are remembered.
+
 ## Files outside the workspace
 
 Follow an agent's file link to read a report or other file outside the workspace.
