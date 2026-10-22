@@ -1,6 +1,6 @@
 import { IdeSetupControls } from "../settings/IdeSetupSettings";
 import { Link } from "@tanstack/react-router";
-import { CheckIcon, CloudUploadIcon, TriangleAlertIcon } from "lucide-react";
+import { CheckIcon, CloudUploadIcon, PauseIcon, TriangleAlertIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, SandboxIdeTarget } from "@t3tools/contracts";
 import { useState } from "react";
@@ -36,11 +36,13 @@ export function IdePreferenceStatus({
     ? "Settings status unavailable"
     : state === "saved"
       ? "Settings saved"
-      : state === "pending"
-        ? "Saving settings…"
-        : state === "not_opened" || state === "offline" || !state
-          ? "VS Code setup"
-          : "Settings need attention";
+      : state === "paused"
+        ? "Remembering paused"
+        : state === "pending"
+          ? "Saving settings…"
+          : state === "not_opened" || state === "offline" || !state
+            ? "VS Code setup"
+            : "Settings need attention";
   const resolveFile = async (path: string, choice: "workspace" | "saved") => {
     setPending(true);
     try {
@@ -112,6 +114,8 @@ export function IdePreferenceStatus({
       >
         {state === "saved" && !status.error ? (
           <CheckIcon />
+        ) : state === "paused" ? (
+          <PauseIcon />
         ) : state === "pending" ? (
           <CloudUploadIcon />
         ) : (
@@ -124,9 +128,11 @@ export function IdePreferenceStatus({
           <p>
             {state === "saved"
               ? "Saved for new sandboxes."
-              : state === "pending"
-                ? "Changes waiting to save."
-                : "A change needs attention."}
+              : state === "paused"
+                ? "Changes stay in this sandbox while remembering is paused."
+                : state === "pending"
+                  ? "Changes waiting to save."
+                  : "A change needs attention."}
           </p>
           <p>
             Settings, keyboard shortcuts and snippets are shared within this environment. Existing

@@ -192,3 +192,48 @@ it("seeds startup defaults without creating an import conflict and restores save
     await NodeFSP.rm(root, { recursive: true, force: true });
   }
 });
+
+it("explicit replacement repairs malformed and oversized files and preserves deletion across restart", async () => {
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "ide-replace-"));
+  let preferences = await openIdePreferences(root);
+  const file = NodePath.join(root, "user-data/User/settings.json");
+  const files = { "settings.json": '{"editor.fontSize":14}' };
+  try {
+    await preferences.execute("ide.preferences.initialize", { files });
+    for (const invalid of ['{"broken":', " ".repeat(262145)]) {
+      await NodeFSP.writeFile(file, invalid);
+      await preferences.execute("ide.preferences.replace", { files });
+      expect(await NodeFSP.readFile(file, "utf8")).toBe(files["settings.json"]);
+      expect(
+        decode(await preferences.execute("ide.preferences.read", { force: true })).snapshot?.issues,
+      ).toEqual([]);
+    }
+    const external = NodePath.join(root, "external.json");
+    await NodeFSP.writeFile(external, "untouched");
+    await NodeFSP.rm(file);
+    await NodeFSP.symlink(external, file);
+    await preferences.execute("ide.preferences.replace", { files });
+    expect(await NodeFSP.readFile(external, "utf8")).toBe("untouched");
+    expect((await NodeFSP.lstat(file)).isSymbolicLink()).toBe(false);
+    await NodeFSP.writeFile(file, '{"editor.fontSize":18}');
+    await preferences.execute("ide.preferences.replace", { files: {} });
+    await expect(NodeFSP.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    await NodeFSP.writeFile(file, '{"git.path":"/local/git","editor.fontSize":18}');
+    await preferences.execute("ide.preferences.replace", { files: {} });
+    expect(await NodeFSP.readFile(file, "utf8")).toContain("/local/git");
+    expect(
+      decode(await preferences.execute("ide.preferences.read", { force: true })).snapshot?.files,
+    ).toEqual({});
+    await preferences.close();
+    preferences = await openIdePreferences(root);
+    expect(
+      decode(await preferences.execute("ide.preferences.read", { force: true })).snapshot?.files,
+    ).toEqual({});
+    expect(
+      decode(await preferences.execute("ide.preferences.read", { force: true })).snapshot?.baseline,
+    ).toEqual({});
+  } finally {
+    await preferences.close();
+    await NodeFSP.rm(root, { recursive: true, force: true });
+  }
+});

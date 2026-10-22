@@ -10,7 +10,7 @@ const localSettings =
   /^(terminal\.integrated\.(env|profiles)\.|git\.path$|python\.(pythonPath|defaultInterpreterPath)$|typescript\.tsdk$|eslint\.nodePath$|java\.jdt\.ls\.java\.home$|rust-analyzer\.server\.path$)/;
 
 /** Keep native JSONC text intact, except for settings tied to one machine. */
-export function portableIdePreference(path: string, text: string): string | null {
+export function portableIdePreference(path: string, text: string): string | null | undefined {
   const errors: ParseError[] = [];
   const value: unknown = parse(text, errors, { allowTrailingComma: true, allowEmptyContent: true });
   if (errors.length > 0) return null;
@@ -23,6 +23,8 @@ export function portableIdePreference(path: string, text: string): string | null
     if (localSettings.test(key))
       portable = applyEdits(portable, modify(portable, [key], undefined, {}));
   }
+  if (Object.keys(value).length > 0 && Object.keys(value).every((key) => localSettings.test(key)))
+    return undefined;
   return portable;
 }
 
@@ -59,9 +61,10 @@ export function restoreIdePreference(
   if (path !== "settings.json") return saved;
   const value: unknown = parse(local);
   if (value === null || typeof value !== "object" || Array.isArray(value)) return saved;
-  let result = saved ?? "{}";
+  let result = saved;
   for (const [key, valueAtKey] of Object.entries(value)) {
-    if (localSettings.test(key)) result = applyEdits(result, modify(result, [key], valueAtKey, {}));
+    if (localSettings.test(key))
+      result = applyEdits(result ?? "{}", modify(result ?? "{}", [key], valueAtKey, {}));
   }
   return result;
 }

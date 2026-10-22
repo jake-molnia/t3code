@@ -87,7 +87,7 @@ const IdeSetupManageTool = Tool.make("t3_ide_setup_manage", {
 const IdeSetupExportTool = Tool.make("t3_ide_setup_export", {
   ...shared,
   description:
-    "Export native settings, the Nix flake and lock, and a retained extension archive into the calling sandbox. The archive path includes private VSIX packages.",
+    "Export native settings, the Nix flake and lock, and retained extension archives as a downloadable central attachment. Returns the attachment ID; its archive includes private VSIX packages.",
   success: IdeSetupExport,
 }).annotate(Tool.Destructive, false);
 export const EnvironmentToolkit = Toolkit.make(

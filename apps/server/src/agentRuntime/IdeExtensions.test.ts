@@ -199,6 +199,11 @@ it.effect(
           yield* create("root-one", "replacement");
           expect((yield* Effect.result(service.observe(one.client, true)))._tag).toBe("Failure");
           expect(buildCount).toBe(3);
+          two.edit({ "publisher.first": "1.0.0" });
+          yield* service.import(two.client);
+          expect((yield* service.read).sources).toEqual([
+            { id: "publisher.first", version: "1.0.0", archive: null },
+          ]);
         }).pipe(Effect.provide(layers)),
       );
     }).pipe(Effect.provide(NodeServices.layer)),

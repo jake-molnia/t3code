@@ -301,6 +301,7 @@ export function createExecutionWorker(options: {
             "ide.extensions.acknowledge",
             "ide.preferences.read",
             "ide.preferences.initialize",
+            "ide.preferences.replace",
             "ide.preferences.acknowledge",
             "ide.preferences.resolve",
           ].includes(method) ||

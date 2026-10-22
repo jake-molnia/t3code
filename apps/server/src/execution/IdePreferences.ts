@@ -6,6 +6,7 @@ import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
 import {
   SandboxIdePreferenceFiles,
+  SandboxIdePreferenceReplaceInput,
   SandboxIdePreferencePath,
   SandboxIdePreferenceSnapshot,
   type SandboxIdePreferenceStatus,
@@ -15,6 +16,7 @@ import {
   restoreIdePreference,
 } from "../agentRuntime/portableIdePreferences.ts";
 
+const decodeReplace = Schema.decodeUnknownSync(SandboxIdePreferenceReplaceInput);
 const decodeFiles = Schema.decodeUnknownSync(SandboxIdePreferenceFiles);
 const validPath = Schema.is(SandboxIdePreferencePath);
 const Read = Schema.Struct({
@@ -112,7 +114,7 @@ export async function openIdePreferences(directory: string) {
         }
         const portable = portableIdePreference(path, await NodeFSP.readFile(file, "utf8"));
         if (portable === null) issues.push({ path, reason: "invalid_json" });
-        else files[path] = portable;
+        else if (portable !== undefined) files[path] = portable;
       } catch (cause) {
         if (!missing(cause)) issues.push({ path, reason: "unavailable" });
       }
@@ -156,6 +158,57 @@ export async function openIdePreferences(directory: string) {
           const result = observation();
           return request.after === result.revision ? { ...result, snapshot: null } : result;
         }
+        if (method === "ide.preferences.replace") {
+          const { files } = decodeReplace(input);
+          if (
+            Object.keys(files).length > 128 ||
+            Buffer.byteLength(JSON.stringify(files)) > 2 * 1024 * 1024
+          )
+            throw new Error("Saved IDE preferences exceed the size limit");
+          for (const [path, text] of Object.entries(files))
+            if (portableIdePreference(path, text) !== text)
+              throw new Error("Invalid portable IDE preference");
+          await refresh();
+          const names = new Set([
+            ...Object.keys(files),
+            ...Object.keys(snapshot.files),
+            ...Object.keys(baseline ?? {}),
+            ...snapshot.issues.map((issue) => issue.path).filter(validPath),
+          ]);
+          for (const path of names) {
+            const destination = NodePath.join(user, path);
+            const backup = NodePath.join(
+              directory,
+              "preference-backups",
+              `${NodeCrypto.randomUUID()}.jsonc`,
+            );
+            let local = "";
+            let backedUp = false;
+            try {
+              const stat = await NodeFSP.lstat(destination);
+              if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 262144)
+                local = await NodeFSP.readFile(destination, "utf8").catch(() => "");
+              await NodeFSP.mkdir(NodePath.dirname(backup), { recursive: true, mode: 0o700 });
+              await NodeFSP.rename(destination, backup);
+              backedUp = true;
+            } catch (cause) {
+              if (!missing(cause)) throw cause;
+            }
+            try {
+              const text = restoreIdePreference(path, files[path], local);
+              if (text !== undefined) await writeIdeFile(destination, text);
+            } catch (cause) {
+              if (backedUp) await NodeFSP.rename(backup, destination);
+              throw cause;
+            }
+          }
+          baseline = files;
+          conflicts = [];
+          await writeIdeFile(record, JSON.stringify(baseline));
+          await writeIdeFile(conflictRecord, JSON.stringify(conflicts));
+          await refresh();
+          return observation();
+        }
         if (method === "ide.preferences.initialize") {
           const request = decodeInitialize(input);
           if (baseline === null) {
@@ -165,7 +218,7 @@ export async function openIdePreferences(directory: string) {
               ...snapshot.issues.map((issue) => issue.path),
             ]);
             for (const [path, text] of Object.entries(request.files)) {
-              if (!validPath(path) || portableIdePreference(path, text) === null)
+              if (!validPath(path) || portableIdePreference(path, text) !== text)
                 throw new Error("Invalid IDE preference");
               const destination = NodePath.join(user, path);
               try {

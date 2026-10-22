@@ -136,6 +136,44 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual((self.ide / "managed-extensions.json").read_bytes(), before)
         self.assertEqual(len(self.installed), 2)
 
+    def test_records_native_install_receipts_for_managed_packages_only(self):
+        self.install(self.extension)
+        (self.ide / "extensions/extensions.json").write_text(json.dumps([
+            {"identifier": {"id": self.extension["id"]}, "version": "1.0.0", "metadata": {"installedTimestamp": 100}},
+            {"identifier": {"id": "local.private"}, "version": "1.0.0", "metadata": {"installedTimestamp": 200}},
+        ]))
+        provision.provision(self.bundle, self.ide)
+        marker = json.loads((self.ide / "managed-extensions.json").read_text())
+        self.assertEqual(marker["installations"], {self.extension["id"]: {"version": "1.0.0", "timestamp": 100}})
+
+    def test_does_not_adopt_a_sideload_receipt_during_an_unrelated_update(self):
+        self.install(self.extension)
+        index = self.ide / "extensions/extensions.json"
+        def receipt(timestamp):
+            index.write_text(json.dumps([{
+                "identifier": {"id": self.extension["id"]}, "version": "1.0.0",
+                "metadata": {"installedTimestamp": timestamp},
+            }]))
+        receipt(100)
+        provision.provision(self.bundle, self.ide)
+        receipt(200)
+        self.declare([self.extension, dict(self.extension, id="example.extra")])
+        provision.provision(self.bundle, self.ide)
+        self.assertNotIn(self.extension["id"], json.loads((self.ide / "managed-extensions.json").read_text())["installations"])
+
+    def test_successful_cli_with_missing_or_wrong_inventory_cannot_advance_marker(self):
+        for wrong in (None, "9.0.0"):
+            with self.subTest(wrong=wrong):
+                def incomplete(command, **kwargs):
+                    if wrong:
+                        self.install(dict(self.extension, version=wrong))
+                    return subprocess.CompletedProcess(command, 0)
+                with patch.object(provision.subprocess, "run", side_effect=incomplete):
+                    with self.assertRaisesRegex(RuntimeError, "inventory"):
+                        provision.provision(self.bundle, self.ide)
+                self.assertFalse((self.ide / "managed-extensions.json").exists())
+                self.installed.clear()
+
     def test_failed_install_can_retry_without_advancing_marker(self):
         with patch.object(provision.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "code-server")):
             with self.assertRaises(subprocess.CalledProcessError):

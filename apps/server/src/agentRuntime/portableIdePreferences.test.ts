@@ -58,3 +58,12 @@ it("preserves deletions, retries and incomplete observations", () => {
     }).files,
   ).toEqual(saved);
 });
+
+it("keeps deletion absent while retaining only sandbox-local settings", () => {
+  expect(
+    restoreIdePreference("settings.json", undefined, '{"editor.fontSize":18}'),
+  ).toBeUndefined();
+  const local = restoreIdePreference("settings.json", undefined, '{"git.path":"/local/git"}');
+  expect(local).toContain("/local/git");
+  expect(portableIdePreference("settings.json", local ?? "")).toBeUndefined();
+});

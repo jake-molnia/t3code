@@ -229,7 +229,10 @@ const make = Effect.gen(function* () {
         if (snapshot === null) return;
         localSettings.set(id, filesRevision(snapshot.files));
         if (!remembering) {
-          states.set(id, { state: "saved", issues: snapshot.issues });
+          states.set(id, {
+            state: snapshot.issues.length > 0 ? "needs_attention" : "paused",
+            issues: snapshot.issues,
+          });
           return;
         }
         states.set(id, { state: "pending", issues: [] });
@@ -312,7 +315,17 @@ const make = Effect.gen(function* () {
       cursors.delete(id);
       nextObservation.delete(id);
       stages.set(id, "applying_settings");
-      yield* sync(client);
+      let preferenceIncomplete = false;
+      yield* sync(client).pipe(
+        Effect.catch(() =>
+          Effect.sync(() => {
+            preferenceIncomplete = true;
+          }),
+        ),
+      );
+      const current = yield* runtime.observeWorkspace(id);
+      if (current.kind !== "running" || !sameIdentity(client.identity, current.client.identity))
+        return yield* failure("IDE preference worker changed");
       yield* workspaces.withLock(
         id,
         Effect.gen(function* () {
@@ -321,13 +334,17 @@ const make = Effect.gen(function* () {
           ).pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ state: Schema.String }))),
           );
-          let incomplete = extensionObservationFailures.has(id) || extensions.pending(id);
+          let incomplete =
+            preferenceIncomplete || extensionObservationFailures.has(id) || extensions.pending(id);
           if (lifecycle.state === "waiting") {
             stages.set(id, "restoring_extensions");
             yield* extensions.apply(client).pipe(
               Effect.tap(() =>
                 Effect.sync(() => {
-                  incomplete = extensionObservationFailures.has(id) || extensions.pending(id);
+                  incomplete =
+                    preferenceIncomplete ||
+                    extensionObservationFailures.has(id) ||
+                    extensions.pending(id);
                 }),
               ),
               Effect.catch(() =>
@@ -390,18 +407,7 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.mapError(failure));
   const applyFiles = (client: ExecutionClient) =>
     Effect.gen(function* () {
-      let observation = yield* request(client, "ide.preferences.read", { force: true });
-      const files = yield* read;
-      if (observation.snapshot?.baseline === null)
-        observation = yield* request(client, "ide.preferences.initialize", { files });
-      const snapshot = observation.snapshot;
-      if (snapshot === null) return;
-      for (const name of new Set([
-        ...Object.keys(files),
-        ...Object.keys(snapshot.files),
-        ...Object.keys(snapshot.baseline ?? {}),
-      ]))
-        yield* request(client, "ide.preferences.resolve", { path: name, choice: "saved", files });
+      yield* request(client, "ide.preferences.replace", { files: yield* read });
       cursors.delete(client.identity.workspaceId);
     });
   return IdeSetup.of({
@@ -497,7 +503,13 @@ const make = Effect.gen(function* () {
           path.join(temporary, blob.digest),
           path.join(config.attachmentsDir, relative),
         );
-        return { files, extensions: saved.sources, attachmentId, ...exported };
+        return {
+          files,
+          extensions: saved.sources,
+          attachmentId,
+          flake: exported.flake,
+          lock: exported.lock,
+        };
       }).pipe(Effect.scoped, Effect.mapError(failure)),
     manage: ({ target, command }) =>
       Effect.gen(function* () {
@@ -585,21 +597,19 @@ const make = Effect.gen(function* () {
                 yield* Effect.tryPromise((signal) =>
                   client.call("ide.lifecycle.pause", {}, undefined, signal),
                 );
-                yield* lock.withPermit(applyFiles(client)).pipe(
-                  Effect.andThen(extensions.apply(client, true)),
-                  Effect.tap(() =>
-                    Effect.sync(() => stages.set(client.identity.workspaceId, "ready")),
-                  ),
-                  Effect.tapError(() =>
-                    Effect.sync(() => stages.set(client.identity.workspaceId, "ready_with_errors")),
-                  ),
-                  Effect.ensuring(
-                    Effect.tryPromise((signal) =>
-                      client.call("ide.lifecycle.resume", {}, undefined, signal),
-                    ).pipe(Effect.ignore({ log: true })),
-                  ),
-                );
-              }),
+                yield* lock.withPermit(applyFiles(client));
+                yield* extensions.apply(client, true);
+                stages.set(client.identity.workspaceId, "ready");
+              }).pipe(
+                Effect.tapError(() =>
+                  Effect.sync(() => stages.set(client.identity.workspaceId, "ready_with_errors")),
+                ),
+                Effect.ensuring(
+                  Effect.tryPromise((signal) =>
+                    client.call("ide.lifecycle.resume", {}, undefined, signal),
+                  ).pipe(Effect.ignore({ log: true })),
+                ),
+              ),
             );
             return;
           }

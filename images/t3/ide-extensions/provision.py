@@ -36,11 +36,13 @@ def provision(source, directory, replace=False):
     installed = inventory() if desired or previous["extensions"] or replace else {}
     previous_packages = {item["id"]: item for item in previous["extensions"]}
     install = []
+    installed_from_bundle = set()
     for item in desired:
         if (replace or installed.get(item["id"]) != item["version"]
                 or previous_packages.get(item["id"], {}).get("hash") != item["hash"]):
             archive = source / f'{item["id"]}-{item["version"]}.vsix'
             install.extend(["--install-extension", str(archive)])
+            installed_from_bundle.add(item["id"])
     if install:
         subprocess.run(command + install + ["--force", "--vscode-option", "do-not-include-pack-dependencies"], check=True, stdout=sys.stderr)
         installed = inventory()
@@ -70,10 +72,24 @@ def provision(source, directory, replace=False):
     missing = [argument for item in desired if item["id"] not in installed
                for argument in ("--install-extension", str(source / f'{item["id"]}-{item["version"]}.vsix'))]
     if missing:
+        installed_from_bundle.update(item["id"] for item in desired if item["id"] not in installed)
         subprocess.run(command + missing + ["--force", "--vscode-option", "do-not-include-pack-dependencies"], check=True, stdout=sys.stderr)
+    installed = inventory()
+    if any(installed.get(item["id"]) != item["version"] for item in desired):
+        raise RuntimeError("Installed extension inventory does not match the desired versions")
+    installations = {}
+    index = directory / "extensions" / "extensions.json"
+    if index.exists():
+        for item in json.loads(index.read_text()):
+            name = item["identifier"]["id"].lower()
+            timestamp = item.get("metadata", {}).get("installedTimestamp")
+            if name in names and installed.get(name) == item.get("version") and type(timestamp) in (int, float):
+                receipt = {"version": item["version"], "timestamp": timestamp}
+                if name in installed_from_bundle or previous.get("installations", {}).get(name) == receipt:
+                    installations[name] = receipt
     with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as target:
         temporary = target.name
-        json.dump({"revision": revision, "extensions": desired}, target)
+        json.dump({"revision": revision, "extensions": desired, "installations": installations}, target)
     os.replace(temporary, marker)
 
 

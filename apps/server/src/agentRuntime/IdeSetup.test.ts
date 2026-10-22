@@ -26,6 +26,8 @@ it.effect(
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "ide-central-" });
       const clients = new Map<string, ExecutionClient>();
       let observationFails = false;
+      let preferencesFail = false;
+      let pauseFails = false;
       let extensionPending = false;
       let waiting = false;
       let resumes = 0;
@@ -78,6 +80,10 @@ it.effect(
                 };
               if (method === "ide.lifecycle.read") return { state: waiting ? "waiting" : "ready" };
               if (method === "ide.lifecycle.resume") resumes++;
+              if (method === "ide.lifecycle.pause" && pauseFails)
+                throw new Error("Pause response lost");
+              if (method === "ide.preferences.read" && preferencesFail)
+                throw new Error("Preference RPC failed");
               if (method === "ide.lifecycle.resume" || method === "ide.lifecycle.pause")
                 return null;
               if (method === "ide.preferences.acknowledge") {
@@ -178,6 +184,29 @@ it.effect(
           yield* service.prepare(one.client);
           expect((yield* service.get({ threadId: ThreadId.make("one") })).stage).toBe("ready");
           waiting = false;
+          preferencesFail = true;
+          const beforeRecovery = resumes;
+          yield* service.prepare(one.client);
+          expect(resumes).toBe(beforeRecovery + 1);
+          expect((yield* service.get({ threadId: ThreadId.make("one") })).stage).toBe(
+            "ready_with_errors",
+          );
+          expect((yield* service.status({ threadId: ThreadId.make("one") })).state).toBe(
+            "needs_attention",
+          );
+          preferencesFail = false;
+          pauseFails = true;
+          const beforePauseFailure = resumes;
+          expect(
+            (yield* Effect.result(
+              service.manage({
+                target: { threadId: ThreadId.make("one") },
+                command: { kind: "apply" },
+              }),
+            ))._tag,
+          ).toBe("Failure");
+          expect(resumes).toBe(beforePauseFailure + 1);
+          pauseFails = false;
           yield* edit(one, initial);
           yield* service.sync(one.client);
           yield* service.prepare(two.client);
@@ -200,7 +229,7 @@ it.effect(
           expect(yield* fs.readFileString(`${two.directory}/user-data/User/settings.json`)).toBe(
             '{"editor.fontSize":20}',
           );
-          expect(one.journal.operations.size).toBe(2);
+          expect(one.journal.operations.size).toBe(5);
           expect(two.journal.operations.size).toBe(1);
           // Applying must discard uncaptured local settings without importing them.
           const beforeImport = yield* service.get();
@@ -223,7 +252,7 @@ it.effect(
             ),
           ).toEqual(importBaseline);
           const beforeApply = yield* service.get();
-          yield* edit(one, '{"editor.fontSize":99}');
+          yield* edit(one, '{"editor.fontSize":');
           yield* service.manage({
             target: { threadId: ThreadId.make("one") },
             command: { kind: "apply" },
@@ -255,7 +284,8 @@ it.effect(
             return (yield* ServerConfig.ServerConfig).attachmentsDir;
           }).pipe(Effect.provide(ServerConfig.layerTest(root, `${root}/central`)));
           yield* fs.makeDirectory(attachmentsDir, { recursive: true });
-          yield* service.export({ threadId: ThreadId.make("one") });
+          const exported = yield* service.export({ threadId: ThreadId.make("one") });
+          expect(exported).not.toHaveProperty("bundlePath");
           expect(yield* fs.exists(`${one.directory}/exports/vscode-setup-fixture.tar`)).toBe(false);
           failTransfer = true;
           expect(
@@ -274,10 +304,20 @@ it.effect(
           yield* edit(one, '{"editor.fontSize":24}');
           yield* service.sync(one.client);
           expect((yield* service.get()).settingsRevision).toBe(beforePause.settingsRevision);
+          expect((yield* service.status({ threadId: ThreadId.make("one") })).state).toBe("paused");
+          yield* edit(one, '{"unfinished":');
+          yield* service.sync(one.client);
+          expect((yield* service.status({ threadId: ThreadId.make("one") })).state).toBe(
+            "needs_attention",
+          );
+          yield* edit(one, '{"editor.fontSize":24}');
           yield* service.manage({ command: { kind: "remember", enabled: true } });
           yield* service.sync(one.client);
           const replacement = yield* create("one", "replacement");
           expect((yield* service.sync(one.client).pipe(Effect.exit))._tag).toBe("Failure");
+          const beforeStalePrepare = resumes;
+          expect((yield* Effect.result(service.prepare(one.client)))._tag).toBe("Failure");
+          expect(resumes).toBe(beforeStalePrepare);
           yield* service.sync(replacement.client);
           const three = yield* create("three", "new");
           yield* service.prepare(three.client);
@@ -291,6 +331,22 @@ it.effect(
           expect((yield* service.get()).settingsRevision).not.toBe(beforeReset.settingsRevision);
           yield* service.manage({ command: { kind: "rollback_settings" } });
           expect((yield* service.get()).settingsRevision).toBe(beforeReset.settingsRevision);
+          yield* Effect.promise(async () => {
+            await NodeFSP.rm(`${replacement.directory}/user-data/User/settings.json`);
+            await replacement.client.transient("ide.preferences.read", { force: true });
+          });
+          yield* service.sync(replacement.client);
+          const deletedRevision = (yield* service.get()).settingsRevision;
+          yield* edit(two, '{"editor.fontSize":22,"git.path":"/local/git"}');
+          yield* service.manage({
+            target: { threadId: ThreadId.make("two") },
+            command: { kind: "apply" },
+          });
+          yield* service.sync(two.client);
+          expect((yield* service.get()).settingsRevision).toBe(deletedRevision);
+          expect(
+            yield* fs.readFileString(`${two.directory}/user-data/User/settings.json`),
+          ).toContain("/local/git");
         }).pipe(Effect.provide(layers)),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

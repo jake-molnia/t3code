@@ -18,9 +18,23 @@ import { writeIdeFile } from "./IdePreferences.ts";
 const NativeIndex = Schema.Array(
   Schema.Struct({
     identifier: Schema.Struct({ id: Schema.String }),
-    metadata: Schema.optionalKey(Schema.Struct({ source: Schema.optionalKey(Schema.String) })),
+    metadata: Schema.optionalKey(
+      Schema.Struct({
+        source: Schema.optionalKey(Schema.String),
+        installedTimestamp: Schema.optionalKey(Schema.Number),
+      }),
+    ),
   }),
 );
+const ManagedInstallations = Schema.Struct({
+  installations: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({ version: Schema.String, timestamp: Schema.Number }),
+    ),
+  ),
+});
+const decodeManagedInstallations = Schema.decodeUnknownSync(ManagedInstallations);
 const Inspect = Schema.Struct({ path: Schema.String });
 const decodeBaseline = Schema.decodeUnknownSync(Baseline);
 const decodeBuild = Schema.decodeUnknownSync(Build);
@@ -86,7 +100,11 @@ function command(
   });
 }
 
-export async function openIdeExtensions(directory: string, workerState: string) {
+export async function openIdeExtensions(
+  directory: string,
+  workerState: string,
+  runCommand = command,
+) {
   const record = NodePath.join(directory, "extension-baseline.json");
   const pendingRecord = NodePath.join(directory, "extension-provisioning.json");
   const controller = new AbortController();
@@ -132,7 +150,7 @@ export async function openIdeExtensions(directory: string, workerState: string) 
   const inventory = async () => {
     if (dirty) {
       const before = generation;
-      const output = await command("code-server", [
+      const output = await runCommand("code-server", [
         ...native,
         "--list-extensions",
         "--show-versions",
@@ -147,11 +165,28 @@ export async function openIdeExtensions(directory: string, workerState: string) 
         const index = decodeNativeIndex(
           JSON.parse(await NodeFSP.readFile(NodePath.join(extensions, "extensions.json"), "utf8")),
         );
+        let managed: NonNullable<(typeof ManagedInstallations.Type)["installations"]> = {};
+        try {
+          managed =
+            decodeManagedInstallations(
+              JSON.parse(
+                await NodeFSP.readFile(NodePath.join(directory, "managed-extensions.json"), "utf8"),
+              ),
+            ).installations ?? {};
+        } catch (error) {
+          if (!missing(error)) throw error;
+        }
         privateIds = index
           .filter(
             (item) =>
               item.metadata?.source === "vsix" &&
-              installed[item.identifier.id.toLowerCase()] !== undefined,
+              installed[item.identifier.id.toLowerCase()] !== undefined &&
+              !(
+                managed[item.identifier.id.toLowerCase()]?.version ===
+                  installed[item.identifier.id.toLowerCase()] &&
+                managed[item.identifier.id.toLowerCase()]?.timestamp ===
+                  item.metadata.installedTimestamp
+              ),
           )
           .map((item) => item.identifier.id.toLowerCase());
       } catch (error) {
@@ -177,7 +212,7 @@ export async function openIdeExtensions(directory: string, workerState: string) 
   };
   const python = async (operation: string, input: object): Promise<unknown> =>
     JSON.parse(
-      await command(
+      await runCommand(
         "python3",
         ["/opt/t3/ide-extensions/worker.py"],
         {

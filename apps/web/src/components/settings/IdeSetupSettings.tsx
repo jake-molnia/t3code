@@ -26,7 +26,6 @@ export function IdeSetupControls({
   const allowed = useAtomValue(shellEnvironment.manageIdeSetup.permissionAtom(environmentId));
   const [pending, setPending] = useState(false);
   const [archive, setArchive] = useState("");
-  const [exported, setExported] = useState<string | null>(null);
   const [exportedAttachment, setExportedAttachment] = useState<string | null>(null);
   const download = useAssetUrlState(
     environmentId,
@@ -132,7 +131,6 @@ export function IdeSetupControls({
                 void exportSetup({ environmentId, input: { target } })
                   .then((result) => {
                     if (result._tag !== "Success") return;
-                    setExported(result.value.bundlePath);
                     setExportedAttachment(result.value.attachmentId);
                   })
                   .finally(() => setPending(false));
@@ -143,7 +141,6 @@ export function IdeSetupControls({
           </>
         )}
       </div>
-      {exported && <p className="break-all">Native setup archive in this sandbox: {exported}</p>}
       {download._tag === "Success" && (
         <Button
           size="sm"

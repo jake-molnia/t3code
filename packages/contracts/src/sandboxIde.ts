@@ -36,10 +36,19 @@ export const SandboxIdePreferenceIssue = Schema.Struct({
   ]),
 });
 export const SandboxIdePreferenceStatus = Schema.Struct({
-  state: Schema.Literals(["not_opened", "saved", "pending", "needs_attention", "offline"]),
+  state: Schema.Literals([
+    "not_opened",
+    "saved",
+    "pending",
+    "paused",
+    "needs_attention",
+    "offline",
+  ]),
   issues: Schema.Array(SandboxIdePreferenceIssue),
 });
 export type SandboxIdePreferenceStatus = typeof SandboxIdePreferenceStatus.Type;
+
+export const SandboxIdePreferenceReplaceInput = Schema.Struct({ files: SandboxIdePreferenceFiles });
 
 export const SandboxIdePreferenceSnapshot = Schema.Struct({
   baseline: Schema.NullOr(SandboxIdePreferenceFiles),
@@ -175,7 +184,6 @@ export const IdeSetupExport = Schema.Struct({
   extensions: IdeExtensionSources,
   flake: Schema.String,
   lock: Schema.String,
-  bundlePath: Schema.NullOr(Schema.String),
 });
 
 export class SandboxIdeError extends Schema.TaggedError<SandboxIdeError>()("SandboxIdeError", {
