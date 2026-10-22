@@ -45,8 +45,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY images/t3/install-code-server.sh /tmp/
 RUN sh /tmp/install-code-server.sh "${TARGETARCH}" /opt/code-server
 
-FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:3ef66b7877049c3a81d2dba0a32425bd6c84fa0e4dfb8dcd5f7604619f597806 AS t3-worker
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS opencode2
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git patch \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY images/t3/upstream.json ./
+COPY images/t3/scripts/build-opencode.sh scripts/
+COPY images/t3/patches/opencode-mcp-tool-refresh.patch patches/
+ARG TARGETARCH
+RUN bash scripts/build-opencode.sh "$TARGETARCH" /out
+
+FROM tailscale/tailscale:v1.102.4@sha256:2667499ed87ae29218f292556ba062918402dd5e92e93637af14867e4df12dd3 AS tailscale
+
+FROM desktop-tools AS aio-tools
+COPY images/t3/desktop/download-aio.sh /tmp/download-aio.sh
+RUN sh /tmp/download-aio.sh "${TARGETARCH}" /out
+
+FROM --platform=$BUILDPLATFORM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS skills
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY images/t3/skills.lock.json images/t3/scripts/install-skills.py /tmp/skills/
+RUN python3 /tmp/skills/install-skills.py --lock /tmp/skills/skills.lock.json
+
+FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bdcd73c103b096988922d7 AS t3-worker
 USER 0:0
+COPY images/t3/desktop/install-tools.sh /tmp/install-desktop-tools.sh
+RUN sh /tmp/install-desktop-tools.sh && rm /tmp/install-desktop-tools.sh
 ARG TARGETARCH
 RUN test "$TARGETARCH" = amd64 \
     && apt-get update && apt-get install -y --no-install-recommends ca-certificates git git-lfs openssh-client python3 python3-venv ripgrep tini lsof procps chromium make g++ libffi8 libssl3t64 libbz2-1.0 libuuid1 zlib1g \
@@ -55,6 +79,16 @@ RUN test "$TARGETARCH" = amd64 \
     && mkdir -p /workspace && chown node:node /workspace
 COPY --from=desktop-tools /opt/code-server /opt/code-server
 COPY --from=go-toolchain /usr/local/go /usr/local/go
+COPY --from=opencode2 /out/opencode /usr/local/bin/opencode2
+COPY --from=aio-tools /out/aiod /out/computer-use /usr/local/bin/
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
+COPY --from=skills /opt/agent-skill-bundles /opt/agent-skill-bundles
+COPY --from=skills /opt/agent-skills /opt/agent-skills
+COPY images/t3/desktop/config /opt/t3/desktop/config
+COPY images/t3/desktop/skills /opt/t3/desktop/skills
+COPY images/t3/desktop/chromium-policy.json /etc/chromium/policies/managed/t3.json
+COPY images/t3/session.mjs images/t3/session.test.mjs images/t3/UPSTREAM.md /opt/t3/
+RUN node --test /opt/t3/session.test.mjs && rm /opt/t3/session.test.mjs
 COPY images/t3/harness-configs/gateway.json /opt/t3/gateway-harnesses.json
 COPY --from=worker-package /out/worker /opt/t3
 COPY --from=harnesses /opt/harnesses /opt/harnesses
@@ -63,8 +97,7 @@ COPY --from=harnesses /opt/native/az/opt/az /opt/az
 COPY --from=harnesses /opt/native/az/usr/bin/az /usr/bin/az
 COPY --from=harnesses /opt/native/extensions /opt/azure/extensions
 COPY --from=harnesses /opt/providers.lock.json /opt/t3/providers.lock.json
-RUN mv /usr/local/bin/opencode /usr/local/bin/opencode2 \
-    && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
+RUN ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
     && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs
 ARG T3_SOURCE_REVISION

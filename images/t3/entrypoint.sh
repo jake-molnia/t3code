@@ -11,4 +11,4 @@ for directory in "$HOME/.agents" "$HOME/.claude"; do
     fi
 done
 /usr/local/bin/t3-configure-git
-exec agent-runtime t3-session
+exec node /opt/t3/session.mjs

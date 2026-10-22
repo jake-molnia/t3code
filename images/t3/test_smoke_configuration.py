@@ -50,6 +50,9 @@ http.server.HTTPServer(('127.0.0.1', config['server']['port']), Handler).serve_f
 """
 HEAD_NODE = """import http.server, os, sys, urllib.request
 assert os.environ['T3_GATEWAY_API_KEY']
+assert 'AGENT_RUNTIME_URL' not in os.environ
+assert 'AGENT_RUNTIME_TOKEN' not in os.environ
+assert 'T3_EXECUTION_POOLS_FILE' not in os.environ
 request = urllib.request.Request(os.environ['T3_GATEWAY_MANAGEMENT_URL'] + '/v8/management/credentials',
                                 headers={'Authorization': 'Bearer ' + os.environ['T3_GATEWAY_MANAGEMENT_KEY']})
 with urllib.request.urlopen(request) as response: assert response.status == 200

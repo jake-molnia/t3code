@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "name": "pstack",
+      "repository": "cursor/plugins",
+      "revision": "93b00b89ef425a9c1bac0d0b317dfc49c930ac99",
+      "sha256": "99fdeb35b5afd49d36c1e250d9941a498146e5823a3c67d5bd9b73e81511f7d2",
+      "include": ["pstack"],
+      "skill_root": "pstack/skills",
+      "aliases": {"tdd": "pstack-tdd", "teach": "pstack-teach"},
+      "replacements": [
+        {
+          "path": "pstack/skills/poteto-mode/playbooks/bug-fix.md",
+          "old": "**tdd** skill",
+          "new": "**pstack-tdd** skill"
+        }
+      ]
+    },
+    {
+      "name": "matt-pocock",
+      "repository": "mattpocock/skills",
+      "revision": "3cca18b368ae95cdbdebbff572ccafa662551015",
+      "sha256": "47650b9424a4156417f35985c7439b2d05a8968b29cd8b2d4006dd3bee01cdcb",
+      "include": ["skills", "docs", "scripts", "README.md", "LICENSE", "CONTEXT.md"],
+      "skill_root": "skills/engineering",
+      "aliases": {},
+      "replacements": []
+    }
+  ]
+}
