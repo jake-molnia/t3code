@@ -4,6 +4,7 @@ import * as Exit from "effect/Exit";
 import { createExecutionWorker } from "../../execution/ExecutionWorker.ts";
 import { createExecutionClient } from "../../execution/ExecutionClient.ts";
 import { openWorkerJournal } from "../../execution/WorkerJournal.ts";
+import * as Fork from "../../execution/ForkWorkspaceProtocol.ts";
 import { seedWorkspace } from "../SeedWorkspace.ts";
 import { makeForkExecutor } from "./ForkExecutor.ts";
 import { makeAssetExecutor } from "./AssetExecutor.ts";
@@ -143,6 +144,32 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
           { kind: "file", byteLength: 8, mimeType: "image/png" },
         ],
       });
+    }),
+  );
+  it.effect("exports the requested snapshot without unrelated checkpoint refs", () =>
+    Effect.gen(function* () {
+      const { fs, path, root, worker } = yield* fixture;
+      yield* worker.execute("git.init", { cwd: "repo" });
+      for (const checkpointRef of ["refs/t3/old", "refs/t3code/old", "refs/t3/current"]) {
+        yield* fs.writeFileString(path.join(root, "repo/file.txt"), checkpointRef);
+        yield* worker.execute("git.captureCheckpoint", { cwd: "repo", checkpointRef });
+      }
+      const fork = yield* makeForkExecutor({ resolve: worker.resolve });
+      const bundle = yield* fork
+        .execute("git.bundleFork", {
+          cwd: "repo",
+          checkpointRef: "refs/t3/current",
+        })
+        .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Fork.ForkBundle)));
+      const git = yield* GitVcsDriver.GitVcsDriver;
+      const heads = yield* git.execute({
+        operation: "test.bundle-heads",
+        cwd: root,
+        args: ["bundle", "list-heads", bundle.bundlePath],
+      });
+      expect(heads.stdout).toContain("refs/t3/current");
+      expect(heads.stdout).not.toContain("refs/t3/old");
+      expect(heads.stdout).not.toContain("refs/t3code/old");
     }),
   );
   it.effect.each(["fork.lfs.env", "fork.lfs.objects"])(
@@ -428,7 +455,7 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
             yield* Effect.tryPromise(() => destination.call("git.isRepository", { cwd: "repo" })),
           ).toBe(false);
           yield* seedWorkspace({
-            source,
+            source: Effect.succeed(source),
             destination,
             sourceCwd: "repo",
             destinationCwd: "repo",
@@ -519,7 +546,7 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
           remote ? "git.importFork" : "asset.stage",
         );
         const interruptedInput = {
-          source,
+          source: Effect.succeed(source),
           destination: interrupted,
           sourceCwd: "repo",
           destinationCwd: "repo",
@@ -535,7 +562,7 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
         yield* Scope.close(sourceScope, Exit.void);
         sourceScope = yield* Scope.make();
         source = yield* makeClient(root).pipe(Effect.provideService(Scope.Scope, sourceScope));
-        yield* seedWorkspace({ ...interruptedInput, source });
+        yield* seedWorkspace({ ...interruptedInput, source: Effect.succeed(source) });
         expect(yield* fs.readFileString(path.join(interruptedRoot, "repo/README.md"))).toBe(
           "named project",
         );
@@ -552,7 +579,7 @@ it.layer(services, { excludeTestServices: true })("sandbox workspace operations"
           }),
         );
         yield* seedWorkspace({
-          source,
+          source: Effect.succeed(source),
           destination: first,
           sourceCwd: "repo",
           destinationCwd: "repo",

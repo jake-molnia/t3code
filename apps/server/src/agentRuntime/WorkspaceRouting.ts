@@ -1,5 +1,5 @@
 import { withWorkspaceActivity, withWorkspaceObservationActivity } from "./WorkspaceActivity.ts";
-import { inspectSeedDestination, seedWorkspace } from "./SeedWorkspace.ts";
+import { seedWorkspace } from "./SeedWorkspace.ts";
 import * as GitProtocol from "./worker/GitDriverProtocol.ts";
 import { validateCloneSourceUrl } from "./RepositoryUrl.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
@@ -79,8 +79,9 @@ export class WorkspaceRouting extends Context.Service<
       refName?: string;
       submodules?: C.WorktreeSubmodules;
       onStage?: (
-        stage: "sandbox" | "seed" | "checkout",
+        stage: "sandbox" | C.WorkspaceSeedStageId | "checkout",
         status: "running" | "done" | "skipped",
+        detail?: string,
       ) => Effect.Effect<void>;
     }) => Effect.Effect<string, WorkspaceRoutingError>;
     readonly callThread: (
@@ -346,7 +347,7 @@ export const layer = Layer.effect(
               const client = yield* runtime.forThread(input.threadId);
               yield* stage("sandbox", "done");
               if (binding.ownerThreadId !== input.threadId) {
-                yield* stage("seed", "skipped");
+                for (const id of C.WORKSPACE_SEED_STAGE_ORDER) yield* stage(id, "skipped");
                 yield* stage("checkout", "skipped");
                 return root.virtualCwd;
               }
@@ -357,19 +358,16 @@ export const layer = Layer.effect(
                 utilityKey: null,
                 sourceUrl: source.sourceUrl,
               });
-              yield* stage("seed", "running");
-              const prepared = yield* inspectSeedDestination(client, root.relativeCwd);
-              if (!prepared)
-                yield* seedWorkspace({
-                  source: yield* runtime.forWorkspace(source.workspaceId),
-                  destination: client,
-                  sourceCwd: source.relativeCwd,
-                  destinationCwd: root.relativeCwd,
-                  key: root.relativeCwd.slice(0, root.relativeCwd.indexOf("/")),
-                  ...(input.branch ? { checkoutBranch: input.branch } : {}),
-                  ...(input.refName ? { checkoutRef: input.refName } : {}),
-                });
-              yield* stage("seed", prepared ? "skipped" : "done");
+              yield* seedWorkspace({
+                source: runtime.forWorkspace(source.workspaceId),
+                destination: client,
+                sourceCwd: source.relativeCwd,
+                destinationCwd: root.relativeCwd,
+                key: root.relativeCwd.slice(0, root.relativeCwd.indexOf("/")),
+                onStage: stage,
+                ...(input.branch ? { checkoutBranch: input.branch } : {}),
+                ...(input.refName ? { checkoutRef: input.refName } : {}),
+              });
               yield* stage("checkout", "running");
               yield* Effect.tryPromise({
                 try: () =>
