@@ -105,6 +105,7 @@ export const IdeExtensionInstallInput = Schema.Struct({
   digest: IdeDigest,
   path: Schema.String,
 });
+export const IdeExtensionExportReleaseInput = Schema.Struct({ path: Schema.String });
 export const IdeExtensionExportInput = Schema.Struct({
   files: SandboxIdePreferenceFiles,
   bundle: Schema.NullOr(Schema.Struct({ path: Schema.String, digest: IdeDigest })),

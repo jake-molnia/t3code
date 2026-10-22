@@ -166,7 +166,7 @@ const make = Effect.gen(function* () {
             if (
               after !== undefined &&
               observed.privateIds.includes(id) &&
-              saved?.version !== after
+              (saved?.version !== after || saved.archive === null)
             ) {
               archiveMissing = true;
               continue;
@@ -339,24 +339,31 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const observed = yield* request(client);
         yield* currentIdentity(client);
-        for (const id of observed.privateIds) {
-          if (
-            !state.sources.some(
-              (source) => source.id === id && source.version === observed.installed[id],
-            )
-          )
-            return yield* failure("Import the original private VSIX before importing this sandbox");
-        }
         yield* mutex.withPermit(
-          updateSources(
-            Object.entries(observed.installed).map(([id, version]) => ({
-              id,
-              version,
-              archive:
-                state.sources.find((source) => source.id === id && source.version === version)
-                  ?.archive ?? null,
-            })),
-          ),
+          Effect.gen(function* () {
+            for (const id of observed.privateIds) {
+              if (
+                !state.sources.some(
+                  (source) =>
+                    source.id === id &&
+                    source.version === observed.installed[id] &&
+                    source.archive !== null,
+                )
+              )
+                return yield* failure(
+                  "Import the original private VSIX before importing this sandbox",
+                );
+            }
+            yield* updateSources(
+              Object.entries(observed.installed).map(([id, version]) => ({
+                id,
+                version,
+                archive:
+                  state.sources.find((source) => source.id === id && source.version === version)
+                    ?.archive ?? null,
+              })),
+            );
+          }),
         );
         yield* acknowledge(client, observed);
       }).pipe(Effect.mapError(failure)),

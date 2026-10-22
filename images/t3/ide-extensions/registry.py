@@ -47,7 +47,7 @@ def resolve(spec):
         package = json.loads(vsix.read("extension/package.json"))
     if f'{package["publisher"]}.{package["name"]}'.lower() != name or package["version"] != actual:
         raise ValueError(f"VSIX identity does not match {spec}")
-    dependencies = package.get("extensionDependencies", []) + package.get("extensionPack", [])
+    dependencies = package.get("extensionDependencies", [])
     if not all(isinstance(dep, str) and ID.fullmatch(dep) for dep in dependencies):
         raise ValueError(f"Invalid dependencies in {spec}")
     return {

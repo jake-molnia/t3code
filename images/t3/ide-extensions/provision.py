@@ -34,6 +34,16 @@ def provision(source, directory, replace=False):
         return installed
 
     installed = inventory() if desired or previous["extensions"] or replace else {}
+    previous_packages = {item["id"]: item for item in previous["extensions"]}
+    install = []
+    for item in desired:
+        if (replace or installed.get(item["id"]) != item["version"]
+                or previous_packages.get(item["id"], {}).get("hash") != item["hash"]):
+            archive = source / f'{item["id"]}-{item["version"]}.vsix'
+            install.extend(["--install-extension", str(archive)])
+    if install:
+        subprocess.run(command + install + ["--force", "--vscode-option", "do-not-include-pack-dependencies"], check=True, stdout=sys.stderr)
+        installed = inventory()
     dependencies = {}
     for manifest in (directory / "extensions").glob("*/package.json"):
         package = json.loads(manifest.read_text())
@@ -56,15 +66,11 @@ def provision(source, directory, replace=False):
             raise RuntimeError(f"Extension was not removed: {removable}")
         # Removing a pack can also remove members, including desired extensions.
         pending.intersection_update(installed)
-    previous_packages = {item["id"]: item for item in previous["extensions"]}
-    install = []
-    for item in desired:
-        if (replace or installed.get(item["id"]) != item["version"]
-                or previous_packages.get(item["id"], {}).get("hash") != item["hash"]):
-            archive = source / f'{item["id"]}-{item["version"]}.vsix'
-            install.extend(["--install-extension", str(archive)])
-    if install:
-        subprocess.run(command + install + ["--force"], check=True, stdout=sys.stderr)
+    # Pack removal can cascade to a desired member; restore only missing packages.
+    missing = [argument for item in desired if item["id"] not in installed
+               for argument in ("--install-extension", str(source / f'{item["id"]}-{item["version"]}.vsix'))]
+    if missing:
+        subprocess.run(command + missing + ["--force", "--vscode-option", "do-not-include-pack-dependencies"], check=True, stdout=sys.stderr)
     with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as target:
         temporary = target.name
         json.dump({"revision": revision, "extensions": desired}, target)

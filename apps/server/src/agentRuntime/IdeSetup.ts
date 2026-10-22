@@ -111,6 +111,7 @@ const make = Effect.gen(function* () {
   const tracked = new Set<string>();
   const nextObservation = new Map<string, number>();
   const states = new Map<string, SandboxIdePreferenceStatus>();
+  const extensionObservationFailures = new Set<string>();
   const localSettings = new Map<string, string>();
   const stages = new Map<string, IdeSetupStage>();
   const openingTargets = new Map<string, number>();
@@ -135,11 +136,21 @@ const make = Effect.gen(function* () {
     }
     return yield* decodeFiles(files);
   });
+  const validateFiles = (files: SandboxIdePreferenceFiles) =>
+    Effect.gen(function* () {
+      if (
+        Object.keys(files).length > 128 ||
+        Buffer.byteLength(encodeFiles(files)) > 2 * 1024 * 1024
+      )
+        return yield* failure("Saved IDE preferences exceed the size limit");
+      for (const [name, text] of Object.entries(files))
+        if (portableIdePreference(name, text) !== text)
+          return yield* failure("Invalid portable IDE preference");
+    });
   const write = (files: SandboxIdePreferenceFiles) =>
     Effect.gen(function* () {
+      yield* validateFiles(files);
       const names = Object.keys(files).sort();
-      if (names.length > 128 || Buffer.byteLength(encodeFiles(files)) > 2 * 1024 * 1024)
-        return yield* failure("Saved IDE preferences exceed the size limit");
       const previous = (yield* fs.exists(pointer))
         ? (yield* fs.readFileString(pointer).pipe(Effect.flatMap(decodeManifest))).revision
         : null;
@@ -181,7 +192,22 @@ const make = Effect.gen(function* () {
       client.identity.workspaceId,
       Effect.gen(function* () {
         const id = client.identity.workspaceId;
-        yield* extensions.observe(client, remembering);
+        yield* extensions.observe(client, remembering).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              extensionObservationFailures.delete(id);
+            }),
+          ),
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              extensionObservationFailures.add(id);
+              yield* Effect.logWarning("IDE extension observation failed", {
+                workspaceId: id,
+                error,
+              });
+            }),
+          ),
+        );
         const cursor = cursors.get(id);
         let observation = yield* request(
           client,
@@ -295,10 +321,15 @@ const make = Effect.gen(function* () {
           ).pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ state: Schema.String }))),
           );
-          let incomplete = extensions.pending(id);
+          let incomplete = extensionObservationFailures.has(id) || extensions.pending(id);
           if (lifecycle.state === "waiting") {
             stages.set(id, "restoring_extensions");
             yield* extensions.apply(client).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  incomplete = extensionObservationFailures.has(id) || extensions.pending(id);
+                }),
+              ),
               Effect.catch(() =>
                 Effect.sync(() => {
                   incomplete = true;
@@ -436,7 +467,17 @@ const make = Effect.gen(function* () {
         const client = yield* observedClient(target);
         const files = yield* lock.withPermit(read);
         const saved = yield* extensions.read;
-        const exported = yield* extensions.export(client, files);
+        const exported = yield* Effect.acquireRelease(extensions.export(client, files), (result) =>
+          result.bundlePath === null
+            ? Effect.void
+            : Effect.tryPromise((signal) =>
+                client.transient(
+                  "ide.extensions.releaseExport",
+                  { path: result.bundlePath },
+                  signal,
+                ),
+              ).pipe(Effect.ignore({ log: true })),
+        );
         if (exported.bundlePath === null) return yield* failure("IDE export is missing");
         const source = exported.bundlePath;
         const temporary = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ide-export-" });
@@ -523,13 +564,14 @@ const make = Effect.gen(function* () {
                     )
                   )
                     return yield* failure("Fix invalid native files before importing");
+                  yield* validateFiles(snapshot.files);
+                  yield* extensions.import(client);
                   yield* write(snapshot.files);
                   yield* request(client, "ide.preferences.acknowledge", {
                     baseline: snapshot.baseline ?? {},
                     files: snapshot.files,
                     issues: [],
                   });
-                  yield* extensions.import(client);
                 }),
               ),
             );

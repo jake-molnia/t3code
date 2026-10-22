@@ -1,13 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Real worker transport and native files in disposable roots.
 import { expect, it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import { ThreadId } from "@t3tools/contracts";
+import { SandboxIdeError, ThreadId } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
+import { openIdeExtensions } from "../execution/IdeExtensions.ts";
 import { openIdePreferences } from "../execution/IdePreferences.ts";
 import { createExecutionClient, type ExecutionClient } from "../execution/ExecutionClient.ts";
 import { createExecutionWorker } from "../execution/ExecutionWorker.ts";
@@ -23,11 +25,21 @@ it.effect(
       const fs = yield* FileSystem.FileSystem;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "ide-central-" });
       const clients = new Map<string, ExecutionClient>();
+      let observationFails = false;
+      let extensionPending = false;
+      let waiting = false;
+      let resumes = 0;
+      let failTransfer = false;
+      const exportBytes = Buffer.from("private VSIX export");
       const create = (workspaceId: string, incarnation: string) =>
         Effect.gen(function* () {
           const directory = `${root}/${workspaceId}/ide`;
           const preferences = yield* Effect.acquireRelease(
             Effect.promise(() => openIdePreferences(directory)),
+            (value) => Effect.promise(value.close),
+          );
+          const nativeExtensions = yield* Effect.acquireRelease(
+            Effect.promise(() => openIdeExtensions(directory, root)),
             (value) => Effect.promise(value.close),
           );
           const journal = yield* Effect.acquireRelease(
@@ -48,7 +60,24 @@ it.effect(
             token: "s".repeat(32),
             journal,
             execute: async (method, input) => {
-              if (method === "ide.lifecycle.read") return { state: "ready" };
+              if (method === "ide.extensions.releaseExport")
+                return nativeExtensions.execute(method, input);
+              if (method === "asset.snapshot") {
+                if (failTransfer) throw new Error("Transfer unavailable");
+                return {
+                  blobId: NodeCrypto.createHash("sha256").update(exportBytes).digest("hex"),
+                  size: exportBytes.length,
+                  name: "vscode-setup.tar",
+                };
+              }
+              if (method === "asset.read")
+                return {
+                  data: exportBytes.toString("base64"),
+                  offset: 0,
+                  size: exportBytes.length,
+                };
+              if (method === "ide.lifecycle.read") return { state: waiting ? "waiting" : "ready" };
+              if (method === "ide.lifecycle.resume") resumes++;
               if (method === "ide.lifecycle.resume" || method === "ide.lifecycle.pause")
                 return null;
               if (method === "ide.preferences.acknowledge") {
@@ -97,10 +126,25 @@ it.effect(
       const layers = Preferences.layer.pipe(
         Layer.provide(
           Layer.mock(IdeExtensions.IdeExtensions)({
-            observe: () => Effect.void,
-            apply: () => Effect.void,
+            observe: () =>
+              observationFails
+                ? Effect.fail(new SandboxIdeError({ reason: "unavailable" }))
+                : Effect.void,
+            apply: () =>
+              Effect.sync(() => {
+                extensionPending = false;
+              }),
+            export: (client) =>
+              Effect.gen(function* () {
+                const directory = `${root}/${client.identity.workspaceId}/ide/exports`;
+                yield* fs.makeDirectory(directory, { recursive: true });
+                const bundlePath = `${directory}/vscode-setup-fixture.tar`;
+                yield* fs.writeFile(bundlePath, exportBytes);
+                return { bundlePath, flake: "", lock: "" };
+              }).pipe(Effect.orDie),
+            import: () => Effect.fail(new SandboxIdeError({ reason: "unavailable" })),
             applied: () => null,
-            pending: () => false,
+            pending: () => extensionPending,
             read: Effect.succeed({
               attempt: 0,
               sources: [],
@@ -122,7 +166,18 @@ it.effect(
       yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* Preferences.IdeSetup;
+          observationFails = true;
           yield* service.prepare(one.client);
+          expect(resumes).toBe(1);
+          expect((yield* service.get({ threadId: ThreadId.make("one") })).stage).toBe(
+            "ready_with_errors",
+          );
+          observationFails = false;
+          extensionPending = true;
+          waiting = true;
+          yield* service.prepare(one.client);
+          expect((yield* service.get({ threadId: ThreadId.make("one") })).stage).toBe("ready");
+          waiting = false;
           yield* edit(one, initial);
           yield* service.sync(one.client);
           yield* service.prepare(two.client);
@@ -145,9 +200,28 @@ it.effect(
           expect(yield* fs.readFileString(`${two.directory}/user-data/User/settings.json`)).toBe(
             '{"editor.fontSize":20}',
           );
-          expect(one.journal.operations.size).toBe(1);
+          expect(one.journal.operations.size).toBe(2);
           expect(two.journal.operations.size).toBe(1);
           // Applying must discard uncaptured local settings without importing them.
+          const beforeImport = yield* service.get();
+          yield* edit(one, '{"editor.fontSize":98}');
+          const importBaseline = yield* Effect.promise(() =>
+            one.client.transient("ide.preferences.read", { force: true }),
+          );
+          expect(
+            (yield* Effect.result(
+              service.manage({
+                target: { threadId: ThreadId.make("one") },
+                command: { kind: "import" },
+              }),
+            ))._tag,
+          ).toBe("Failure");
+          expect((yield* service.get()).settingsRevision).toBe(beforeImport.settingsRevision);
+          expect(
+            yield* Effect.promise(() =>
+              one.client.transient("ide.preferences.read", { force: true }),
+            ),
+          ).toEqual(importBaseline);
           const beforeApply = yield* service.get();
           yield* edit(one, '{"editor.fontSize":99}');
           yield* service.manage({
@@ -177,6 +251,18 @@ it.effect(
           yield* Fiber.join(stale);
           yield* service.sync(two.client);
           expect((yield* service.status({ threadId: ThreadId.make("two") })).issues).toEqual([]);
+          const attachmentsDir = yield* Effect.gen(function* () {
+            return (yield* ServerConfig.ServerConfig).attachmentsDir;
+          }).pipe(Effect.provide(ServerConfig.layerTest(root, `${root}/central`)));
+          yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+          yield* service.export({ threadId: ThreadId.make("one") });
+          expect(yield* fs.exists(`${one.directory}/exports/vscode-setup-fixture.tar`)).toBe(false);
+          failTransfer = true;
+          expect(
+            (yield* Effect.result(service.export({ threadId: ThreadId.make("one") })))._tag,
+          ).toBe("Failure");
+          expect(yield* fs.exists(`${one.directory}/exports/vscode-setup-fixture.tar`)).toBe(false);
+          failTransfer = false;
         }).pipe(Effect.provide(layers)),
       );
       // The central service is recreated while both worker transports remain alive.

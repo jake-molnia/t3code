@@ -54,6 +54,7 @@ class ProvisionTests(unittest.TestCase):
                 self.installed.pop(member, None)
             self.operations.append(("remove", name))
         else:
+            self.assertEqual(command[-2:], ["--vscode-option", "do-not-include-pack-dependencies"])
             for index, argument in enumerate(command):
                 if argument != "--install-extension":
                     continue
@@ -102,6 +103,18 @@ class ProvisionTests(unittest.TestCase):
         provision.provision(self.bundle, self.ide)
         self.assertEqual(self.installed, {})
         self.assertEqual(self.operations[-2:], [("remove", dependent["id"]), ("remove", dependency["id"])])
+
+    def test_upgrades_dependents_before_removing_dropped_dependencies(self):
+        for replace in (False, True):
+            with self.subTest(replace=replace):
+                dependency = dict(self.extension, id="example.dependency")
+                self.declare([self.extension, dependency])
+                provision.provision(self.bundle, self.ide, replace=True)
+                self.install(self.extension, dependencies=[dependency["id"]])
+                self.declare([dict(self.extension, version="2.0.0", hash="upgrade")])
+                provision.provision(self.bundle, self.ide, replace=replace)
+                self.assertEqual(set(self.installed), {self.extension["id"]})
+                self.assertEqual(self.installed[self.extension["id"]]["version"], "2.0.0")
 
     def test_refreshes_inventory_after_extension_pack_cascading(self):
         pack = dict(self.extension, id="example.a-pack")

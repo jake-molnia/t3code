@@ -146,9 +146,12 @@ export function createExecutionWorker(options: {
         "input.stage",
       ].includes(operation.method) ||
       operation.method.startsWith("ide.preferences.") ||
-      ["ide.extensions.read", "ide.extensions.acknowledge", "ide.extensions.export"].includes(
-        operation.method,
-      ) ||
+      [
+        "ide.extensions.read",
+        "ide.extensions.acknowledge",
+        "ide.extensions.export",
+        "ide.extensions.releaseExport",
+      ].includes(operation.method) ||
       operation.method.startsWith("auth.") ||
       operation.method === "configureProvider"
     )
@@ -293,6 +296,7 @@ export function createExecutionWorker(options: {
           [
             "ide.lifecycle.read",
             "ide.extensions.export",
+            "ide.extensions.releaseExport",
             "ide.extensions.read",
             "ide.extensions.acknowledge",
             "ide.preferences.read",

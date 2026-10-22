@@ -42,6 +42,19 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(entry["id"], "example.extension")
         self.assertEqual(dependencies, [])
 
+    def test_optional_pack_members_are_not_required_dependencies(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("extension/package.json", json.dumps({
+                "publisher": "example", "name": "extension", "version": "1.0.0",
+                "extensionPack": ["example.removed"],
+                "extensionDependencies": ["example.required"],
+            }))
+        self.archive = buffer.getvalue()
+        with patch.object(registry, "download", side_effect=self.download):
+            _, dependencies = registry.resolve("example.extension@1.0.0")
+        self.assertEqual(dependencies, ["example.required"])
+
     def test_falls_back_to_universal_only_when_linux_is_missing(self):
         with patch.object(registry, "download", side_effect=lambda url: self.download(url, True)):
             entry, _ = registry.resolve("example.extension@1.0.0")

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import zipfile
 
 from registry import ID, VERSION, resolve
@@ -106,7 +107,7 @@ def build(request, directory):
                 shutil.copyfile(archive, source / archive.name)
                 with zipfile.ZipFile(archive) as vsix:
                     package = json.loads(vsix.read("extension/package.json"))
-                dependencies = package.get("extensionDependencies", []) + package.get("extensionPack", [])
+                dependencies = package.get("extensionDependencies", [])
             elif item["archive"] is None:
                 entry, dependencies = resolve(f'{item["id"]}@{item["version"]}')
             else:
@@ -121,7 +122,7 @@ def build(request, directory):
                 entry = dict(item, hash="sha256-" + base64.b64encode(hashlib.sha256(data).digest()).decode())
                 with zipfile.ZipFile(archive) as vsix:
                     package = json.loads(vsix.read("extension/package.json"))
-                dependencies = package.get("extensionDependencies", []) + package.get("extensionPack", [])
+                dependencies = package.get("extensionDependencies", [])
             manifest.append(entry)
             for dependency in dependencies:
                 name = dependency.lower()
@@ -166,6 +167,13 @@ def install(request, directory):
 
 
 def export_setup(request, directory):
+    export_directory = directory / "exports"
+    export_directory.mkdir(exist_ok=True)
+    for archive in export_directory.glob("vscode-setup-*.tar"):
+        if archive.stat().st_mtime < time.time() - 3600:
+            archive.unlink()
+    if len(list(export_directory.glob("vscode-setup-*.tar"))) >= 4:
+        raise ValueError("Too many pending IDE exports; retry after transfers complete")
     with tempfile.TemporaryDirectory(prefix="ide-export-", dir=directory) as temporary:
         work = Path(temporary)
         for name, contents in request["files"].items():
@@ -178,15 +186,19 @@ def export_setup(request, directory):
             extensions = work / "extensions"
             extensions.mkdir()
             unpack_bundle(Path(request["bundle"]["path"]), extensions, request["bundle"]["digest"])
-        export_directory = directory / "exports"
-        export_directory.mkdir(exist_ok=True)
         handle, name = tempfile.mkstemp(prefix="vscode-setup-", suffix=".tar", dir=export_directory)
         os.close(handle)
-        with tarfile.open(name, "w") as tar:
-            for file in sorted(work.rglob("*")):
-                if file.is_file():
-                    tar.add(file, arcname=str(file.relative_to(work)), recursive=False)
-        return {"path": name}
+        try:
+            with tarfile.open(name, "w") as tar:
+                for file in sorted(work.rglob("*")):
+                    if file.is_file():
+                        tar.add(file, arcname=str(file.relative_to(work)), recursive=False)
+                        if tar.offset > 1024**3 + 4 * 1024**2:
+                            raise ValueError("IDE export exceeds the size limit")
+            return {"path": name}
+        except BaseException:
+            Path(name).unlink(missing_ok=True)
+            raise
 
 
 def main():

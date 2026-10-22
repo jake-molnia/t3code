@@ -115,8 +115,9 @@ it.effect(
           clients.set(workspaceId, client);
           return {
             client,
-            edit: (next: IdeExtensionInventory) => {
+            edit: (next: IdeExtensionInventory, privateExtensions: string[] = []) => {
               installed = next;
+              privateIds = privateExtensions;
             },
           };
         });
@@ -185,6 +186,16 @@ it.effect(
           );
           yield* service.rollback;
           expect((yield* service.read).published?.revision).toBe(published);
+          const beforePrivateImport = (yield* service.read).sources;
+          two.edit({ "publisher.first": "1.0.0" }, ["publisher.first"]);
+          expect((yield* Effect.result(service.import(two.client)))._tag).toBe("Failure");
+          expect((yield* service.read).sources).toEqual(beforePrivateImport);
+          yield* service.observe(two.client, true);
+          expect((yield* service.read).build).toMatchObject({
+            state: "failed",
+            reason: "archive_missing",
+          });
+          expect((yield* service.read).sources).toEqual(beforePrivateImport);
           yield* create("root-one", "replacement");
           expect((yield* Effect.result(service.observe(one.client, true)))._tag).toBe("Failure");
           expect(buildCount).toBe(3);

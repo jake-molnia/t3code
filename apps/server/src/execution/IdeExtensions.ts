@@ -11,6 +11,7 @@ import {
   IdeExtensionBuildInput as Build,
   IdeExtensionInstallInput as Install,
   IdeExtensionExportInput as Export,
+  IdeExtensionExportReleaseInput as ExportRelease,
 } from "@t3tools/contracts";
 import { writeIdeFile } from "./IdePreferences.ts";
 
@@ -24,6 +25,7 @@ const Inspect = Schema.Struct({ path: Schema.String });
 const decodeBaseline = Schema.decodeUnknownSync(Baseline);
 const decodeBuild = Schema.decodeUnknownSync(Build);
 const decodeExport = Schema.decodeUnknownSync(Export);
+const decodeExportRelease = Schema.decodeUnknownSync(ExportRelease);
 const decodeIdeExtensionInventory = Schema.decodeUnknownSync(IdeExtensionInventory);
 const decodeInspect = Schema.decodeUnknownSync(Inspect);
 const decodeInstall = Schema.decodeUnknownSync(Install);
@@ -216,6 +218,18 @@ export async function openIdeExtensions(directory: string, workerState: string) 
       await NodeFSP.rm(pendingRecord, { force: true });
       provisioning = false;
       return result;
+    }
+    if (method === "ide.extensions.releaseExport") {
+      const request = decodeExportRelease(input);
+      const exports = NodePath.resolve(directory, "exports");
+      const target = NodePath.resolve(request.path);
+      if (
+        NodePath.dirname(target) !== exports ||
+        !/^vscode-setup-[a-zA-Z0-9_-]+\.tar$/.test(NodePath.basename(target))
+      )
+        throw new Error("Invalid IDE export path");
+      await NodeFSP.rm(target, { force: true });
+      return null;
     }
     if (method === "ide.extensions.export") {
       const request = decodeExport(input);
