@@ -26,9 +26,13 @@ export const projectFileLayer = Layer.effect(
     });
   }),
 );
-export const repositoryLayer = Layer.effect(
-  RepositoryIdentityResolver.RepositoryIdentityResolver,
-  Effect.gen(function* () {
+export const makeRepositoryResolver = Effect.fn("RemoteProjectMetadata.makeRepositoryResolver")(
+  function* (
+    configuration: Pick<
+      RepositoryIdentityResolver.RepositoryIdentityResolverOptions,
+      "refine"
+    > = {},
+  ) {
     const routes = yield* Routing.WorkspaceRouting;
     const sql = yield* SqlClient.SqlClient;
     const cache = new Map<string, C.RepositoryIdentity | null>();
@@ -42,8 +46,16 @@ export const repositoryLayer = Layer.effect(
           });
           if (raw !== null) {
             const result = yield* Schema.decodeUnknownEffect(P.RepositoryResult)(raw);
-            cache.set(cwd, result.identity);
-            return result.identity;
+            const identity = result.identity;
+            const refined =
+              identity !== null && configuration.refine
+                ? yield* routes.observe(cwd, configuration.refine(identity)).pipe(
+                    Effect.map((value) => value ?? identity),
+                    Effect.orElseSucceed(() => identity),
+                  )
+                : identity;
+            cache.set(cwd, refined);
+            return refined;
           }
           if (cache.has(cwd)) return cache.get(cwd) ?? null;
           const route = yield* routes.describeCwd(cwd);
@@ -60,7 +72,11 @@ export const repositoryLayer = Layer.effect(
           });
         }).pipe(Effect.catchCause(() => Effect.succeed(cache.get(cwd) ?? null))),
     });
-  }),
+  },
+);
+export const repositoryLayer = Layer.effect(
+  RepositoryIdentityResolver.RepositoryIdentityResolver,
+  makeRepositoryResolver(),
 );
 export const faviconLayer = Layer.effect(
   ProjectFaviconResolver.ProjectFaviconResolver,

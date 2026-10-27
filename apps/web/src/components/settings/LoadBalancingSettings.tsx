@@ -97,8 +97,8 @@ export function LoadBalancingSettings({ environmentId }: { environmentId: Enviro
       }
     >
       <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
-        New threads start in the pool with the most free CPU and memory, weighted by each pool's
-        preference.
+        New threads use an available pool that supports the selected provider, based on your
+        preferences and CPU and memory capacity when available.
       </p>
       {pools.map((pool) => (
         <EnvironmentRow

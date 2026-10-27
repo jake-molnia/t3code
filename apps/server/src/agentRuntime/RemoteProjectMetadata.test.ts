@@ -119,10 +119,23 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
           preferred: string | undefined;
           found: string | null;
         }> = [];
+        let refinements = 0;
+        const repositoryLayer = Layer.effect(
+          RepositoryIdentity.RepositoryIdentityResolver,
+          RemoteMetadata.makeRepositoryResolver({
+            refine: (identity) =>
+              Effect.gen(function* () {
+                const observation = yield* Routing.WorkspaceObservation;
+                expect(observation?.workspaceId).toBe("project-seed");
+                refinements++;
+                return { ...identity, displayName: "Refined repository" };
+              }),
+          }),
+        );
         const built = yield* Layer.build(
           Layer.mergeAll(
             RemoteMetadata.projectFileLayer,
-            RemoteMetadata.repositoryLayer,
+            repositoryLayer,
             RemoteMetadata.faviconLayer,
           ).pipe(Layer.provide(Routing.layer)),
         ).pipe(
@@ -135,6 +148,9 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
               Effect.sync(() => {
                 cachedFavicons.push({ cwd, preferred, found });
               }),
+          }),
+          Effect.provideService(ProcessRunner.ProcessRunner, {
+            run: () => Effect.die("Central must not execute Git for repository metadata"),
           }),
           Effect.provideService(FileSystem.FileSystem, {
             ...fs,
@@ -153,6 +169,7 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
         const repoIdentity = yield* repositories.resolve("/workspace/repo");
         expect(repoIdentity).toMatchObject({
           canonicalKey: "github.com/example/repo",
+          displayName: "Refined repository",
           rootPath: "/workspace/repo",
           locator: { remoteUrl: "https://github.com/example/repo.git" },
         });
@@ -174,6 +191,7 @@ it.layer(layer, { excludeTestServices: true })("remote project metadata", (it) =
         expect(yield* repositories.resolve("/workspace/repo")).toEqual(repoIdentity);
         expect(calls).toBe(before);
         expect(wakes).toBe(wakeCount);
+        expect(refinements).toBe(1);
         expect(() => validateCloneSourceUrl("https://token@github.com/example/repo.git")).toThrow(
           "credentials",
         );
