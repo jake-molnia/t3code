@@ -1,20 +1,43 @@
-import { EnvironmentId, ProjectId, ThreadId, type SandboxIdeTarget } from "@t3tools/contracts";
-import { AsyncResult } from "effect/reactivity";
+import {
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+  type SandboxIdeTarget,
+  type IdeSetupState,
+} from "@t3tools/contracts";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
-const state = vi.hoisted(() => ({ run: vi.fn(), allowed: true }));
-vi.mock("./state/shell", () => ({ shellEnvironment: { openSandboxIde: {} } }));
+const state = vi.hoisted(() => ({ run: vi.fn(), ideSetup: vi.fn(), allowed: true }));
+vi.mock("./state/shell", () => ({
+  shellEnvironment: { openSandboxIde: {}, ideSetup: state.ideSetup },
+}));
 vi.mock("./state/use-atom-command", () => ({ useAtomCommand: () => state.run }));
 vi.mock("./state/session", () => ({
   readEnvironmentScope: () => state.allowed,
   readPreparedConnection: () => ({ httpBaseUrl: "https://remote.example" }),
 }));
+import { appAtomRegistry } from "./rpc/atomRegistry";
 import { useSandboxIde } from "./useSandboxIde";
 import { useOpenFavoriteEditorShortcut } from "./components/chat/OpenInPickerShortcut";
 const environmentId = EnvironmentId.make("remote");
 const threadId = ThreadId.make("thread");
 let renderer: ReactTestRenderer | undefined;
+const setupState: IdeSetupState = {
+  stage: "not_opened",
+  remembering: true,
+  settingsRevision: "initial",
+  settingsMatch: null,
+  previousSettingsRevision: null,
+  extensions: [],
+  build: { state: "idle" },
+  publishedRevision: null,
+  previousPublishedRevision: null,
+  appliedRevision: null,
+  preferences: { state: "saved", issues: [] },
+};
+let setup = Atom.make(AsyncResult.success(setupState));
 const tab = {
   opener: {},
   document: { title: "", body: { textContent: "" } },
@@ -42,6 +65,9 @@ function Trigger({
 }
 beforeEach(() => {
   state.allowed = true;
+  setup = Atom.make(AsyncResult.success(setupState));
+  state.ideSetup.mockReset().mockReturnValue(setup);
+  tab.document.body.textContent = "";
   state.run
     .mockReset()
     .mockResolvedValue(AsyncResult.success({ url: "/api/sandbox-ide/session/?ticket=test" }));
@@ -53,6 +79,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(async () => renderer?.unmount());
+  appAtomRegistry.reset();
   vi.unstubAllGlobals();
 });
 it("reserves a tab before the sandbox starts and resolves the IDE path against the connected T3 head", async () => {
@@ -78,6 +105,9 @@ it("reserves a tab before the sandbox starts and resolves the IDE path against t
     environmentId,
     input: { target: { threadId }, cwd: "/work/project" },
   });
+  expect(state.ideSetup).toHaveBeenCalledWith({ environmentId, input: { target: { threadId } } });
+  appAtomRegistry.set(setup, AsyncResult.success({ ...setupState, stage: "restoring_extensions" }));
+  expect(tab.document.body.textContent).toBe("Restoring saved extensions…");
   await act(async () => {
     finish?.(
       AsyncResult.success({
@@ -88,6 +118,8 @@ it("reserves a tab before the sandbox starts and resolves the IDE path against t
   expect(tab.location.replace).toHaveBeenCalledWith(
     "https://remote.example/api/sandbox-ide/session/?ticket=one-use",
   );
+  appAtomRegistry.set(setup, AsyncResult.success({ ...setupState, stage: "ready" }));
+  expect(tab.document.body.textContent).toBe("Restoring saved extensions…");
 });
 it("checks the current destination grant before opening a tab", async () => {
   await act(async () => {

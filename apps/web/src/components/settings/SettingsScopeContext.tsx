@@ -62,21 +62,27 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
   );
 }
 
-function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, projectOnly: boolean) {
+function useResolvedSettingsScope(
+  rawSearch: SettingsScopeSearch,
+  projectOnly: boolean,
+  environmentId?: string,
+) {
   const groups = useSettingsProjectGroups();
   const { environments: availableEnvironments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const search = useMemo(
     () =>
-      projectOnly
-        ? selectProjectSettingsScope(rawSearch)
-        : selectSingleEnvironmentScope(
-            {},
-            resolveSettingsScope({}, groups, availableEnvironments),
-            availableEnvironments,
-            primaryEnvironmentId,
-          ),
-    [availableEnvironments, groups, primaryEnvironmentId, rawSearch, projectOnly],
+      environmentId !== undefined
+        ? { machine: environmentId }
+        : projectOnly
+          ? selectProjectSettingsScope(rawSearch)
+          : selectSingleEnvironmentScope(
+              {},
+              resolveSettingsScope({}, groups, availableEnvironments),
+              availableEnvironments,
+              primaryEnvironmentId,
+            ),
+    [availableEnvironments, groups, primaryEnvironmentId, rawSearch, projectOnly, environmentId],
   );
   const scope = useMemo(
     () => resolveSettingsScope(search, groups, availableEnvironments),
@@ -121,14 +127,16 @@ export function SettingsScopeProvider({
   children,
   singleEnvironment = false,
   projectOnly = true,
+  environmentId,
 }: {
   singleEnvironment?: boolean;
   projectOnly?: boolean;
+  environmentId?: string;
   search: SettingsScopeSearch;
   onChange: (next: SettingsScopeSearch) => void;
   children: ReactNode;
 }) {
-  const resolved = useResolvedSettingsScope(search, projectOnly);
+  const resolved = useResolvedSettingsScope(search, projectOnly, environmentId);
   const value = useMemo(
     () => ({ ...resolved, singleEnvironment, selectScope: onChange }),
     [onChange, resolved, singleEnvironment],

@@ -9,7 +9,11 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveSettingsScope } from "./settingsScope";
-import { retainSettingsScope, validateSettingsRouteSearch } from "./settingsScopeNavigation";
+import {
+  retainSettingsScope,
+  validateSettingsRouteSearch,
+  validateIdeSettingsSearch,
+} from "./settingsScopeNavigation";
 
 import { validateScheduledTasksSearch } from "./scheduledTasksSettings.logic";
 
@@ -31,6 +35,11 @@ function createSettingsRouter(initialEntry = "/settings/general") {
         throw redirect({ to: "/settings/general", replace: true });
       }
     },
+  });
+  const ide = createRoute({
+    getParentRoute: () => settings,
+    path: "ide",
+    validateSearch: validateIdeSettingsSearch,
   });
   const general = createRoute({ getParentRoute: () => settings, path: "general" });
   const projects = createRoute({ getParentRoute: () => settings, path: "projects" });
@@ -68,6 +77,7 @@ function createSettingsRouter(initialEntry = "/settings/general") {
     routeTree: root.addChildren([
       settings.addChildren([
         general,
+        ide,
         projects,
         integrations,
         sourceControl,
@@ -81,6 +91,18 @@ function createSettingsRouter(initialEntry = "/settings/general") {
 }
 
 describe("settings scope navigation", () => {
+  it("retains both the linked sandbox and its remote environment", async () => {
+    const router = createSettingsRouter(
+      "/settings/ide?machine=remote-server&ideEnvironment=remote-server&ideThread=remote-thread",
+    );
+    await router.load();
+    expect(router.state.matches.at(-1)?.search).toMatchObject({
+      machine: "remote-server",
+      ideEnvironment: "remote-server",
+      ideThread: "remote-thread",
+    });
+  });
+
   it("replaces the default scope with an explicit environment, then replaces it with a project", async () => {
     const router = createSettingsRouter();
     await router.load();

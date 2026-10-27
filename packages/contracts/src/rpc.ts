@@ -21,7 +21,17 @@ import {
 } from "./mcpConnections.ts";
 import { ServerReleaseNotice } from "./serverVersion.ts";
 import { ExecutionPoolsSnapshot } from "./executionPools.ts";
-import { SandboxIdeOpenInput, SandboxIdeOpenResult, SandboxIdeError } from "./sandboxIde.ts";
+import {
+  SandboxIdeOpenInput,
+  SandboxIdeOpenResult,
+  SandboxIdeError,
+  SandboxIdeTarget,
+  SandboxIdePreferenceStatus,
+  IdeSetupState,
+  IdeSetupCommandInput,
+  IdeSetupExport,
+  SandboxIdePreferenceResolveInput,
+} from "./sandboxIde.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -370,6 +380,11 @@ export const WS_METHODS = {
 
   // Shell methods
   sandboxIdeOpen: "sandbox.ide.open",
+  sandboxIdeSetupGet: "sandbox.ide.setupGet",
+  sandboxIdeSetupManage: "sandbox.ide.setupManage",
+  sandboxIdeSetupExport: "sandbox.ide.setupExport",
+  sandboxIdePreferenceStatus: "sandbox.ide.preferenceStatus",
+  sandboxIdePreferenceResolve: "sandbox.ide.preferenceResolve",
 
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
@@ -1208,6 +1223,32 @@ const WsProjectsCreateNewRpc = Rpc.make(WS_METHODS.projectsCreateNew, {
   error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
 });
 
+const WsSandboxIdeSetupGetRpc = Rpc.make(WS_METHODS.sandboxIdeSetupGet, {
+  payload: Schema.Struct({ target: Schema.optionalKey(SandboxIdeTarget) }),
+  success: IdeSetupState,
+  error: Schema.Union([SandboxIdeError, EnvironmentAuthorizationError]),
+});
+const WsSandboxIdeSetupManageRpc = Rpc.make(WS_METHODS.sandboxIdeSetupManage, {
+  payload: IdeSetupCommandInput,
+  success: Schema.Void,
+  error: Schema.Union([SandboxIdeError, EnvironmentAuthorizationError]),
+});
+const WsSandboxIdeSetupExportRpc = Rpc.make(WS_METHODS.sandboxIdeSetupExport, {
+  payload: Schema.Struct({ target: SandboxIdeTarget }),
+  success: IdeSetupExport,
+  error: Schema.Union([SandboxIdeError, EnvironmentAuthorizationError]),
+});
+const WsSandboxIdePreferenceStatusRpc = Rpc.make(WS_METHODS.sandboxIdePreferenceStatus, {
+  payload: Schema.Struct({ target: SandboxIdeTarget }),
+  success: SandboxIdePreferenceStatus,
+  error: Schema.Union([SandboxIdeError, EnvironmentAuthorizationError]),
+});
+const WsSandboxIdePreferenceResolveRpc = Rpc.make(WS_METHODS.sandboxIdePreferenceResolve, {
+  payload: SandboxIdePreferenceResolveInput,
+  success: Schema.Void,
+  error: Schema.Union([SandboxIdeError, EnvironmentAuthorizationError]),
+});
+
 const WsSandboxIdeOpenRpc = Rpc.make(WS_METHODS.sandboxIdeOpen, {
   payload: SandboxIdeOpenInput,
   success: SandboxIdeOpenResult,
@@ -1928,6 +1969,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsWriteFileRpc,
   WsProjectsMutateRpc,
   WsSandboxIdeOpenRpc,
+  WsSandboxIdeSetupGetRpc,
+  WsSandboxIdeSetupManageRpc,
+  WsSandboxIdeSetupExportRpc,
+  WsSandboxIdePreferenceStatusRpc,
+  WsSandboxIdePreferenceResolveRpc,
   WsFilesystemBrowseRpc,
   WsFilesystemGetMetadataRpc,
   WsAgentSessionsScanRpc,

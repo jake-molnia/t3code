@@ -1,3 +1,4 @@
+import { IdeSetup } from "./IdeSetup.ts";
 import { expect, it } from "@effect/vitest";
 import { AuthSessionId, ProjectId, ThreadId, type SandboxIdeOpenInput } from "@t3tools/contracts";
 import * as Scope from "effect/Scope";
@@ -78,6 +79,21 @@ const setup = Effect.gen(function* () {
       SandboxIde.layer.pipe(
         Layer.provide(Layer.succeed(RuntimeClient.RuntimeClient, runtime)),
         Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.succeed(
+            IdeSetup,
+            IdeSetup.of({
+              opening: () => Effect.void,
+              get: () => Effect.die("unused"),
+              manage: () => Effect.void,
+              export: () => Effect.die("unused"),
+              prepare: () => Effect.void,
+              sync: () => Effect.void,
+              resolve: () => Effect.void,
+              status: () => Effect.succeed({ state: "saved", issues: [] }),
+            }),
+          ),
+        ),
         Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
       ),
     ).pipe(

@@ -7,6 +7,14 @@ function completed(input: unknown, output?: unknown): T3ToolSummaryCall {
 }
 
 describe("summarizeT3ToolCalls", () => {
+  it.each([
+    ["ide-setup-read", "Read saved IDE setup 1 time"],
+    ["ide-setup-manage", "Managed saved IDE setup 1 time"],
+    ["ide-setup-export", "Exported saved IDE setup 1 time"],
+  ] as const)("summarizes %s", (action, label) => {
+    expect(summarizeT3ToolCalls(action, [completed({})])).toEqual({ label, failedCount: 0 });
+  });
+
   it("counts registered projects, repository destinations, and accepted thread launches", () => {
     expect(
       summarizeT3ToolCalls("project-create", [
