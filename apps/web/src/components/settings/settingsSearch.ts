@@ -14,6 +14,7 @@ import {
 } from "./settingsScope";
 
 export type SettingsPath =
+  | "/settings/ide"
   | "/settings/projects"
   | "/settings/general"
   | "/settings/diagnostics"
@@ -94,6 +95,7 @@ export interface SettingsSearchAvailability {
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/diagnostics": "Diagnostics",
   "/settings/projects": "Project",
+  "/settings/ide": "VS Code",
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
@@ -163,6 +165,13 @@ const SOURCE_CONTROL_HOST_SEARCH_ITEMS = sourceControlClients.definitions.flatMa
  * that may not be mounted point at their nearest stable section instead.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "ide-setup",
+    title: "VS Code setup",
+    to: "/settings/ide",
+    scope: "environment",
+    searchTerms: ["IDE extensions Nix settings trust import export pause reset rollback"],
+  },
   {
     id: "storage-worktree-keep-when",
     targetId: "storage-worktrees",
@@ -846,6 +855,7 @@ export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
 const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const));
 
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
+  "/settings/ide": "environment",
   "/settings/diagnostics": "environment",
   "/settings/projects": "project",
   "/settings/general": null,
@@ -925,12 +935,13 @@ export function isSettingsSearchScopeAvailable(
     case "connections":
       return true;
     case "environment":
+      return scopeKind !== "unavailable";
     case "checkout":
       return requiredScope === scopeKind;
     case "project":
       return scopeKind === "project" || scopeKind === "checkout";
     case "environment-defaults":
-      return scopeKind === "environment" || scopeKind === "all";
+      return scopeKind !== "unavailable";
     case "project-defaults":
       return (
         scopeKind === "environment" ||

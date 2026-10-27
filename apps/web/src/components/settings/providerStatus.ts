@@ -46,7 +46,9 @@ export function getProviderSummary(provider: ServerProvider | undefined) {
     return {
       headline: "Disabled",
       detail:
-        provider.message ?? "This provider is installed but disabled for new sessions in T3 Code.",
+        (provider.availability === "unavailable" ? provider.unavailableReason : undefined) ??
+        provider.message ??
+        "Not used for new sessions. Saved configuration is retained.",
     };
   }
   if (!provider.installed) {

@@ -159,7 +159,8 @@ jobs:
   test_server:
     name: Test Server ${{ matrix.shard }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Browser OS-package downloads must not consume the test execution budget.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -179,9 +180,11 @@ jobs:
           cache: true
           run-install: true
       - name: Install Chromium for server browser integration tests
+        timeout-minutes: 15
         run: node apps/server/node_modules/playwright-core/cli.js install --with-deps
           --only-shell chromium
       - name: Test
+        timeout-minutes: 10
         env:
           T3CODE_TRANSFER_BUDGET_REPORT_PATH: ${{ runner.temp }}/t3code-transfer-budget.md
           T3CODE_TRANSFER_BUDGET_RESULT_PATH: ${{ runner.temp }}/thread-transfer-result.json

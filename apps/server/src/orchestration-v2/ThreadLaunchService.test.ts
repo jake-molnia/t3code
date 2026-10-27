@@ -1,3 +1,4 @@
+import { WORKSPACE_SEED_STAGE_ORDER } from "@t3tools/contracts";
 import * as WorkspaceRouting from "../agentRuntime/WorkspaceRouting.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
@@ -2533,8 +2534,10 @@ it.effect(
               yield* Deferred.succeed(entered, undefined);
               yield* Deferred.await(release);
               yield* input.onStage?.("sandbox", "done") ?? Effect.void;
-              yield* input.onStage?.("seed", "running") ?? Effect.void;
-              yield* input.onStage?.("seed", "done") ?? Effect.void;
+              for (const stage of WORKSPACE_SEED_STAGE_ORDER) {
+                yield* input.onStage?.(stage, "running") ?? Effect.void;
+                yield* input.onStage?.(stage, "done") ?? Effect.void;
+              }
               yield* input.onStage?.("checkout", "running") ?? Effect.void;
               yield* input.onStage?.("checkout", "done") ?? Effect.void;
               return "/workspace/root/repo";
@@ -2570,7 +2573,7 @@ it.effect(
             finished.value?.stages.map((stage) => [stage.id, stage.status]),
             [
               ["sandbox", "done"],
-              ["seed", "done"],
+              ...WORKSPACE_SEED_STAGE_ORDER.map((id) => [id, "done"]),
               ["checkout", "done"],
               ["setup-script", "skipped"],
               ["agent", "done"],

@@ -8,6 +8,19 @@ import * as Schema from "effect/Schema";
 
 const decodeWorktreeSetupSnapshot = Schema.decodeUnknownOption(WorktreeSetupSnapshot);
 
+/** Sequence counters can reset after retention expires or the server restarts. */
+export function resolveLatestWorktreeSetup(input: {
+  latest: WorktreeSetupSnapshot | null | undefined;
+  previous: WorktreeSetupSnapshot | null;
+}): WorktreeSetupSnapshot | null {
+  const { latest, previous } = input;
+  if (!latest) return previous;
+  if (!previous || latest.threadId !== previous.threadId) return latest;
+  const attemptOrder = Date.parse(latest.startedAt) - Date.parse(previous.startedAt);
+  if (attemptOrder !== 0) return attemptOrder > 0 ? latest : previous;
+  return latest.sequence >= previous.sequence ? latest : previous;
+}
+
 /**
  * The worktree setup the server recorded on the thread, if any: running once
  * the bootstrap created the thread, then the settled outcome. It is what a
@@ -28,8 +41,8 @@ export function findRecordedWorktreeSetup(
 }
 
 /**
- * Which setup snapshot the timeline shows, if any. The live stream wins while
- * it has a newer sequence; the recorded activity covers everything else. A
+ * Which setup snapshot the timeline shows, if any. Prefer the newer attempt,
+ * then its newer sequence, across the live stream and recorded activity. A
  * running setup always shows. The setup belongs to the thread's first turn:
  * once the user has sent a follow-up it is history and nothing about it is
  * shown again, whatever its outcome. Within that first turn, a clean finish
@@ -49,10 +62,7 @@ export function resolveVisibleWorktreeSetup(input: {
   followUpSent: boolean;
   latestUserMessageAt?: string | undefined;
 }): WorktreeSetupSnapshot | null {
-  const snapshot =
-    input.live && (!input.recorded || input.live.sequence >= input.recorded.sequence)
-      ? input.live
-      : input.recorded;
+  const snapshot = resolveLatestWorktreeSetup({ latest: input.live, previous: input.recorded });
   if (!snapshot) return null;
   if (snapshot.phase === "running") return snapshot;
   if (snapshot.kind === "sandbox-resume") {

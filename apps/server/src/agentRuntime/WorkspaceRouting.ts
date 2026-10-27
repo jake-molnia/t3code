@@ -1,5 +1,5 @@
 import { withWorkspaceActivity, withWorkspaceObservationActivity } from "./WorkspaceActivity.ts";
-import { inspectSeedDestination, seedWorkspace } from "./SeedWorkspace.ts";
+import { seedWorkspace } from "./SeedWorkspace.ts";
 import * as GitProtocol from "./worker/GitDriverProtocol.ts";
 import { validateCloneSourceUrl } from "./RepositoryUrl.ts";
 import type { ExecutionClient } from "../execution/ExecutionClient.ts";
@@ -31,10 +31,10 @@ export class WorkspaceRoutingError extends Schema.TaggedError<WorkspaceRoutingEr
     return `Remote workspace ${this.operation} failed: ${String(this.cause)}`;
   }
 }
-export class WorkspaceObservation extends Context.Reference<{
+export class WorkspaceClient extends Context.Reference<{
   readonly workspaceId: string;
   readonly client: ExecutionClient;
-} | null>("t3/agentRuntime/WorkspaceObservation", { defaultValue: () => null }) {}
+} | null>("t3/agentRuntime/WorkspaceClient", { defaultValue: () => null }) {}
 
 export class WorkspaceRouting extends Context.Service<
   WorkspaceRouting,
@@ -79,8 +79,9 @@ export class WorkspaceRouting extends Context.Service<
       refName?: string;
       submodules?: C.WorktreeSubmodules;
       onStage?: (
-        stage: "sandbox" | "seed" | "checkout",
+        stage: "sandbox" | C.WorkspaceSeedStageId | "checkout",
         status: "running" | "done" | "skipped",
+        detail?: string,
       ) => Effect.Effect<void>;
     }) => Effect.Effect<string, WorkspaceRoutingError>;
     readonly callThread: (
@@ -88,6 +89,10 @@ export class WorkspaceRouting extends Context.Service<
       method: string,
       input: Readonly<Record<string, unknown>>,
     ) => Effect.Effect<unknown, WorkspaceRoutingError>;
+    readonly execute: <A, E, R>(
+      cwd: string,
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | WorkspaceRoutingError, R>;
     readonly observe: <A, E, R>(
       cwd: string,
       effect: Effect.Effect<A, E, R>,
@@ -157,15 +162,15 @@ export const layer = Layer.effect(
       });
     const clientForRoute = (route: typeof Route.Type) =>
       Effect.gen(function* () {
-        const observation = yield* WorkspaceObservation;
+        const observation = yield* WorkspaceClient;
         if (!observation) return yield* runtime.forWorkspace(route.workspaceId);
         if (observation.workspaceId !== route.workspaceId)
-          return yield* failure("observe")("Passive reads cannot access another workspace.");
+          return yield* failure("observe")("Scoped work cannot access another workspace.");
         return observation.client;
       });
     const withRouteActivity = <A, E, R>(workspaceId: string, effect: Effect.Effect<A, E, R>) =>
       Effect.gen(function* () {
-        const observation = yield* WorkspaceObservation;
+        const observation = yield* WorkspaceClient;
         return yield* observation ? effect : withWorkspaceActivity(workspaceId, effect);
       });
     const call: WorkspaceRouting["Service"]["call"] = (input) =>
@@ -342,7 +347,7 @@ export const layer = Layer.effect(
               const client = yield* runtime.forThread(input.threadId);
               yield* stage("sandbox", "done");
               if (binding.ownerThreadId !== input.threadId) {
-                yield* stage("seed", "skipped");
+                for (const id of C.WORKSPACE_SEED_STAGE_ORDER) yield* stage(id, "skipped");
                 yield* stage("checkout", "skipped");
                 return root.virtualCwd;
               }
@@ -353,19 +358,16 @@ export const layer = Layer.effect(
                 utilityKey: null,
                 sourceUrl: source.sourceUrl,
               });
-              yield* stage("seed", "running");
-              const prepared = yield* inspectSeedDestination(client, root.relativeCwd);
-              if (!prepared)
-                yield* seedWorkspace({
-                  source: yield* runtime.forWorkspace(source.workspaceId),
-                  destination: client,
-                  sourceCwd: source.relativeCwd,
-                  destinationCwd: root.relativeCwd,
-                  key: root.relativeCwd.slice(0, root.relativeCwd.indexOf("/")),
-                  ...(input.branch ? { checkoutBranch: input.branch } : {}),
-                  ...(input.refName ? { checkoutRef: input.refName } : {}),
-                });
-              yield* stage("seed", prepared ? "skipped" : "done");
+              yield* seedWorkspace({
+                source: runtime.forWorkspace(source.workspaceId),
+                destination: client,
+                sourceCwd: source.relativeCwd,
+                destinationCwd: root.relativeCwd,
+                key: root.relativeCwd.slice(0, root.relativeCwd.indexOf("/")),
+                onStage: stage,
+                ...(input.branch ? { checkoutBranch: input.branch } : {}),
+                ...(input.refName ? { checkoutRef: input.refName } : {}),
+              });
               yield* stage("checkout", "running");
               yield* Effect.tryPromise({
                 try: () =>
@@ -440,10 +442,13 @@ export const layer = Layer.effect(
                 [field]: route.relativeCwd + value.slice(route.virtualCwd.length),
               };
             }
-          return yield* withWorkspaceActivity(
+          const existing = yield* WorkspaceClient;
+          if (existing && existing.workspaceId !== binding.workspaceId)
+            return yield* failure(method)("Scoped work cannot access another workspace.");
+          return yield* withRouteActivity(
             binding.workspaceId,
             Effect.gen(function* () {
-              const client = yield* runtime.forThread(threadId);
+              const client = existing?.client ?? (yield* runtime.forThread(threadId));
               return yield* Effect.tryPromise({
                 try: () => client.call(method, payload),
                 catch: failure(method),
@@ -451,13 +456,32 @@ export const layer = Layer.effect(
             }),
           );
         }).pipe(Effect.mapError(failure(method))),
+      execute: (cwd, effect) =>
+        Effect.gen(function* () {
+          const route = yield* lookup(cwd).pipe(Effect.mapError(failure("execute")));
+          const existing = yield* WorkspaceClient;
+          if (existing) {
+            if (existing.workspaceId !== route.workspaceId)
+              return yield* failure("execute")("Scoped work cannot access another workspace.");
+            return yield* effect;
+          }
+          return yield* withWorkspaceActivity(
+            route.workspaceId,
+            Effect.gen(function* () {
+              const client = yield* clientForRoute(route).pipe(Effect.mapError(failure("execute")));
+              return yield* effect.pipe(
+                Effect.provideService(WorkspaceClient, { workspaceId: route.workspaceId, client }),
+              );
+            }),
+          );
+        }),
       observe: (cwd, effect) =>
         Effect.gen(function* () {
           const route = yield* lookup(cwd).pipe(Effect.mapError(failure("observe")));
-          const existing = yield* WorkspaceObservation;
+          const existing = yield* WorkspaceClient;
           if (existing) {
             if (existing.workspaceId !== route.workspaceId)
-              return yield* failure("observe")("Passive reads cannot access another workspace.");
+              return yield* failure("observe")("Scoped work cannot access another workspace.");
             return yield* effect;
           }
           return yield* withWorkspaceObservationActivity(
@@ -468,7 +492,7 @@ export const layer = Layer.effect(
                 .pipe(Effect.mapError(failure("observe")));
               if (observed.kind === "stopped") return null;
               return yield* effect.pipe(
-                Effect.provideService(WorkspaceObservation, {
+                Effect.provideService(WorkspaceClient, {
                   workspaceId: route.workspaceId,
                   client: observed.client,
                 }),
@@ -479,7 +503,12 @@ export const layer = Layer.effect(
       observeCall: (input) =>
         Effect.gen(function* () {
           const route = yield* lookup(input.cwd);
-          const observed = yield* runtime.observeWorkspace(route.workspaceId);
+          const existing = yield* WorkspaceClient;
+          if (existing && existing.workspaceId !== route.workspaceId)
+            return yield* failure("observe")("Scoped work cannot access another workspace.");
+          const observed = existing
+            ? { kind: "running" as const, client: existing.client }
+            : yield* runtime.observeWorkspace(route.workspaceId);
           if (observed.kind === "stopped") return null;
           return yield* Effect.tryPromise({
             try: () =>

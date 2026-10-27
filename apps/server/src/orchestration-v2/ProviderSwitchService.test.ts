@@ -275,6 +275,39 @@ it.effect("hands off from a native provider thread after its session detaches", 
   ),
 );
 
+it.effect("allows recovery with another provider after startup failed without native history", () =>
+  Effect.gen(function* () {
+    const service = yield* ProviderSwitch.ProviderSwitchServiceV2;
+    const failed = deadNativeThreadProjection("error");
+    const result = yield* service.plan({
+      projection: {
+        ...failed,
+        providerSessions: [],
+        providerThreads: failed.providerThreads.map((thread) => ({
+          ...thread,
+          providerSessionId: null,
+          nativeThreadRef: null,
+        })),
+      },
+      targetModelSelection: {
+        instanceId: ProviderInstanceId.make("codex_other"),
+        model: "gpt-5.2-codex",
+      },
+    });
+    assert.equal(result.transition.type, "create_with_handoff");
+    assert.isTrue(result.instanceChanged);
+    assert.isNull(result.targetProviderThreadId);
+    assert.deepEqual(result.releaseProviderSessionIds, []);
+  }).pipe(
+    Effect.provide(
+      layerTest({
+        [currentInstanceId]: { continuationKey: "codex:account:primary" },
+        codex_other: { continuationKey: "codex:account:other" },
+      }),
+    ),
+  ),
+);
+
 it.effect.each(["stopped", "error"] as const)(
   "applies a model change on next turn when a %s session negotiated model switching",
   (deadStatus) =>

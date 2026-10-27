@@ -237,4 +237,116 @@ it.layer(
       );
     }),
   );
+  it.effect.each(["ready", "native-error", "disabled"] as const)(
+    "replaces old Antigravity gateway cache on explicit refresh: %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antigravity-cache-upgrade-" });
+        const config = yield* ServerConfig.ServerConfig.pipe(
+          Effect.provide(ServerConfig.layerTest(root, root)),
+        );
+        const instanceId = C.ProviderInstanceId.make("antigravity");
+        const oldSnapshot: C.ServerProvider = {
+          ...cached,
+          instanceId,
+          driver: C.ProviderDriverKind.make("antigravity"),
+          enabled: scenario !== "disabled",
+          models: [],
+          modelsComplete: true,
+          setup: { canAuthenticate: false },
+          availability: "unavailable",
+          unavailableReason: "antigravity does not support model gateway credentials.",
+        };
+        const filePath = yield* resolveProviderStatusCachePath({
+          cacheDir: config.providerStatusCacheDir,
+          instanceId,
+        });
+        yield* writeProviderStatusCache({ filePath, provider: oldSnapshot });
+        const { unavailableReason: _oldReason, ...native } = oldSnapshot;
+        const refreshed: C.ServerProvider = {
+          ...native,
+          availability: scenario === "native-error" ? "unavailable" : "available",
+          ...(scenario === "native-error"
+            ? { unavailableReason: "Native account requires sign-in." }
+            : {}),
+          setup: { canAuthenticate: true },
+          models:
+            scenario === "native-error"
+              ? []
+              : [{ slug: "native-model", name: "Native model", isCustom: false, capabilities }],
+        };
+        let allocations = 0;
+        const methods: string[] = [];
+        const client = createExecutionClient({
+          identity: {
+            workspaceId: "utility",
+            allocationId: "one",
+            incarnation: "one",
+            podUid: "one",
+            generation: 1,
+            protocolVersion: 1,
+          },
+          endpoint: "http://worker.test",
+          token: "test-token",
+          fetch: async (_url, init) => {
+            const request = decodeRequest(init?.body);
+            methods.push(request.method);
+            return Response.json({
+              ok: true,
+              value: request.method === "configureProvider" ? null : encodeSnapshot(refreshed),
+            });
+          },
+        });
+        yield* Effect.gen(function* () {
+          const drivers = yield* makeRemoteDrivers;
+          const driver = drivers.find((entry) => entry.driverKind === "antigravity");
+          if (!driver) return yield* Effect.die("Missing Antigravity driver");
+          const instance = yield* driver.create({
+            instanceId,
+            enabled: scenario !== "disabled",
+            displayName: undefined,
+            environment: [],
+            config: driver.defaultConfig(),
+          });
+          const initial = yield* instance.snapshot.getSnapshot;
+          expect(allocations).toBe(0);
+          if (scenario === "disabled") {
+            expect(initial.status).toBe("disabled");
+            expect((yield* instance.snapshot.refresh).enabled).toBe(false);
+            expect(allocations).toBe(0);
+            expect(methods).toEqual([]);
+            return;
+          }
+          expect(initial.unavailableReason).toBe(oldSnapshot.unavailableReason);
+          const next = yield* instance.snapshot.refresh;
+          expect(next).toEqual(refreshed);
+          expect(next.unavailableReason).not.toBe(oldSnapshot.unavailableReason);
+          expect(next.setup?.canAuthenticate).toBe(true);
+          expect(yield* instance.snapshot.getSnapshot).toEqual(refreshed);
+          expect(allocations).toBe(1);
+          expect(methods).toEqual(["configureProvider", "provider.refresh"]);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              McpProviderSessions.layer,
+              Settings.layerTest(),
+              Layer.succeed(ServerConfig.ServerConfig, config),
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown({ T3_GATEWAY_API_KEY: "gateway-test-key" }),
+              ),
+              Layer.mock(Runtime.RuntimeClient)({
+                enabled: true,
+                observeWorkspace: () => Effect.succeed({ kind: "stopped" }),
+                forUtility: () =>
+                  Effect.sync(() => {
+                    allocations++;
+                    return client;
+                  }),
+              }),
+            ),
+          ),
+        );
+      }),
+  );
 });

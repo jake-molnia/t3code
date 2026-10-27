@@ -1,6 +1,11 @@
+import { IdeSetup } from "./IdeSetup.ts";
 import { expect, it } from "@effect/vitest";
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { AuthSessionId, ProjectId, ThreadId, type SandboxIdeOpenInput } from "@t3tools/contracts";
 import * as Scope from "effect/Scope";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as RuntimeSchema from "./Schema.ts";
+import authMigration from "../persistence/Migrations/031_AuthAuthorizationScopes.ts";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import { acquireWorkspaceActivity, WorkspaceActivity } from "./WorkspaceActivity.ts";
@@ -14,6 +19,8 @@ import { createExecutionClient } from "../execution/ExecutionClient.ts";
 import type { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
 import * as SandboxIde from "./SandboxIde.ts";
+
+const owner = { authSessionId: AuthSessionId.make("browser-one"), origin: "https://t3.example" };
 
 const identity: ExecutionIdentity = {
   workspaceId: "one",
@@ -30,6 +37,15 @@ const client = (workspaceId: string, incarnation = "i") =>
     endpoint: "http://private-worker:8083",
   });
 const setup = Effect.gen(function* () {
+  const database = yield* Layer.build(NodeSqliteClient.layer({ filename: ":memory:" }));
+  const sql = Context.get(database, SqlClient.SqlClient);
+  yield* RuntimeSchema.migrate.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+  yield* authMigration.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+  for (const sessionId of [owner.authSessionId, AuthSessionId.make("browser-two")]) {
+    yield* sql`INSERT INTO auth_sessions(session_id, subject, scopes, method, issued_at, expires_at)
+      VALUES (${sessionId}, 'test', '["orchestration:operate"]', 'browser-session-cookie',
+        '1970-01-01T00:00:00.000Z', '9999-12-31T23:59:59.999Z')`;
+  }
   const clients = new Map([
     ["root-one", client("one")],
     ["child", client("one")],
@@ -63,8 +79,32 @@ const setup = Effect.gen(function* () {
       SandboxIde.layer.pipe(
         Layer.provide(Layer.succeed(RuntimeClient.RuntimeClient, runtime)),
         Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.succeed(
+            IdeSetup,
+            IdeSetup.of({
+              opening: () => Effect.void,
+              get: () => Effect.die("unused"),
+              manage: () => Effect.void,
+              export: () => Effect.die("unused"),
+              prepare: () => Effect.void,
+              sync: () => Effect.void,
+              resolve: () => Effect.void,
+              status: () => Effect.succeed({ state: "saved", issues: [] }),
+            }),
+          ),
+        ),
+        Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
       ),
-    ).pipe(Effect.map((context) => Context.get(context, SandboxIde.SandboxIde)));
+    ).pipe(
+      Effect.map((context) => {
+        const service = Context.get(context, SandboxIde.SandboxIde);
+        return {
+          ...service,
+          open: (input: SandboxIdeOpenInput, caller = owner) => service.open(input, caller),
+        };
+      }),
+    );
   const ide = yield* make();
   const open = (id: string) =>
     Effect.gen(function* () {
@@ -83,6 +123,7 @@ const setup = Effect.gen(function* () {
       return { url, sessionId, requestOrigin: url.origin, cookie: bootstrap.cookie };
     });
   return {
+    sql,
     ide,
     clients,
     make,
@@ -151,36 +192,65 @@ it.effect("consumes tickets once, rejects cross-origin requests, and expires the
     ).toBe("Failure");
   }),
 );
-it.effect("rejects sessions when their worker is replaced", () =>
-  Effect.gen(function* () {
-    const { ide, open, clients } = yield* setup;
-    const session = yield* open("root-one");
-    clients.set("root-one", client("one", "replacement"));
-    expect((yield* ide.authorize(session).pipe(Effect.flip)).reason).toBe("identity_changed");
-    const replacement = yield* open("root-one");
-    const proxy = yield* ide.authorize(replacement);
-    expect(proxy.kind === "proxy" && proxy.access.identity.incarnation).toBe("replacement");
-  }),
-);
-it.effect("reopens a live worker after central restart with a fresh IDE session", () =>
+it.effect("preserves an established session across central restart with a live worker", () =>
   Effect.gen(function* () {
     const { open, make } = yield* setup;
     const session = yield* open("root-one");
     const restarted = yield* make();
-    expect((yield* restarted.authorize(session).pipe(Effect.flip)).reason).toBe("expired");
-    const result = yield* restarted.open({
+    const result = yield* restarted.authorize(session);
+    expect(result.kind).toBe("proxy");
+    expect(
+      (yield* Effect.exit(
+        restarted.authorize({
+          ...session,
+          ticket: session.url.searchParams.get("ticket")!,
+        }),
+      ))._tag,
+    ).toBe("Failure");
+  }),
+);
+
+it.effect("rejects replaced workers before and after central restart", () =>
+  Effect.gen(function* () {
+    const { ide, open, clients, make } = yield* setup;
+    const session = yield* open("root-one");
+    clients.set("root-one", client("one", "replacement"));
+    const restarted = yield* make();
+    expect((yield* Effect.exit(restarted.authorize(session)))._tag).toBe("Failure");
+    expect((yield* Effect.exit(ide.authorize(session)))._tag).toBe("Failure");
+    const reopened = yield* restarted.open({
       target: { threadId: ThreadId.make("root-one") },
       cwd: "/workspace/same/repo",
     });
-    const url = new URL(result.url, session.requestOrigin);
-    const request = { sessionId: url.pathname.split("/")[3]!, requestOrigin: url.origin };
-    const boot = yield* restarted.authorize({
-      ...request,
-      ticket: url.searchParams.get("ticket")!,
-    });
-    if (boot.kind !== "bootstrap") throw new Error("Expected bootstrap");
-    const proxy = yield* restarted.authorize({ ...request, cookie: boot.cookie });
-    expect(proxy.kind === "proxy" && proxy.access.identity).toEqual(client("one").identity);
+    expect(new URL(reopened.url, session.url).pathname).not.toBe(session.url.pathname);
+  }),
+);
+
+it.effect("renews active sessions beyond twelve hours but expires idle sessions", () =>
+  Effect.gen(function* () {
+    const { ide, open, make } = yield* setup;
+    const session = yield* open("root-one");
+    for (let hour = 0; hour < 14; hour++) {
+      yield* TestClock.adjust("1 hour");
+      expect((yield* ide.authorize(session)).kind).toBe("proxy");
+    }
+    const restarted = yield* make();
+    expect((yield* restarted.authorize(session)).kind).toBe("proxy");
+    yield* TestClock.adjust("12 hours");
+    expect((yield* Effect.exit(restarted.authorize(session)))._tag).toBe("Failure");
+  }),
+);
+
+it.effect("does not renew sessions for requests with invalid credentials", () =>
+  Effect.gen(function* () {
+    const { ide, open } = yield* setup;
+    const session = yield* open("root-one");
+    yield* TestClock.adjust("11 hours");
+    expect((yield* Effect.exit(ide.authorize({ ...session, cookie: "wrong" })))._tag).toBe(
+      "Failure",
+    );
+    yield* TestClock.adjust("1 hour");
+    expect((yield* Effect.exit(ide.authorize(session)))._tag).toBe("Failure");
   }),
 );
 
@@ -222,7 +292,7 @@ it.effect("pins idle compute through startup and hands it to the worker lease", 
     yield* Deferred.await(started);
     expect(yield* policy.reconcileThread(root)).toBe("busy");
     yield* Deferred.succeed(ready, undefined);
-    const url = new URL((yield* Fiber.join(opening)).url, "http://t3.internal:3773");
+    const url = new URL((yield* Fiber.join(opening)).url, owner.origin);
     expect(yield* policy.reconcileThread(root)).toBe("busy");
     const session = { sessionId: url.pathname.split("/")[3]!, requestOrigin: url.origin };
     const bootstrap = yield* ide.authorize({ ...session, ticket: url.searchParams.get("ticket")! });
@@ -243,10 +313,13 @@ it.effect("returns a relative path and binds the one-use ticket to the opening h
   Effect.gen(function* () {
     const { ide } = yield* setup;
     for (const origin of ["https://t3.example", "http://t3.internal:3773"]) {
-      const result = yield* ide.open({
-        target: { threadId: ThreadId.make("root-one") },
-        cwd: "/workspace/a b",
-      });
+      const result = yield* ide.open(
+        {
+          target: { threadId: ThreadId.make("root-one") },
+          cwd: "/workspace/a b",
+        },
+        { ...owner, origin },
+      );
       expect(result.url.startsWith(SandboxIde.routePrefix)).toBe(true);
       const url = new URL(result.url, origin);
       const input = { sessionId: url.pathname.split("/")[3]!, requestOrigin: origin };
@@ -267,6 +340,83 @@ it.effect("returns a relative path and binds the one-use ticket to the opening h
         ))._tag,
       ).toBe("Failure");
     }
+  }),
+);
+
+it.effect("consumes a bootstrap ticket only once across concurrent central service instances", () =>
+  Effect.gen(function* () {
+    const { ide, make } = yield* setup;
+    const other = yield* make();
+    const opened = yield* ide.open({
+      target: { threadId: ThreadId.make("root-one") },
+      cwd: "/workspace/repo",
+    });
+    const url = new URL(opened.url, "https://t3.example");
+    const input = {
+      sessionId: url.pathname.split("/")[3]!,
+      requestOrigin: url.origin,
+      ticket: url.searchParams.get("ticket")!,
+    };
+    const results = yield* Effect.all(
+      [Effect.exit(ide.authorize(input)), Effect.exit(other.authorize(input))],
+      { concurrency: "unbounded" },
+    );
+    expect(results.filter((result) => result._tag === "Success")).toHaveLength(1);
+    expect(results.filter((result) => result._tag === "Failure")).toHaveLength(1);
+  }),
+);
+
+it.effect("reuses the editor URL for a client while keeping every opening ticket independent", () =>
+  Effect.gen(function* () {
+    const { ide } = yield* setup;
+    const input = { target: { threadId: ThreadId.make("root-one") }, cwd: "/workspace/repo" };
+    const urls = yield* Effect.all(
+      [
+        ide.open({ ...input, file: "/workspace/repo/first.ts:3" }, owner),
+        ide.open({ ...input, file: "/workspace/repo/second.ts:7" }, owner),
+      ],
+      {
+        concurrency: "unbounded",
+      },
+    );
+    const one = new URL(urls[0].url, owner.origin);
+    const two = new URL(urls[1].url, owner.origin);
+    expect(one.pathname).toBe(two.pathname);
+    expect(one.searchParams.get("ticket")).not.toBe(two.searchParams.get("ticket"));
+    const bootstrap = (url: URL) =>
+      ide.authorize({
+        sessionId: url.pathname.split("/")[3]!,
+        requestOrigin: owner.origin,
+        ticket: url.searchParams.get("ticket")!,
+      });
+    const first = yield* bootstrap(one);
+    const second = yield* bootstrap(two);
+    if (first.kind !== "bootstrap" || second.kind !== "bootstrap")
+      throw new Error("Expected bootstrap");
+    expect(new URL(first.url, owner.origin).searchParams.get("payload")).toContain("first.ts%3A3");
+    expect(new URL(second.url, owner.origin).searchParams.get("payload")).toContain(
+      "second.ts%3A7",
+    );
+    expect(
+      first.kind === "bootstrap" && second.kind === "bootstrap" && first.cookie === second.cookie,
+    ).toBe(true);
+    expect((yield* Effect.exit(bootstrap(one)))._tag).toBe("Failure");
+    const anotherClient = new URL(
+      (yield* ide.open(input, {
+        ...owner,
+        authSessionId: AuthSessionId.make("browser-two"),
+      })).url,
+      owner.origin,
+    );
+    expect(anotherClient.pathname).not.toBe(one.pathname);
+    const anotherOrigin = new URL(
+      (yield* ide.open(input, {
+        ...owner,
+        origin: "https://another.example",
+      })).url,
+      "https://another.example",
+    );
+    expect(anotherOrigin.pathname).not.toBe(one.pathname);
   }),
 );
 
@@ -300,11 +450,14 @@ it.effect("preserves file paths, line and column in the VS Code workspace payloa
     const { ide } = yield* setup;
     for (const origin of ["https://remote.example", "http://t3.internal:3773"]) {
       const file = "/workspace/a b/src/odd #?&%.ts:12:4";
-      const result = yield* ide.open({
-        target: { threadId: ThreadId.make("root-one") },
-        cwd: "/workspace/a b",
-        file,
-      });
+      const result = yield* ide.open(
+        {
+          target: { threadId: ThreadId.make("root-one") },
+          cwd: "/workspace/a b",
+          file,
+        },
+        { ...owner, origin },
+      );
       const url = new URL(result.url, origin);
       const bootstrap = yield* ide.authorize({
         sessionId: url.pathname.split("/")[3]!,
@@ -344,5 +497,45 @@ it.effect("fails closed when either a thread or project worker is unavailable", 
     }
     expect((yield* WorkspaceActivity).has("one")).toBe(false);
     expect((yield* WorkspaceActivity).has("t3:utility:project:project")).toBe(false);
+  }),
+);
+
+it.effect.each(["revoke", "expire", "remove", "scope"])(
+  "rejects established IDE access when its owning app session changes: %s",
+  (invalidation) =>
+    Effect.gen(function* () {
+      const { ide, open, sql, make } = yield* setup;
+      const session = yield* open("root-one");
+      if (invalidation === "revoke")
+        yield* sql`UPDATE auth_sessions SET revoked_at = '1970-01-01T00:00:00.000Z' WHERE session_id = ${owner.authSessionId}`;
+      else if (invalidation === "expire")
+        yield* sql`UPDATE auth_sessions SET expires_at = '1970-01-01T00:00:00.000Z' WHERE session_id = ${owner.authSessionId}`;
+      else if (invalidation === "scope")
+        yield* sql`UPDATE auth_sessions SET scopes = '[]' WHERE session_id = ${owner.authSessionId}`;
+      else yield* sql`DELETE FROM auth_sessions WHERE session_id = ${owner.authSessionId}`;
+      const restarted = yield* make();
+      expect((yield* restarted.authorize(session).pipe(Effect.flip)).reason).toBe("forbidden");
+      expect((yield* Effect.exit(ide.authorize(session)))._tag).toBe("Failure");
+    }),
+);
+
+it.effect("rejects an unredeemed IDE ticket after its app session is revoked", () =>
+  Effect.gen(function* () {
+    const { ide, sql } = yield* setup;
+    const opened = yield* ide.open({
+      target: { threadId: ThreadId.make("root-one") },
+      cwd: "/workspace/repo",
+    });
+    yield* sql`UPDATE auth_sessions SET revoked_at = '1970-01-01T00:00:00.000Z' WHERE session_id = ${owner.authSessionId}`;
+    const url = new URL(opened.url, owner.origin);
+    expect(
+      (yield* ide
+        .authorize({
+          sessionId: url.pathname.split("/")[3]!,
+          requestOrigin: owner.origin,
+          ticket: url.searchParams.get("ticket")!,
+        })
+        .pipe(Effect.flip)).reason,
+    ).toBe("forbidden");
   }),
 );

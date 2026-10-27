@@ -16,7 +16,7 @@ describe("settingInheritanceLayers", () => {
       "defaultAutoPull",
     );
     expect(layers.map((layer) => [layer.label, layer.value, layer.effective])).toEqual([
-      ["Laptop", "Inherits", false],
+      ["Saved default", "Inherits", false],
       ["Default", "Off", true],
     ]);
   });
@@ -35,7 +35,7 @@ describe("settingInheritanceLayers", () => {
     );
     expect(layers.map((layer) => [layer.label, layer.value, layer.effective])).toEqual([
       ["Project", "Off", true],
-      ["Laptop", "On", false],
+      ["Saved default", "On", false],
       ["Default", "Off", false],
     ]);
     const inherited = settingInheritanceLayers(
@@ -69,7 +69,7 @@ describe("settingInheritanceLayers", () => {
     );
     expect(fromFile.map((layer) => [layer.label, layer.value, layer.effective])).toEqual([
       ["Project", "Inherits", false],
-      ["Laptop", "Inherits", false],
+      ["Saved default", "Inherits", false],
       ["t3.json", "New worktree", true],
       ["Default", "Current checkout", false],
     ]);

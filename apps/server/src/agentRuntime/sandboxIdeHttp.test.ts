@@ -35,7 +35,10 @@ it.each([
         response.writeHead(302, { location: "/static/main.js" }).end();
         return;
       }
-      response.writeHead(200, { "content-type": "text/plain" });
+      response.writeHead(200, {
+        "content-type": "text/plain",
+        "cache-control": "public, max-age=31536000",
+      });
       response.end("IDE content");
     });
     server.listen(0, "127.0.0.1");
@@ -130,6 +133,21 @@ it.each([
       expect(await asset.text()).toBe("IDE content");
       expect(seen).toEqual(["/static/main.js?v=1"]);
       expect(forwarded).toEqual([`${prefix}/v1/ide/static/main.js?v=1`]);
+      const versioned = await request(
+        "stable-" + "a".repeat(40) + "/static/out/editor.js",
+        "t3_ide_session=scoped",
+      );
+      expect(await versioned.text()).toBe("IDE content");
+      expect(versioned.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+      const workspaceFile = await request(
+        "vscode-remote-resource?path=/workspace/secret.js",
+        "t3_ide_session=scoped",
+      );
+      expect(workspaceFile.headers.get("cache-control")).toBe("no-store");
+      await workspaceFile.text();
+      const document = await request("", "t3_ide_session=scoped");
+      expect(document.headers.get("cache-control")).toBe("no-store");
+      await document.text();
       const redirect = await request("redirect", "t3_ide_session=scoped");
       expect(redirect.status).toBe(302);
       expect(redirect.headers.get("location")).toBe("/api/sandbox-ide/session/static/main.js");

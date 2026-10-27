@@ -333,6 +333,15 @@ export function summarizeT3ToolCalls(
     case "environment-read":
       label = phrase("Checked", "check", `environment preferences ${times}`);
       break;
+    case "ide-setup-read":
+      label = phrase("Read", "read", `saved IDE setup ${times}`);
+      break;
+    case "ide-setup-manage":
+      label = phrase("Managed", "manage", `saved IDE setup ${times}`);
+      break;
+    case "ide-setup-export":
+      label = phrase("Exported", "export", `saved IDE setup ${times}`);
+      break;
     case "environment-update":
       label = phrase("Updated", "update", `environment preferences ${times}`);
       break;

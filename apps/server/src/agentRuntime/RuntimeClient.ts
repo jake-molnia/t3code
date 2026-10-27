@@ -49,12 +49,18 @@ export class RuntimeClientError extends Schema.TaggedError<RuntimeClientError>()
 
 export class WorkerNotReady extends Schema.TaggedError<WorkerNotReady>()(
   "AgentRuntimeWorkerNotReady",
+  { desiredState: Schema.optionalKey(Schema.Literals(["suspended", "released"])) },
+) {}
+
+export class WorkerStopping extends Schema.TaggedError<WorkerStopping>()(
+  "AgentRuntimeWorkerStopping",
   {},
 ) {}
 
 const isSandboxLifecycleError = Schema.is(SandboxLifecycle.SandboxLifecycleError);
 const isRuntimeClientError = Schema.is(RuntimeClientError);
 const isWorkerNotReady = Schema.is(WorkerNotReady);
+const isWorkerStopping = Schema.is(WorkerStopping);
 const isRuntimeFailure = Schema.is(RuntimeFailure);
 
 export function runtimeStartupMessage(error: unknown): string | undefined {
@@ -136,6 +142,17 @@ export function retryableStop(error: RuntimeClientError): RuntimeStopRetry | nul
   let cause: unknown = error;
   while (isRuntimeClientError(cause)) cause = cause.cause;
   return isRuntimeStopRetry(cause) ? cause : null;
+}
+
+/** Passive readers may retain metadata during a stop without authorizing a new wake. */
+export function isWorkerObservationStopping(error: RuntimeClientError): boolean {
+  let cause: unknown = error;
+  while (isRuntimeClientError(cause)) cause = cause.cause;
+  return (
+    isWorkerStopping(cause) ||
+    isRuntimeStopRetry(cause) ||
+    (isWorkerNotReady(cause) && cause.desiredState !== undefined)
+  );
 }
 
 export type LifecycleStopOptions = {
@@ -580,6 +597,16 @@ export const layer = Layer.effect(
               cause: new RuntimeStopRetry({ receipt, error: access.error }),
             });
         }
+        if (
+          access.state === "running" &&
+          access.desiredState !== "running" &&
+          access.progress?.step === "queued" &&
+          access.execution === null
+        )
+          return yield* new RuntimeClientError({
+            operation: "observe",
+            cause: new WorkerStopping(),
+          });
         if (access.state !== "running" || !access.execution)
           return yield* new RuntimeClientError({
             operation: "observe",
@@ -587,7 +614,9 @@ export const layer = Layer.effect(
               ["starting", "suspending", "releasing", "unavailable"].includes(access.state) ||
               ((access.state === "suspended" || access.state === "released") &&
                 access.state !== access.desiredState)
-                ? new WorkerNotReady({})
+                ? new WorkerNotReady(
+                    access.desiredState === "running" ? {} : { desiredState: access.desiredState },
+                  )
                 : (access.error ?? "Worker status is not established"),
           });
         if (access.execution.identity.workspaceId !== workspaceId)

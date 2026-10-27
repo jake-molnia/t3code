@@ -718,6 +718,133 @@ it.live.each(["stopped", "error"] as const)(
     ),
 );
 
+it.live("recovers a failed first session on another provider with the original prompt", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const name = "selection-failed-startup-handoff";
+      const cwd = yield* checkpointWorkspace(name);
+      const threadId = ThreadId.make(`thread:${name}`);
+      const startCount = yield* Ref.make(0);
+      const received = yield* Ref.make<ReadonlyArray<string>>([]);
+      const target = makeCompletingHandoffAdapter(startCount);
+      const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+        {
+          instanceId: providerInstanceId,
+          driver,
+          getCapabilities: () => Effect.succeed(exclusiveCapabilities),
+          planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
+          openSession: (input) =>
+            Effect.fail(
+              new ProviderAdapter.ProviderAdapterOpenSessionError({
+                driver,
+                providerSessionId: input.providerSessionId,
+                cause: "first session could not start",
+              }),
+            ),
+        },
+        {
+          ...target,
+          openSession: (input) =>
+            target.openSession(input).pipe(
+              Effect.map((session) => ({
+                ...session,
+                startTurn: (turn) =>
+                  Ref.update(received, (messages) => [...messages, turn.message.text]).pipe(
+                    Effect.andThen(session.startTurn(turn)),
+                  ),
+              })),
+            ),
+        },
+      ]);
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`${name}:create`),
+          threadId,
+          projectId: ProjectId.make(`project:${name}`),
+          title: name,
+          modelSelection: initialSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: cwd,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const dispatch = (
+          text: string,
+          modelSelection: ModelSelection,
+          status: "failed" | "completed",
+        ) =>
+          Effect.gen(function* () {
+            const terminal = yield* eventSink
+              .stream({
+                threadId,
+                afterSequence: yield* eventSink.latestSequence({ threadId }),
+              })
+              .pipe(
+                Stream.filter(
+                  ({ event }) => event.type === "run.updated" && event.payload.status === status,
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+                Effect.forkScoped,
+              );
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`${name}:${status}`),
+              threadId,
+              messageId: MessageId.make(`${name}:${status}`),
+              text,
+              attachments: [],
+              modelSelection,
+              dispatchMode: { type: "start_immediately" },
+              createdBy: "user",
+              creationSource: "web",
+            });
+            yield* Fiber.join(terminal);
+            yield* worker.drain();
+            return yield* orchestrator.getThreadProjection(threadId);
+          });
+        const failed = yield* dispatch(
+          "Keep the original task context",
+          initialSelection,
+          "failed",
+        );
+        assert.isEmpty(failed.providerSessions);
+        assert.isTrue(failed.providerThreads.every((thread) => thread.nativeThreadRef === null));
+        const recovered = yield* dispatch(
+          "Continue on this provider",
+          handoffSelection,
+          "completed",
+        );
+        assert.deepEqual(
+          recovered.runs.map((run) => [run.status, run.providerInstanceId]),
+          [
+            ["failed", providerInstanceId],
+            ["completed", handoffProviderInstanceId],
+          ],
+        );
+        assert.deepEqual(
+          recovered.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.text),
+          ["Keep the original task context", "Continue on this provider"],
+        );
+        assert.lengthOf(recovered.contextHandoffs, 1);
+        assert.include(recovered.contextHandoffs[0]!.summaryText, "Keep the original task context");
+        const messages = yield* Ref.get(received);
+        assert.lengthOf(messages, 1);
+        assert.include(messages[0]!, "Keep the original task context");
+        assert.include(messages[0]!, "Continue on this provider");
+      }).pipe(Effect.provide(ProviderReplayHarness.layerWithRegistry({ name }, layerRegistry)));
+    }),
+  ),
+);
+
 it.live("detaches the old provider session after an active provider handoff", () =>
   Effect.scoped(
     Effect.gen(function* () {

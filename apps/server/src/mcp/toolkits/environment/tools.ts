@@ -1,4 +1,7 @@
 import {
+  IdeSetupState,
+  IdeSetupCommand,
+  IdeSetupExport,
   BackgroundActivityProfile,
   BackgroundActivityProfileSelection,
   ExecutionEnvironmentDescriptor,
@@ -6,6 +9,7 @@ import {
   ServerSettings,
   ServerSettingsPatch,
 } from "@t3tools/contracts";
+import * as IdeSetup from "../../../agentRuntime/IdeSetup.ts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
@@ -34,6 +38,7 @@ const shared = {
     ThreadManagementService.ThreadManagementService,
     ServerEnvironment.ServerEnvironment,
     Settings.ServerSettingsService,
+    IdeSetup.IdeSetup,
     ThreadCommandExecutor.ThreadCommandExecutor,
   ],
 };
@@ -64,4 +69,31 @@ const EnvironmentPreferencesTool = Tool.make("t3_environment_preferences_update"
   }),
   success: Schema.Struct(PreferenceFields),
 }).annotate(Tool.Destructive, true);
-export const EnvironmentToolkit = Toolkit.make(EnvironmentReadTool, EnvironmentPreferencesTool);
+const IdeSetupReadTool = Tool.make("t3_ide_setup_read", {
+  ...shared,
+  description:
+    "Read saved VS Code settings and Nix extension build status for this environment and calling sandbox.",
+  success: IdeSetupState,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+const IdeSetupManageTool = Tool.make("t3_ide_setup_manage", {
+  ...shared,
+  description:
+    "Manage the saved native VS Code setup. Pause/resume remembering, import the calling sandbox or an original VSIX path, apply the saved setup, retry a Nix build, reset settings/extensions separately, or roll back. Apply restarts only the editor. Requires environment write access.",
+  parameters: Schema.Struct({ command: IdeSetupCommand }),
+  success: Schema.Void,
+}).annotate(Tool.Destructive, true);
+const IdeSetupExportTool = Tool.make("t3_ide_setup_export", {
+  ...shared,
+  description:
+    "Export native settings, the Nix flake and lock, and retained extension archives as a downloadable central attachment. Returns the attachment ID; its archive includes private VSIX packages.",
+  success: IdeSetupExport,
+}).annotate(Tool.Destructive, false);
+export const EnvironmentToolkit = Toolkit.make(
+  EnvironmentReadTool,
+  EnvironmentPreferencesTool,
+  IdeSetupReadTool,
+  IdeSetupManageTool,
+  IdeSetupExportTool,
+);

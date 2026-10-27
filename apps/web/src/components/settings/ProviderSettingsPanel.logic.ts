@@ -1,7 +1,7 @@
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
   AuthProvidersManageScope,
-  type AuthSessionState,
+  resolveProjectProviderInstanceEnabled,
   type EnvironmentId,
   type ProjectId,
   type ProjectSettingsOverrides,
@@ -168,4 +168,20 @@ export function classifyProviderEnvironmentAccess(input: {
     return { kind: "read-only" };
   }
   return { kind: "editable" };
+}
+
+/** A mixed toggle starts unchecked so its first click enables every selected project. */
+export function resolveProjectProviderEnablement(
+  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
+  projectIds: readonly ProjectId[],
+  instanceId: ProviderInstanceId,
+) {
+  const states = projectIds.map((projectId) =>
+    resolveProjectProviderInstanceEnabled(settings, projectId, instanceId),
+  );
+  if (states.length === 0) return undefined;
+  return {
+    effectiveEnabled: states.every(Boolean),
+    mixed: states.some((enabled) => enabled !== states[0]),
+  };
 }

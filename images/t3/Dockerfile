@@ -8,6 +8,7 @@ RUN tar -xzf /tmp/cliproxy.tar.gz --strip-components=1 && rm /tmp/cliproxy.tar.g
 COPY images/t3/cliproxy-device.patch /tmp/cliproxy-device.patch
 RUN git apply /tmp/cliproxy-device.patch \
     && go test ./sdk/auth ./internal/api/handlers/management -run 'Test(OAuthSaveCancellationIsAtomic|CodexDeviceManagement|DeviceCompletionAndCancellationAreExclusive|CancelOAuthSession|RequestCodexToken|Devin)' -count=1 \
+    && go test ./sdk/api/handlers/openai ./internal/registry -run 'Test(T3ModelsPreserveKnownModalities|WithCodexBuiltinsIncludesImage25Models)' -count=1 \
     && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.Version=bf9341629ef2300ac9d846a2e80fe2756f63a671-t3' -o /out/cliproxyapi ./cmd/server
 
 FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bdcd73c103b096988922d7 AS worker-build
@@ -45,6 +46,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY images/t3/install-code-server.sh /tmp/
 RUN sh /tmp/install-code-server.sh "${TARGETARCH}" /opt/code-server
 
+FROM desktop-tools AS ide-extensions
+RUN apt-get update && apt-get install -y --no-install-recommends nix-bin \
+    && rm -rf /var/lib/apt/lists/*
+COPY images/t3/ide-extensions /src/ide-extensions
+RUN nix --extra-experimental-features 'nix-command flakes' \
+      --option sandbox false --option build-users-group '' \
+      build --no-update-lock-file --out-link /tmp/nix-builder /src/ide-extensions#nix-builder \
+    && mkdir -p /out/nix && cp -a /tmp/nix-builder/. /out/nix/
+
 FROM --platform=$BUILDPLATFORM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS opencode2
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git patch \
     && rm -rf /var/lib/apt/lists/*
@@ -78,6 +88,12 @@ RUN test "$TARGETARCH" = amd64 \
     && npm install --global --ignore-scripts pnpm@11.10.0 \
     && mkdir -p /workspace && chown node:node /workspace
 COPY --from=desktop-tools /opt/code-server /opt/code-server
+COPY --from=ide-extensions /nix /nix
+COPY --from=ide-extensions /out/nix /opt/nix
+COPY images/t3/ide-extensions /opt/t3/ide-extensions
+RUN cc -shared -fPIC -Wall -Wextra -Werror /opt/t3/ide-extensions/nix-pty.c -o /opt/t3/ide-extensions/nix-pty.so -ldl
+ENV NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+COPY images/t3/editor-defaults /opt/code-server/lib/vscode/extensions/t3-sandbox-defaults
 COPY --from=go-toolchain /usr/local/go /usr/local/go
 COPY --from=opencode2 /out/opencode /usr/local/bin/opencode2
 COPY --from=aio-tools /out/aiod /out/computer-use /usr/local/bin/
@@ -90,18 +106,18 @@ COPY images/t3/desktop/chromium-policy.json /etc/chromium/policies/managed/t3.js
 COPY images/t3/session.mjs images/t3/session.test.mjs images/t3/UPSTREAM.md /opt/t3/
 RUN node --test /opt/t3/session.test.mjs && rm /opt/t3/session.test.mjs
 COPY images/t3/harness-configs/gateway.json /opt/t3/gateway-harnesses.json
-COPY --from=worker-package /out/worker /opt/t3
 COPY --from=harnesses /opt/harnesses /opt/harnesses
 COPY --from=harnesses /opt/native/bin /opt/native/bin
 COPY --from=harnesses /opt/native/az/opt/az /opt/az
 COPY --from=harnesses /opt/native/az/usr/bin/az /usr/bin/az
 COPY --from=harnesses /opt/native/extensions /opt/azure/extensions
+COPY --from=worker-package /out/worker /opt/t3
 COPY --from=harnesses /opt/providers.lock.json /opt/t3/providers.lock.json
 RUN ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
     && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs
 ARG T3_SOURCE_REVISION
-ENV PATH=/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_modules/.bin:/opt/native/bin:$PATH \
+ENV PATH=/opt/nix/bin:/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_modules/.bin:/opt/native/bin:$PATH \
     T3_SOURCE_REVISION=${T3_SOURCE_REVISION} \
     AZURE_EXTENSION_DIR=/opt/azure/extensions AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no AZURE_CORE_COLLECT_TELEMETRY=no \
     T3_WORKSPACE_ROOT=/workspace T3_WORKER_STATE_DIR=/workspace/.t3-worker \
@@ -151,14 +167,14 @@ FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bd
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini python3 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir /data && chown node:node /data
+COPY --from=cliproxy-build /out/cliproxyapi /usr/local/bin/cliproxyapi
+COPY --from=executor-build /src/executor/.selfhost-runtime /opt/executor
 COPY --from=worker-package /out/worker /opt/t3
 COPY --from=web-build /src/t3/apps/web/dist /opt/t3/dist/client
-COPY --from=cliproxy-build /out/cliproxyapi /usr/local/bin/cliproxyapi
 COPY --from=cliproxy-build /src/cliproxy/LICENSE /opt/t3/licenses/CLIProxyAPI/LICENSE
 COPY images/t3/head-entrypoint.py images/t3/test_head_entrypoint.py /opt/t3/
 RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_head_entrypoint.py \
     && rm /opt/t3/test_head_entrypoint.py
-COPY --from=executor-build /src/executor/.selfhost-runtime /opt/executor
 COPY images/t3/smoke-web.py images/t3/migrate-execution-profiles.py images/t3/test_migrate_execution_profiles.py /opt/t3/
 RUN PYTHONDONTWRITEBYTECODE=1 python3 /opt/t3/test_migrate_execution_profiles.py \
     && rm /opt/t3/test_migrate_execution_profiles.py

@@ -1,31 +1,10 @@
-# Settings and project overrides
+# Project settings
 
-On web and desktop, the "Applying settings for …" sentence at the top of Settings pages picks
-the project and environment a change applies to. Pages that only hold device preferences, such as
-Appearance, don't show it. They start at **All projects** and **All environments**
-and stay selected as you move between categories or search for a setting.
+Choose a project at the top of Settings to change its behavior, or choose **All projects** to edit the existing projects together. The selection follows you between project settings pages. App preferences and shared accounts do not need a project selector.
 
-Preferences saved on this device, such as appearance, confirmations and browser profiles, always
-show and ignore the selection. Everything else is stored on a server. Choose one environment to
-edit its settings, or leave **All environments** to edit every connected environment at once.
-Offline environments keep their current values; this is a bulk edit, not a synced global default.
+Project settings use saved defaults until you change them. Existing values are preserved when upgrading. Reset restores the saved default or repository value. A change to one project does not change another project. **All projects** writes the selected value to each current project; it does not change defaults for future projects. Controls show **Mixed** when the projects disagree.
 
-Choose a project to override settings for it on the selected environments. A layers icon beside
-each server row's title shows where the value comes from: the built-in default, the environment,
-or a project override. Click it to see that chain on every selected environment. An override can
-be reset to inherit again. Settings that cannot be overridden by a project are shown read-only
-while a project is selected.
-
-When the selected environments disagree, the control shows **Mixed** in place of a value and the
-layers icon turns amber. Picking a value applies it to every selected environment.
-
-Changing an environment value never touches a project's own override. When projects override the
-setting you are editing, the layers icon counts them and the chain lists each one with its value:
-click a project to jump to it, or **Reset all** to make those projects follow the environment
-again.
-
-Providers, diagnostics, and MCP connections show one environment at a time, the primary
-one until you pick another. Other settings fan out to the selection.
+Harness switches in **Settings → Providers** control whether the selected projects can start new turns with each harness. Turning a harness on needs no separate global switch. Authentication and compatibility checks still apply. Turning it off blocks new turns, including queued and delegated work; a running turn finishes. Accounts, credentials, custom models, and model preferences remain shared.
 
 ## MCP connections
 
@@ -33,35 +12,19 @@ Open **Settings → MCP → Add connection**, enter the server URL, and sign in 
 an access token. Choose **No authentication** for an open server. Services without
 automatic OAuth registration need their own client ID and, when required, client secret.
 
-On the same page, select one or more projects and choose which connections and tools
-they can use. **Selected tools only** keeps newly added tools disabled; **All tools**
-includes new tools. Connections are shared, so assigning another project does not
-require another sign-in. Reconnect renews authentication while retaining assignments.
+Choose a project or **All projects** at the top of Settings, then set each connection's **Project access**.
+The selection stays with you across settings pages and sign-in. New connections start disabled
+for every project. **Selected tools only** grants access to the tools you select and keeps newly
+added tools disabled. Selecting no tools grants no access. **All tools** includes new tools.
+Connections and credentials are stored centrally, so enabling another project does not require
+another sign-in. Reconnect renews authentication while retaining project access.
 
 Agents discover tools as needed instead of loading the entire catalog into a conversation.
-Removing project access blocks subsequent tool calls, including from an active thread.
-Disconnect removes the connection from every project. Already completed external actions
-are not undone. Integration execution requires a live thread in Full access and default
+Access changes apply to the next tool search, schema lookup, or call in both new and existing
+agent sessions. Disable a connection to remove this project's access. Calls already running can
+finish. Disconnect removes the connection from every project. Completed external actions are
+not undone. Integration execution requires a live thread in Full access and default
 interaction mode; tool discovery is also available while planning.
-
-With a project selected, a provider's switch in **Settings → Providers** turns it on or off for
-that project only, in either direction: a provider off on the machine can be used in one project,
-and one on everywhere can be kept out of another. That project's model pickers follow the switch,
-and no new turn there can start on a provider it turned off, including queued messages and
-follow-ups from delegated tasks. A turn already running when the switch flips finishes. A delegated
-task's result still lands in its parent thread, which sees it on its next turn. Reset returns the project to the
-machine's setting. Every other provider setting stays per machine.
-
-On mobile, open **Settings** and use the filter in its header to choose connected environments
-and a project. The filter stays available in server-setting pages. With **All projects** selected,
-the **Server settings** categories and auto-settle controls in **Thread behavior** edit the
-selected environments' defaults. Choosing a project edits its overrides on the selected
-environments. Use **Use defaults** in a page to remove that page's project overrides.
-Open **Settings → Projects & threads → Overview** to rename the project across its selected
-connected checkouts and see where those checkouts live.
-Settings that are environment-wide stay read-only while a project is selected. When selected
-targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
-and other phone-only settings ignore the filter.
 
 ## Worktree branch names
 
@@ -73,17 +36,16 @@ are replaced with hyphens. Custom instructions are appended to
 the naming prompt and can specify issue IDs, namespaces, and casing.
 
 These settings apply to automatically named new worktree branches. Select a project
-to override its environment defaults. Worktree directories keep their original names.
+to set its branch naming policy. Worktree directories keep their original names.
 If generation fails, or a custom name is invalid or already taken, the temporary
 branch name remains.
 
-## Scheduled tasks on mobile
+## Scheduled tasks
 
 Open **Settings → Scheduled tasks** to create recurring tasks or manage existing
-ones across your connected environments. Use the settings filter to narrow the
-list by environment or project. Each task runs on the environment you choose,
-using its project, model, and workspace settings. Fixed-time schedules use that
-environment's time zone, which may differ from your phone's.
+ones for the selected project. Each task uses its project, model, and workspace
+settings. Fixed-time schedules use the server's time zone, which may differ from
+your browser's.
 
 You can edit, pause, resume, run immediately, or delete a task from the list.
 Webhook tasks only run when their URL is called, so they can't be run

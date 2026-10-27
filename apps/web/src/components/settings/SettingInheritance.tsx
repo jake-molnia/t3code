@@ -108,7 +108,7 @@ export function settingInheritanceLayers(
   }
   layers.push({
     key: "environment",
-    label: target.label,
+    label: isProjectScopedSettingKey(key) ? "Saved default" : "Shared app setting",
     value: environmentSet ? formatValue(key, environmentValue) : "Inherits",
     effective: source === "environment" && environmentSet,
     set: environmentSet,
@@ -251,7 +251,7 @@ export function SettingInheritance({
                         layer.effective ? "font-medium text-foreground" : "text-muted-foreground",
                       )}
                     >
-                      {layer.key === "environment" ? "Environment" : layer.label}
+                      {layer.label}
                     </span>
                     <span
                       className={cn(

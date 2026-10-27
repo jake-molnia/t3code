@@ -1,3 +1,6 @@
+import { makeIdeLifecycle } from "./IdeLifecycle.ts";
+import { openIdeExtensions } from "./IdeExtensions.ts";
+import { openIdePreferences } from "./IdePreferences.ts";
 import { makeWorkerUsage } from "./WorkerUsage.ts";
 import { makeIdeActivity } from "./IdeActivity.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -126,6 +129,15 @@ const program = Effect.gen(function* () {
           );
         })
       : async () => ({ activeOperations: 0, pendingCallbacks: 0 });
+    const preferences = yield* Effect.acquireRelease(
+      Effect.tryPromise(() => openIdePreferences(`${stateDir}/ide`)),
+      (preferences) => Effect.promise(preferences.close),
+    );
+    const extensions = yield* Effect.acquireRelease(
+      Effect.tryPromise(() => openIdeExtensions(`${stateDir}/ide`, stateDir)),
+      (extensions) => Effect.promise(extensions.close),
+    );
+    const ideLifecycle = makeIdeLifecycle(`${stateDir}/ide`);
     worker = createExecutionWorker({
       identity,
       token,
@@ -144,6 +156,8 @@ const program = Effect.gen(function* () {
             const transferring = yield* assets.activity;
             return {
               activeOperations:
+                extensions.activity() +
+                preferences.activity().activeOperations +
                 ide.activeOperations +
                 provider.activeOperations +
                 utility.activeOperations +
@@ -158,36 +172,42 @@ const program = Effect.gen(function* () {
           }),
         ),
       execute: (method, input) =>
-        method.startsWith("usage.")
-          ? runPromise(usage.execute(method, input))
-          : method === "configureProvider" ||
-              method.startsWith("provider.") ||
-              method.startsWith("text.") ||
-              method.startsWith("auth.")
-            ? runPromise(providers.execute(method, input))
-            : method.startsWith("git.driver.") ||
-                method.startsWith("vcs.driver.") ||
-                method === "vcs.process" ||
-                method === "vcs.process.probe" ||
-                method.startsWith("vcs.temp.")
-              ? runPromise(git.execute(method, input))
-              : method.startsWith("project.")
-                ? runPromise(metadata.execute(method, input))
-                : method === "git.bundleFork" ||
-                    method === "git.importFork" ||
-                    method === "git.cleanupFork"
-                  ? runPromise(forks.execute(method, input))
-                  : method.startsWith("asset.") || method.startsWith("input.")
-                    ? runPromise(assets.execute(method, input))
-                    : method.startsWith("computer.")
-                      ? runPromise(computer.execute(method, input))
-                      : method.startsWith("preview.") || method.startsWith("html.")
-                        ? runPromise(preview.execute(method, input))
-                        : method.startsWith("terminals.")
-                          ? runPromise(terminals.execute(method, input))
-                          : /^(workspace|files|git|scripts)\./.test(method)
-                            ? runPromise(workspace.execute(method, input))
-                            : runPromise(executor.execute(method, input)),
+        method.startsWith("ide.lifecycle.")
+          ? ideLifecycle(method)
+          : method.startsWith("ide.extensions.")
+            ? extensions.execute(method, input)
+            : method.startsWith("ide.preferences.")
+              ? preferences.execute(method, input)
+              : method.startsWith("usage.")
+                ? runPromise(usage.execute(method, input))
+                : method === "configureProvider" ||
+                    method.startsWith("provider.") ||
+                    method.startsWith("text.") ||
+                    method.startsWith("auth.")
+                  ? runPromise(providers.execute(method, input))
+                  : method.startsWith("git.driver.") ||
+                      method.startsWith("vcs.driver.") ||
+                      method === "vcs.process" ||
+                      method === "vcs.process.probe" ||
+                      method.startsWith("vcs.temp.")
+                    ? runPromise(git.execute(method, input))
+                    : method.startsWith("project.")
+                      ? runPromise(metadata.execute(method, input))
+                      : method === "git.bundleFork" ||
+                          method === "git.importFork" ||
+                          method === "git.cleanupFork"
+                        ? runPromise(forks.execute(method, input))
+                        : method.startsWith("asset.") || method.startsWith("input.")
+                          ? runPromise(assets.execute(method, input))
+                          : method.startsWith("computer.")
+                            ? runPromise(computer.execute(method, input))
+                            : method.startsWith("preview.") || method.startsWith("html.")
+                              ? runPromise(preview.execute(method, input))
+                              : method.startsWith("terminals.")
+                                ? runPromise(terminals.execute(method, input))
+                                : /^(workspace|files|git|scripts)\./.test(method)
+                                  ? runPromise(workspace.execute(method, input))
+                                  : runPromise(executor.execute(method, input)),
     });
     const handle = worker.handle;
     const acquireLease = worker.acquireLease;

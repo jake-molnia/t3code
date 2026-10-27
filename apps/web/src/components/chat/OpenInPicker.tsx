@@ -1,3 +1,4 @@
+import { IdePreferenceStatus } from "./IdePreferenceStatus";
 import { useAtomValue } from "@effect/atom-react";
 import type {
   EditorId,
@@ -50,31 +51,41 @@ export const OpenInPicker = memo(function OpenInPicker({
   const disabled = !canOpen || !target || !openInCwd;
   if (presentation === "menu")
     return (
-      <MenuItem
-        density="touch"
+      <>
+        <MenuItem
+          density="touch"
+          disabled={disabled}
+          onClick={() => {
+            void open(file);
+          }}
+        >
+          <VisualStudioCode />
+          <MenuItemLabel>Open in VS Code</MenuItemLabel>
+          <MenuShortcut>{shortcutLabelForCommand(keybindings, "editor.openFavorite")}</MenuShortcut>
+        </MenuItem>
+        {target && (
+          <IdePreferenceStatus environmentId={environmentId} target={target} presentation="menu" />
+        )}
+      </>
+    );
+  return (
+    <div className="flex items-center gap-1">
+      <ThreadDetailsControl
+        aria-label="Open in VS Code"
+        size={displayMode === "panel" ? "sm" : "xs"}
+        variant={displayMode === "panel" ? "ghost" : "outline"}
+        panel={displayMode === "panel"}
         disabled={disabled}
         onClick={() => {
           void open(file);
         }}
       >
         <VisualStudioCode />
-        <MenuItemLabel>Open in VS Code</MenuItemLabel>
-        <MenuShortcut>{shortcutLabelForCommand(keybindings, "editor.openFavorite")}</MenuShortcut>
-      </MenuItem>
-    );
-  return (
-    <ThreadDetailsControl
-      aria-label="Open in VS Code"
-      size={displayMode === "panel" ? "sm" : "xs"}
-      variant={displayMode === "panel" ? "ghost" : "outline"}
-      panel={displayMode === "panel"}
-      disabled={disabled}
-      onClick={() => {
-        void open(file);
-      }}
-    >
-      <VisualStudioCode />
-      {!compact && <span>Open in VS Code</span>}
-    </ThreadDetailsControl>
+        {!compact && <span>Open in VS Code</span>}
+      </ThreadDetailsControl>
+      {target && (
+        <IdePreferenceStatus environmentId={environmentId} target={target} compact={compact} />
+      )}
+    </div>
   );
 });

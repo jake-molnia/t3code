@@ -120,3 +120,36 @@ describe("deriveProviderInstanceConfigMap", () => {
     });
   });
 });
+
+it("hydrates native Antigravity enabled for existing projects despite both legacy flags being false", () => {
+  const instanceId = ProviderInstanceId.make("antigravity");
+  const secondProjectId = ProjectId.make("project-b");
+  const instance = {
+    driver: ProviderDriverKind.make("antigravity"),
+    enabled: false,
+    config: { enabled: false, binaryPath: "antigravity", customModels: ["saved-model"] },
+    environment: [{ name: "NATIVE_ACCOUNT", value: "saved-account", sensitive: true }],
+  };
+  const settings = settingsWith({
+    providerInstances: { [instanceId]: instance },
+    projectSettingsOverrides: {
+      [projectId]: { providerInstances: { [instanceId]: { enabled: true } } },
+      [secondProjectId]: { providerInstances: { [instanceId]: { enabled: true } } },
+    },
+  });
+  expect(deriveProviderInstanceConfigMap(settings)[instanceId]).toEqual({
+    ...instance,
+    enabled: true,
+    config: { ...instance.config, enabled: true },
+  });
+  expect(settings.providerInstances[instanceId]).toEqual(instance);
+  expect(
+    deriveProviderInstanceConfigMap({
+      ...settings,
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [instanceId]: { enabled: false } } },
+        [secondProjectId]: { providerInstances: { [instanceId]: { enabled: false } } },
+      },
+    })[instanceId],
+  ).toEqual(instance);
+});

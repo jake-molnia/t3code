@@ -1,3 +1,4 @@
+import { IdeSetup } from "./agentRuntime/IdeSetup.ts";
 import * as ModelGateway from "./modelGateway/ModelGateway.ts";
 import * as McpConnections from "./mcp/McpConnections.ts";
 import * as ServerVersion from "./environment/ServerVersion.ts";
@@ -1068,6 +1069,7 @@ const layerWsRpc = (
   clientOrigin: OrchestrationClientOrigin,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
+  serverOrigin: string,
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -1125,6 +1127,7 @@ const layerWsRpc = (
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
+      const ideSetup = yield* IdeSetup;
       const sandboxIde = yield* SandboxIde.SandboxIde;
       const directEndpoints = yield* DirectEndpoints.DirectEndpoints;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -2562,7 +2565,13 @@ const layerWsRpc = (
                 }),
             ),
           ),
-        [WS_METHODS.sandboxIdeOpen]: (input) => sandboxIde.open(input),
+        [WS_METHODS.sandboxIdeSetupGet]: (input) => ideSetup.get(input.target),
+        [WS_METHODS.sandboxIdeSetupManage]: (input) => ideSetup.manage(input),
+        [WS_METHODS.sandboxIdeSetupExport]: (input) => ideSetup.export(input.target),
+        [WS_METHODS.sandboxIdePreferenceStatus]: (input) => ideSetup.status(input.target),
+        [WS_METHODS.sandboxIdePreferenceResolve]: (input) => ideSetup.resolve(input),
+        [WS_METHODS.sandboxIdeOpen]: (input) =>
+          sandboxIde.open(input, { authSessionId: currentSessionId, origin: serverOrigin }),
         [WS_METHODS.filesystemGetMetadata]: (input) => workspaceFileSystem.getMetadata(input),
         [WS_METHODS.filesystemBrowse]: (input) =>
           workspaceEntries.browse(input).pipe(
@@ -3090,7 +3099,13 @@ export const layer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            layerWsRpc(session, clientOrigin, previewAutomationBroker, serverBrowser).pipe(
+            layerWsRpc(
+              session,
+              clientOrigin,
+              previewAutomationBroker,
+              serverBrowser,
+              requestUrl.value.origin,
+            ).pipe(
               Layer.provide(Layer.succeed(McpConnections.McpConnections, mcpConnections)),
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees

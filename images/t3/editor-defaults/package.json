@@ -1,0 +1,31 @@
+{
+  "name": "t3-sandbox-defaults",
+  "displayName": "T3 Sandbox Defaults",
+  "version": "1.0.0",
+  "description": "Editor defaults for T3 execution workspaces.",
+  "categories": [
+    "Other"
+  ],
+  "license": "MIT",
+  "publisher": "t3tools",
+  "contributes": {
+    "configurationDefaults": {
+      "workbench.colorTheme": "Dark Modern",
+      "workbench.preferredDarkColorTheme": "Dark Modern",
+      "window.autoDetectColorScheme": false,
+      "workbench.startupEditor": "none",
+      "workbench.secondarySideBar.defaultVisibility": "hidden",
+      "chat.agentsControl.enabled": "hidden",
+      "chat.titleBar.signIn.enabled": false,
+      "chat.titleBar.openInAgentsWindow.enabled": false,
+      "editor.inlineSuggest.enabled": true
+    }
+  },
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "engines": {
+    "vscode": "^1.141.0"
+  }
+}

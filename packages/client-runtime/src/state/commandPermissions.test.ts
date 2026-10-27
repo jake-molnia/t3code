@@ -147,6 +147,37 @@ describe("command permissions", () => {
       }),
     ),
   );
+  it.effect("requires the destination settings grant to resolve IDE settings conflicts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        for (const method of [
+          WS_METHODS.sandboxIdePreferenceResolve,
+          WS_METHODS.sandboxIdeSetupManage,
+          WS_METHODS.sandboxIdeSetupExport,
+        ]) {
+          const resolve = createCommandPermissions(runtime, method);
+          registry.set(sessions(env), AsyncResult.success(grant(true)));
+          expect(registry.get(resolve.permissionAtom(env))).toBe(false);
+          registry.set(
+            sessions(env),
+            AsyncResult.success({
+              ...grant(true),
+              scopes: [AuthSettingsWriteScope],
+              permissions: [AuthSettingsWriteScope],
+            }),
+          );
+          registry.set(sessions(other), AsyncResult.success(grant(false)));
+          expect(registry.get(resolve.permissionAtom(env))).toBe(true);
+          expect(registry.get(resolve.permissionAtom(other))).toBe(false);
+          yield* resolve.authorize(registry, env);
+          expect((yield* resolve.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
+            "EnvironmentAuthorizationError",
+          );
+        }
+      }),
+    ),
+  );
   it.effect("requires the destination settings grant to run storage cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

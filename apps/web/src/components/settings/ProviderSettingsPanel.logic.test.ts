@@ -1,15 +1,20 @@
 import {
   AuthProvidersManageScope,
+  DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
+  resolveProjectProviderInstanceEnabled,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
   type ServerSettings,
 } from "@t3tools/contracts";
+import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildProviderEnvironmentOptions,
   buildProviderInstanceOverridePatch,
+  resolveProjectProviderEnablement,
   classifyProviderEnvironmentAccess,
   isProviderSettingsEnvironmentAvailable,
   resolvePrimaryOperateAccess,
@@ -419,4 +424,93 @@ describe("remote operate access", () => {
       }),
     ).toBe("denied");
   });
+});
+
+describe("saved project harness policy", () => {
+  it.each(["codex", "claudeAgent", "cursor", "grok", "opencode", "antigravity"])(
+    "enables, disables and re-enables %s without changing accounts or another project",
+    (kind) => {
+      const projectId = ProjectId.make("chosen");
+      const otherProjectId = ProjectId.make("other");
+      const instanceId = ProviderInstanceId.make(kind);
+      const instance = {
+        driver: ProviderDriverKind.make(kind),
+        enabled: false,
+        config: { enabled: false, customModels: ["saved-model"] },
+        environment: [{ name: "API_KEY", value: "saved-secret", sensitive: true }],
+      };
+      const before: ServerSettings = {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: { [instanceId]: instance },
+        projectSettingsOverrides: {
+          [projectId]: { defaultAutoPull: true },
+          [otherProjectId]: { providerInstances: { [instanceId]: { enabled: false } } },
+        },
+      };
+      let saved = before;
+      for (const enabled of [true, false, true]) {
+        saved = applyServerSettingsPatch(saved, {
+          projectSettingsOverrides: buildProviderInstanceOverridePatch(
+            saved,
+            [projectId],
+            instanceId,
+            enabled,
+          ),
+        });
+        expect(resolveProjectProviderInstanceEnabled(saved, projectId, instanceId)).toBe(enabled);
+        expect(resolveProjectProviderInstanceEnabled(saved, otherProjectId, instanceId)).toBe(
+          false,
+        );
+        expect(saved.providerInstances).toEqual(before.providerInstances);
+        expect(saved.textGenerationModelSelection).toEqual(before.textGenerationModelSelection);
+        expect(saved.projectSettingsOverrides[projectId]?.defaultAutoPull).toBe(true);
+      }
+    },
+  );
+});
+
+it("bulk toggles native Antigravity with mixed projects without a global enable gate", () => {
+  const instanceId = ProviderInstanceId.make("antigravity");
+  const first = ProjectId.make("first");
+  const second = ProjectId.make("second");
+  const future = ProjectId.make("future");
+  const settings: ServerSettings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: {
+      [instanceId]: {
+        driver: ProviderDriverKind.make("antigravity"),
+        enabled: false,
+        config: { enabled: false, customModels: ["saved-model"] },
+        environment: [{ name: "NATIVE_ACCOUNT", value: "saved-account", sensitive: true }],
+      },
+    },
+    projectSettingsOverrides: {
+      [first]: { providerInstances: { [instanceId]: { enabled: true } } },
+      [second]: { defaultAutoPull: true, providerInstances: { [instanceId]: { enabled: false } } },
+    },
+  };
+  const ids = [first, second];
+  expect(resolveProjectProviderEnablement(settings, ids, instanceId)).toEqual({
+    effectiveEnabled: false,
+    mixed: true,
+  });
+  expect(resolveProjectProviderEnablement(settings, [], instanceId)).toBeUndefined();
+  let saved = settings;
+  for (const enabled of [true, false, true]) {
+    saved = applyServerSettingsPatch(saved, {
+      projectSettingsOverrides: buildProviderInstanceOverridePatch(saved, ids, instanceId, enabled),
+    });
+    expect(resolveProjectProviderEnablement(saved, ids, instanceId)).toEqual({
+      effectiveEnabled: enabled,
+      mixed: false,
+    });
+    expect(ids.map((id) => resolveProjectProviderInstanceEnabled(saved, id, instanceId))).toEqual([
+      enabled,
+      enabled,
+    ]);
+    expect(resolveProjectProviderInstanceEnabled(saved, future, instanceId)).toBe(false);
+    expect(saved.providerInstances).toEqual(settings.providerInstances);
+    expect(saved.textGenerationModelSelection).toEqual(settings.textGenerationModelSelection);
+    expect(saved.projectSettingsOverrides[second]?.defaultAutoPull).toBe(true);
+  }
 });

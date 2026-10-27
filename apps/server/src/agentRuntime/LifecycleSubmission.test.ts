@@ -152,6 +152,66 @@ const fixture = Effect.gen(function* () {
 });
 
 it.layer(services, { excludeTestServices: true })("durable workspace state submission", (it) => {
+  it.effect("classifies queued stop resources without authorizing acquisition", () =>
+    Effect.forEach([false, true], (hasReceipt) =>
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        const runtime = yield* f.construct();
+        f.setResource({
+          desiredState: "suspended",
+          state: "running",
+          execution: null,
+          version: "queued-version",
+          progress: { step: "queued", startedAt: "2026-10-17T12:52:41Z" },
+        });
+        if (hasReceipt) {
+          const receipt = JSON.stringify({
+            ...f.options,
+            revision: 10,
+            action: "suspend",
+            version: "initial",
+            acceptedVersion: "queued-version",
+          });
+          yield* f.sql`UPDATE agent_runtime_workspaces SET lifecycle_request_json=${receipt}`;
+        }
+        const failure = yield* runtime.observeWorkspace(identity.workspaceId).pipe(Effect.flip);
+        expect(RuntimeClient.isWorkerObservationStopping(failure)).toBe(true);
+        expect(RuntimeClient.isWorkerObservationPending(failure)).toBe(false);
+        expect(RuntimeClient.retryableStop(failure) !== null).toBe(hasReceipt);
+        expect(f.requests).toEqual([]);
+      }),
+    ),
+  );
+  it.effect("distinguishes stopping resources from generic worker readiness", () =>
+    Effect.forEach(["suspending", "releasing", "unavailable"] as const, (state) =>
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        const runtime = yield* f.construct();
+        for (const desiredState of ["running", "suspended", "released"] as const) {
+          f.setResource({
+            state,
+            desiredState,
+            execution: null,
+            error:
+              state === "unavailable"
+                ? {
+                    code: "worker_unavailable",
+                    message: "Current worker is unavailable",
+                    retryable: true,
+                  }
+                : null,
+          });
+          const failure = yield* runtime.observeWorkspace(identity.workspaceId).pipe(Effect.flip);
+          expect(RuntimeClient.isWorkerObservationPending(failure)).toBe(true);
+          expect(RuntimeClient.isWorkerObservationStopping(failure)).toBe(
+            desiredState !== "running",
+          );
+        }
+        expect(f.requests).toEqual([]);
+      }),
+    ),
+  );
+
   it.effect(
     "replays the persisted resource version after a failed submission and central restart",
     () =>

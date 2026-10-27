@@ -275,6 +275,92 @@ function signals(session) {
   process.once("SIGINT", () => session.stop());
 }
 
+// Match the worker's pause lock so a launch cannot appear after pause acknowledges.
+export async function claimPreparedIde(directory) {
+  const result = await new Promise((resolve, reject) => {
+    NodeChildProcess.execFile(
+      "python3",
+      [
+        "-c",
+        [
+          "import fcntl, pathlib, sys",
+          "root = pathlib.Path(sys.argv[1])",
+          "root.mkdir(parents=True, exist_ok=True)",
+          "with (root / 'control.lock').open('a') as lock:",
+          "    fcntl.flock(lock, fcntl.LOCK_EX)",
+          "    if (root / 'prepared').exists():",
+          "        (root / 'running').write_text('starting')",
+          "        print('claimed')",
+        ].join("\n"),
+        directory,
+      ],
+      (error, stdout) => (error ? reject(error) : resolve(stdout)),
+    );
+  });
+  return result.trim() === "claimed";
+}
+
+export async function superviseIde(
+  session,
+  { directory, binary, args, probe, output, restartMs = 1000 },
+) {
+  const receipt = NodePath.join(directory, "prepared");
+  const status = NodePath.join(directory, "running");
+  await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
+  await NodeFSP.rm(status, { force: true });
+  const delay = (ms, signal) => NodeTimersPromises.setTimeout(ms, undefined, { signal });
+  try {
+    while (!session.abort.signal.aborted) {
+      if (!(await claimPreparedIde(directory))) {
+        await delay(200, session.abort.signal);
+        continue;
+      }
+      if (session.abort.signal.aborted) break;
+      const process = session.start(binary, args, { output, essential: false });
+      const attempt = new AbortController();
+      const signal = AbortSignal.any([attempt.signal, session.abort.signal]);
+      process.child.once("close", () => attempt.abort());
+      const stopAttempt = () => session.terminate(process.child);
+      const warming = ready(session, "IDE", probe, signal)
+        .then(async () => {
+          if (!signal.aborted) await NodeFSP.writeFile(status, "ready", { mode: 0o600 });
+        })
+        .catch(async (error) => {
+          if (!signal.aborted) {
+            output?.(Buffer.from(`IDE readiness failed: ${error.message}\n`));
+            await stopAttempt();
+          }
+        });
+      const watching = (async () => {
+        while (!signal.aborted) {
+          try {
+            await NodeFSP.stat(receipt);
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+            await stopAttempt();
+            return;
+          }
+          await delay(200, signal);
+        }
+      })().catch(async (error) => {
+        if (!signal.aborted) {
+          await session.stop(error);
+        }
+      });
+      await process.exited;
+      attempt.abort();
+      // Complete all status writers before acknowledging pause or starting another editor.
+      await Promise.all([warming, watching]);
+      await NodeFSP.rm(status, { force: true });
+      if (!session.abort.signal.aborted) await delay(restartMs, session.abort.signal);
+    }
+  } catch (error) {
+    if (!session.abort.signal.aborted) throw error;
+  } finally {
+    await NodeFSP.rm(status, { force: true });
+  }
+}
+
 async function ide(root, state) {
   const session = new Session({ cwd: root, env: process.env, graceMs: 2000 });
   signals(session);
@@ -287,7 +373,6 @@ async function ide(root, state) {
     "--disable-telemetry",
     "--disable-update-check",
     "--disable-proxy",
-    "--disable-workspace-trust",
     "--config",
     NodePath.join(state, "ide", "config.yaml"),
     "--user-data-dir",
@@ -296,25 +381,16 @@ async function ide(root, state) {
     NodePath.join(state, "ide", "extensions"),
     root,
   ];
-  const restarting = session.restart(process.env.T3_IDE_BINARY ?? "code-server", args, {
+  const restarting = superviseIde(session, {
+    directory: NodePath.join(state, "ide"),
+    binary: process.env.T3_IDE_BINARY ?? "code-server",
+    args,
     output: log,
-    onStart(child) {
-      const attempt = new AbortController();
-      child.once("close", () => attempt.abort());
-      ready(
-        session,
-        "IDE",
-        async () => {
-          const response = await http("http://127.0.0.1:8085/");
-          await response.body?.cancel();
-        },
-        AbortSignal.any([attempt.signal, session.abort.signal]),
-      ).catch(() => {
-        if (!session.abort.signal.aborted && child.exitCode === null && child.signalCode === null)
-          session.terminate(child).catch((error) => session.stop(error));
-      });
+    probe: async () => {
+      const response = await http("http://127.0.0.1:8085/");
+      await response.body?.cancel();
     },
-  });
+  }).catch((error) => session.stop(error));
   await session.done;
   await restarting;
 }

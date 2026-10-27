@@ -5,7 +5,11 @@ import type {
   SidebarProjectGroupMember,
   SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
-import { resolveSettingsScope, validateSettingsScopeSearch } from "./settingsScope";
+import {
+  resolveSettingsScope,
+  selectProjectSettingsScope,
+  validateSettingsScopeSearch,
+} from "./settingsScope";
 
 const laptopId = EnvironmentId.make("laptop");
 const serverId = EnvironmentId.make("server");
@@ -89,10 +93,10 @@ describe("settings scope search", () => {
 });
 
 describe("settings scope resolution", () => {
-  it("defaults to every environment with no project", () => {
+  it("defaults to all existing projects", () => {
     expect(resolveSettingsScope({}, groups, environments)).toMatchObject({
       kind: "all",
-      members: [],
+      members: [first, second, third, other],
       environmentIds: [laptopId, serverId],
     });
   });
@@ -202,4 +206,38 @@ describe("settings scope resolution", () => {
       environmentIds: [],
     });
   });
+});
+
+describe("project-only settings entry", () => {
+  it("opens all projects for legacy global or environment links", () => {
+    expect(selectProjectSettingsScope({})).toEqual({});
+    expect(selectProjectSettingsScope({ machine: "removed" })).toEqual({});
+  });
+
+  it("retains the chosen project and checkout without an environment selector", () => {
+    const search = selectProjectSettingsScope({
+      project: "other",
+      machine: "removed",
+      checkout: other.physicalProjectKey,
+    });
+    expect(search).toEqual({ project: "other", checkout: other.physicalProjectKey });
+    expect(resolveSettingsScope(search, groups, environments).members).toEqual([other]);
+  });
+
+  it("never replaces an explicit missing project with a different project", () => {
+    const search = selectProjectSettingsScope({ project: "deleted", machine: "removed" });
+    expect(resolveSettingsScope(search, groups, environments)).toMatchObject({
+      kind: "unavailable",
+      members: [],
+    });
+    expect(selectProjectSettingsScope({})).toEqual({});
+    expect(selectProjectSettingsScope({ checkout: "orphan" })).toEqual({
+      checkout: "orphan",
+    });
+  });
+});
+
+it("deduplicates all-project members by environment and project identity", () => {
+  const all = resolveSettingsScope({}, [...groups, groups[0]!], environments);
+  expect(all.members).toEqual([first, second, third, other]);
 });

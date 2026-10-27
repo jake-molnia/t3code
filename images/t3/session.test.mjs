@@ -1,11 +1,12 @@
 import * as NodeAssert from "node:assert/strict";
 import * as NodeEvents from "node:events";
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeTest from "node:test";
-import { Session, privateLog, mcpReady } from "./session.mjs";
+import { Session, privateLog, mcpReady, claimPreparedIde, superviseIde } from "./session.mjs";
 
 async function fixture(t) {
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-session-test-"));
@@ -192,5 +193,87 @@ NodeTest.test(
     NodeAssert.equal(session.abort.signal.aborted, false);
     await session.stop();
     await loop;
+  },
+);
+
+async function waitForFile(t, path, expected) {
+  return new Promise((resolve, reject) => {
+    const watcher = NodeFS.watch(NodePath.dirname(path), check);
+    t.after(() => watcher.close());
+    async function check() {
+      try {
+        const value = await NodeFSP.readFile(path, "utf8").catch((error) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (value === expected) {
+          watcher.close();
+          resolve();
+        }
+      } catch (error) {
+        watcher.close();
+        reject(error);
+      }
+    }
+    check();
+  });
+}
+
+NodeTest.test(
+  "IDE launch claims require preparation and publish starting before spawn",
+  async (t) => {
+    const { directory } = await fixture(t);
+    NodeAssert.equal(await claimPreparedIde(directory), false);
+    await NodeAssert.rejects(NodeFSP.readFile(NodePath.join(directory, "running")), {
+      code: "ENOENT",
+    });
+    await NodeFSP.writeFile(NodePath.join(directory, "prepared"), "prepared");
+    NodeAssert.equal(await claimPreparedIde(directory), true);
+    NodeAssert.equal(
+      await NodeFSP.readFile(NodePath.join(directory, "running"), "utf8"),
+      "starting",
+    );
+  },
+);
+
+NodeTest.test(
+  "IDE preparation, pause and resume leave the worker session alive",
+  { timeout: 10000 },
+  async (t) => {
+    const { directory, session } = await fixture(t);
+    const receipt = NodePath.join(directory, "prepared");
+    const status = NodePath.join(directory, "running");
+    let launches = 0;
+    const supervisor = superviseIde(session, {
+      directory,
+      binary: process.execPath,
+      args: ["-e", "setInterval(() => {}, 1000)"],
+      output: () => {},
+      probe: async () => {
+        launches++;
+      },
+      restartMs: 1,
+    });
+    t.after(async () => {
+      await session.stop();
+      await supervisor;
+    });
+    NodeAssert.equal(launches, 0);
+    const firstReady = waitForFile(t, status, "ready");
+    await NodeFSP.writeFile(receipt, "prepared");
+    await firstReady;
+    NodeAssert.equal(launches, 1);
+    const paused = waitForFile(t, status, null);
+    await NodeFSP.rm(receipt);
+    await paused;
+    NodeAssert.equal(session.abort.signal.aborted, false);
+    NodeAssert.equal(session.children.size, 0);
+    const resumed = waitForFile(t, status, "ready");
+    await NodeFSP.writeFile(receipt, "prepared");
+    await resumed;
+    NodeAssert.equal(launches, 2);
+    await session.stop();
+    await supervisor;
+    await NodeAssert.rejects(NodeFSP.readFile(status), { code: "ENOENT" });
   },
 );

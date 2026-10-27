@@ -79,6 +79,30 @@ describe("getProviderSummary", () => {
   it("treats a disabled provider status as disabled even before its enabled flag updates", () => {
     expect(getProviderSummary({ ...provider, status: "disabled" }).headline).toBe("Disabled");
   });
+
+  it("does not claim installation when a disabled harness has not been found", () => {
+    expect(
+      getProviderSummary({ ...provider, enabled: false, status: "disabled", installed: false }),
+    ).toEqual({
+      headline: "Disabled",
+      detail: "Not used for new sessions. Saved configuration is retained.",
+    });
+  });
+
+  it("keeps the unsupported authentication reason visible for a disabled harness", () => {
+    expect(
+      getProviderSummary({
+        ...provider,
+        enabled: false,
+        status: "disabled",
+        availability: "unavailable",
+        unavailableReason: "Cursor does not support model gateway credentials.",
+      }),
+    ).toEqual({
+      headline: "Disabled",
+      detail: "Cursor does not support model gateway credentials.",
+    });
+  });
 });
 
 describe("provider status copy", () => {
