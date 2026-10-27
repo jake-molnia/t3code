@@ -20,13 +20,11 @@ env.update({
     'T3_GATEWAY_API_KEY': secrets.token_urlsafe(32),
     'T3_GATEWAY_URL': 'http://127.0.0.1:9',
     'SANDBOX_CHROMIUM_SANDBOX': 'disabled',
-    'AGENT_RUNTIME_URL': 'http://127.0.0.1:9',
-    'AGENT_RUNTIME_TOKEN': secrets.token_urlsafe(32),
     'T3_MCP_ADVERTISED_URL': 'http://127.0.0.1:3773/mcp',
 })
 variables = (
     ['T3_WORKSPACE_ID', 'T3_ALLOCATION_ID', 'T3_ALLOCATION_GENERATION', 'T3_POD_UID', 'T3_WORKER_TOKEN', 'SANDBOX_CHROMIUM_SANDBOX', 'T3_GATEWAY_URL', 'T3_GATEWAY_API_KEY']
-    if worker else ['AGENT_RUNTIME_URL', 'AGENT_RUNTIME_TOKEN', 'T3_MCP_ADVERTISED_URL', 'T3_GATEWAY_API_KEY']
+    if worker else ['T3_MCP_ADVERTISED_URL', 'T3_GATEWAY_API_KEY']
 )
 command = [
     'docker', 'run', '--detach', '--name', name, '--network', 'none',
@@ -108,7 +106,7 @@ print('Worker root operations and native Chromium preview passed.')
 except Exception:
     logs = subprocess.run(['docker', 'logs', '--tail', '100', name], capture_output=True, text=True)
     output = logs.stdout + logs.stderr
-    for variable in ('T3_WORKER_TOKEN', 'AGENT_RUNTIME_TOKEN', 'T3_GATEWAY_API_KEY'):
+    for variable in ('T3_WORKER_TOKEN', 'T3_GATEWAY_API_KEY'):
         output = output.replace(env[variable], '[redacted]')
     print(output[-8000:])
     raise

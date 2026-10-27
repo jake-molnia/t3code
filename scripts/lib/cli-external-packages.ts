@@ -27,6 +27,8 @@
 export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   // Cursor ships computed Webpack imports and platform helper packages.
   "@cursor/sdk",
+  // jsonc-parser passes require into its UMD factory; its relative imports need real files.
+  "jsonc-parser",
   // Playwright reads package.json and browsers.json beside its runtime modules.
   "playwright-core",
   "node-pty",

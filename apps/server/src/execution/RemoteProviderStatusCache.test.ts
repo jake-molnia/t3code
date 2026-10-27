@@ -1,5 +1,7 @@
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as ConfigProvider from "effect/ConfigProvider";
+import { SandboxLifecycle } from "../sandbox/SandboxLifecycle.ts";
+import { poolsLayer } from "../agentRuntime/testkit/Sandbox.ts";
 import { FetchHttpClient } from "effect/http";
 import * as RuntimeSchema from "../agentRuntime/Schema.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -81,14 +83,8 @@ it.layer(
               return yield* Runtime.RuntimeClient.pipe(
                 Effect.provide(
                   Runtime.layer.pipe(
-                    Layer.provide(
-                      ConfigProvider.layer(
-                        ConfigProvider.fromUnknown({
-                          AGENT_RUNTIME_URL: "http://controller.invalid",
-                          AGENT_RUNTIME_TOKEN: "test-token",
-                        }),
-                      ),
-                    ),
+                    Layer.provide(poolsLayer()),
+                    Layer.provide(Layer.mock(SandboxLifecycle)({})),
                   ),
                 ),
               );

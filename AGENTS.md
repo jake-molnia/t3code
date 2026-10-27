@@ -1,6 +1,6 @@
 # T3 Code
 
-This fork runs the T3 web application and its existing SQLite state centrally. Agent execution belongs to the TypeScript worker in Kubernetes Agent Sandbox. The separate agent-runtime repository and Hatchet own sandbox lifecycle. Keep upstream provider and orchestration implementations reusable; add transport boundaries instead of duplicating them.
+This fork runs the T3 web application and its existing SQLite state centrally. Agent execution belongs to the TypeScript worker in Kubernetes Agent Sandbox. T3 owns sandbox lifecycle directly through the Kubernetes Agent Sandbox API and builds its own worker image. A single central server owns durable lifecycle intent; no separate runtime service is required. Keep upstream provider and orchestration implementations reusable; add transport boundaries instead of duplicating them.
 
 - New top-level threads receive independent workspaces. Delegated descendants inherit the parent's workspace but retain distinct provider and MCP identities.
 - Central provider and workspace operations must not fall back to the server's local executables or filesystem when execution is unavailable.

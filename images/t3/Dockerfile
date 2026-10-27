@@ -1,13 +1,6 @@
 # syntax=docker/dockerfile:1.7
 FROM golang:1.27.1-trixie@sha256:9baa6b4187bbb98d240372a8a235ac0bb6b5ddd52bba1431dc2f7c0705862728 AS go-toolchain
 
-FROM go-toolchain AS ide-runtime
-WORKDIR /src/runtime
-ADD --checksum=sha256:320d646c7aa7c82ed0daba00a596f340d92293d2b07d29019e2a45078445048e https://codeload.github.com/jake-molnia/agent-runtime/tar.gz/080701503fb4df3534a37cb81d79a7ac8edf6136 /tmp/runtime.tar.gz
-RUN tar -xzf /tmp/runtime.tar.gz --strip-components=1
-COPY images/t3/ide-preparation.patch /tmp/ide-preparation.patch
-RUN git apply /tmp/ide-preparation.patch && CGO_ENABLED=0 go build -trimpath -o /out/agent-runtime ./cmd/agent-runtime
-
 FROM go-toolchain AS cliproxy-build
 WORKDIR /src/cliproxy
 ADD --checksum=sha256:a1af572340e4cd58ca2bc08c2206657a696c2eb8560fa4870a2354ee9323412e https://codeload.github.com/jake-molnia/CLIProxyAPI/tar.gz/bf9341629ef2300ac9d846a2e80fe2756f63a671 /tmp/cliproxy.tar.gz
@@ -62,8 +55,32 @@ RUN nix --extra-experimental-features 'nix-command flakes' \
       build --no-update-lock-file --out-link /tmp/nix-builder /src/ide-extensions#nix-builder \
     && mkdir -p /out/nix && cp -a /tmp/nix-builder/. /out/nix/
 
-FROM ghcr.io/jake-molnia/agent-runtime-sandbox@sha256:3ef66b7877049c3a81d2dba0a32425bd6c84fa0e4dfb8dcd5f7604619f597806 AS t3-worker
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS opencode2
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git patch \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY images/t3/upstream.json ./
+COPY images/t3/scripts/build-opencode.sh scripts/
+COPY images/t3/patches/opencode-mcp-tool-refresh.patch patches/
+ARG TARGETARCH
+RUN bash scripts/build-opencode.sh "$TARGETARCH" /out
+
+FROM tailscale/tailscale:v1.102.4@sha256:2667499ed87ae29218f292556ba062918402dd5e92e93637af14867e4df12dd3 AS tailscale
+
+FROM desktop-tools AS aio-tools
+COPY images/t3/desktop/download-aio.sh /tmp/download-aio.sh
+RUN sh /tmp/download-aio.sh "${TARGETARCH}" /out
+
+FROM --platform=$BUILDPLATFORM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS skills
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY images/t3/skills.lock.json images/t3/scripts/install-skills.py /tmp/skills/
+RUN python3 /tmp/skills/install-skills.py --lock /tmp/skills/skills.lock.json
+
+FROM node:26.9.0-trixie-slim@sha256:65f816afd401c1c4de3293acc46dce115398152af4bdcd73c103b096988922d7 AS t3-worker
 USER 0:0
+COPY images/t3/desktop/install-tools.sh /tmp/install-desktop-tools.sh
+RUN sh /tmp/install-desktop-tools.sh && rm /tmp/install-desktop-tools.sh
 ARG TARGETARCH
 RUN test "$TARGETARCH" = amd64 \
     && apt-get update && apt-get install -y --no-install-recommends ca-certificates git git-lfs openssh-client python3 python3-venv ripgrep tini lsof procps chromium make g++ libffi8 libssl3t64 libbz2-1.0 libuuid1 zlib1g \
@@ -71,7 +88,6 @@ RUN test "$TARGETARCH" = amd64 \
     && npm install --global --ignore-scripts pnpm@11.10.0 \
     && mkdir -p /workspace && chown node:node /workspace
 COPY --from=desktop-tools /opt/code-server /opt/code-server
-COPY --from=ide-runtime /out/agent-runtime /usr/local/bin/agent-runtime
 COPY --from=ide-extensions /nix /nix
 COPY --from=ide-extensions /out/nix /opt/nix
 COPY images/t3/ide-extensions /opt/t3/ide-extensions
@@ -79,17 +95,26 @@ RUN cc -shared -fPIC -Wall -Wextra -Werror /opt/t3/ide-extensions/nix-pty.c -o /
 ENV NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 COPY images/t3/editor-defaults /opt/code-server/lib/vscode/extensions/t3-sandbox-defaults
 COPY --from=go-toolchain /usr/local/go /usr/local/go
+COPY --from=opencode2 /out/opencode /usr/local/bin/opencode2
+COPY --from=aio-tools /out/aiod /out/computer-use /usr/local/bin/
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
+COPY --from=skills /opt/agent-skill-bundles /opt/agent-skill-bundles
+COPY --from=skills /opt/agent-skills /opt/agent-skills
+COPY images/t3/desktop/config /opt/t3/desktop/config
+COPY images/t3/desktop/skills /opt/t3/desktop/skills
+COPY images/t3/desktop/chromium-policy.json /etc/chromium/policies/managed/t3.json
+COPY images/t3/session.mjs images/t3/session.test.mjs images/t3/UPSTREAM.md /opt/t3/
+RUN node --test /opt/t3/session.test.mjs && rm /opt/t3/session.test.mjs
 COPY images/t3/harness-configs/gateway.json /opt/t3/gateway-harnesses.json
 COPY --from=harnesses /opt/harnesses /opt/harnesses
 COPY --from=harnesses /opt/native/bin /opt/native/bin
 COPY --from=harnesses /opt/native/az/opt/az /opt/az
 COPY --from=harnesses /opt/native/az/usr/bin/az /usr/bin/az
 COPY --from=harnesses /opt/native/extensions /opt/azure/extensions
-RUN mv /usr/local/bin/opencode /usr/local/bin/opencode2 \
-    && ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server
 COPY --from=worker-package /out/worker /opt/t3
 COPY --from=harnesses /opt/providers.lock.json /opt/t3/providers.lock.json
-RUN ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
+RUN ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server \
+    && ln -s /opt/t3/dist/bin.mjs /usr/local/bin/t3 \
     && chmod +x /opt/t3/dist/bin.mjs
 ARG T3_SOURCE_REVISION
 ENV PATH=/opt/nix/bin:/opt/t3/bin:/opt/markitdown/bin:/usr/local/go/bin:/opt/harnesses/node_modules/.bin:/opt/native/bin:$PATH \

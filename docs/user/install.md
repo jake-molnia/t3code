@@ -30,4 +30,4 @@ Open the same web address from another device to continue your saved conversatio
 
 ## Set up a deployment
 
-If you administer the application, follow the [T3 image build guide](../../images/t3/README.md) and [deployment guide](https://github.com/jake-molnia/agent-runtime/blob/t3/sandbox-session-lifecycle/deploy/t3/README.md). They cover the central service, persistent storage, execution images, and runtime credentials.
+If you administer the application, follow the [T3 image build guide](../../images/t3/README.md) and [deployment guide](../../deploy/t3/README.md). They cover the central service, persistent storage, execution images, and Kubernetes access.

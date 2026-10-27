@@ -1,0 +1,1 @@
+Desktop defaults, dependency installers, skills pins, and the OpenCode MCP refresh patch were imported from jake-molnia/agent-runtime at commit 080701503fb4df3534a37cb81d79a7ac8edf6136. That source repository does not contain a license file. Original source attribution is retained here. The session supervisor is implemented in this repository.

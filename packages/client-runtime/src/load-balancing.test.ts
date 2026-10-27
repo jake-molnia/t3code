@@ -62,10 +62,58 @@ describe("execution pool balancing", () => {
         now,
       ),
     ).toBeNull();
-    expect(
-      chooseExecutionPool(catalog([pool(gompers, { resources: null })]), codex, {}, now),
-    ).toBeNull();
   });
+  it("uses preferences for native pools without inventing capacity measurements", () => {
+    const candidates = catalog([
+      pool(gompers, { resources: null }),
+      pool(portal, { resources: null }),
+    ]);
+    expect(chooseExecutionPool(candidates, codex, {}, now)).toBe(gompers);
+    expect(chooseExecutionPool(candidates, codex, { [portal]: 100 }, now)).toBe(portal);
+    expect(chooseExecutionPool(candidates, codex, { [gompers]: 0, [portal]: 0 }, now)).toBeNull();
+    expect(chooseExecutionPool(candidates, codex, {}, now + 15001)).toBeNull();
+    expect(chooseExecutionPool(candidates, codex, {}, now - 5001)).toBeNull();
+  });
+  it("still excludes unavailable, incompatible and full unmeasured pools", () => {
+    for (const overrides of [
+      { available: false },
+      { providerDrivers: [other] },
+      { requestCapacity: { profile: "native", sampledAt: now, availableSlots: 0 } },
+    ])
+      expect(
+        chooseExecutionPool(
+          catalog([pool(gompers, { resources: null, ...overrides })]),
+          codex,
+          {},
+          now,
+        ),
+      ).toBeNull();
+  });
+  it("prefers measured spare capacity before unmeasured pools", () => {
+    expect(
+      chooseExecutionPool(
+        catalog([pool(gompers, { resources: null }), pool(portal)]),
+        codex,
+        { [gompers]: 100, [portal]: 1 },
+        now,
+      ),
+    ).toBe(portal);
+  });
+});
+
+it("treats an empty provider allowlist as unrestricted for selection and provider changes", () => {
+  const candidates = catalog([pool(gompers, { resources: null, providerDrivers: [] })]);
+  expect(chooseExecutionPool(candidates, other, {}, now)).toBe(gompers);
+  expect(
+    reconcileExecutionPoolProvider({
+      snapshot: candidates.snapshot,
+      selectedPoolId: gompers,
+      driver: other,
+      automatic: true,
+      placementLocked: false,
+      balancedPoolId: null,
+    }),
+  ).toEqual({ incompatible: false, reselect: false, replacementPoolId: null });
 });
 
 describe("provider changes on pinned drafts", () => {

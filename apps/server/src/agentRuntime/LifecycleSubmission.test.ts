@@ -3,12 +3,16 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { ThreadId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import {
+  SandboxLifecycle,
+  SandboxLifecycleError,
+  type WorkspaceResource,
+} from "../sandbox/SandboxLifecycle.ts";
+import { poolsLayer } from "./testkit/Sandbox.ts";
 import { ExecutionIdentity } from "../../../../packages/contracts/src/execution.ts";
 import * as RuntimeClient from "./RuntimeClient.ts";
 import * as RuntimeSchema from "./Schema.ts";
@@ -26,16 +30,13 @@ const identity = Schema.decodeUnknownSync(ExecutionIdentity)({
 const services = NodeSqliteClient.layer({ filename: ":memory:" }).pipe(
   Layer.provideMerge(NodeServices.layer),
 );
-const desired = Schema.Struct({
-  desiredState: Schema.Literals(["running", "suspended", "released"]),
-});
 const fixture = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* RuntimeSchema.migrate;
   yield* sql`DELETE FROM agent_runtime_workspaces`;
   yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id,owner_thread_id,admission_revision) VALUES ('utility-workspace','utility:catalog',10)`;
   const requests: Array<{ version: string; desiredState: string }> = [];
-  let resource: typeof RuntimeClient.WorkspaceResource.Type = {
+  let resource: WorkspaceResource = {
     id: identity.workspaceId,
     pool: "local",
     profile: "t3",
@@ -54,18 +55,19 @@ const fixture = Effect.gen(function* () {
     failAccepted: false,
     failSubmission: false,
   };
-  const http = HttpClient.make((request) =>
-    Effect.gen(function* () {
-      if (request.method === "PUT" && request.url.endsWith("/state")) {
-        const body =
-          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
-        const update = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(desired))(body).pipe(
-          Effect.orDie,
-        );
-        const version = request.headers["if-match"] ?? "";
-        requests.push({ version, desiredState: update.desiredState });
-        if (control.fail)
-          return HttpClientResponse.fromWeb(request, Response.json({}, { status: 503 }));
+  const lifecycle = SandboxLifecycle.of({
+    ensure: () => Effect.sync(() => resource),
+    observe: () => Effect.sync(() => resource),
+    setDesiredState: (_workspaceId, _placement, desiredState, version) =>
+      Effect.gen(function* () {
+        requests.push({ version, desiredState });
+        const failure = () =>
+          new SandboxLifecycleError({
+            operation: "setDesiredState",
+            httpStatus: 503,
+            cause: "unavailable",
+          });
+        if (control.fail) return yield* failure();
         if (control.race) {
           resource = {
             ...resource,
@@ -75,62 +77,47 @@ const fixture = Effect.gen(function* () {
           };
           control.race = false;
         }
-        if (version !== `"${resource.version}"`)
-          return HttpClientResponse.fromWeb(
-            request,
-            Response.json(
-              {
-                error: { code: "version_conflict", message: "Workspace changed", retryable: true },
-              },
-              { status: 412 },
-            ),
-          );
+        if (version !== resource.version)
+          return yield* new SandboxLifecycleError({
+            operation: "setDesiredState",
+            httpStatus: 412,
+            cause: "Workspace changed",
+          });
         if (control.failSubmission) {
           resource = {
             ...resource,
-            desiredState: update.desiredState,
+            desiredState,
             version: "queued-version",
             progress: { step: "queued", startedAt: "2026-10-15T00:00:00Z" },
             execution: null,
           };
-          return HttpClientResponse.fromWeb(request, Response.json({}, { status: 503 }));
+          return yield* failure();
         }
         resource = {
           ...resource,
-          desiredState: update.desiredState,
+          desiredState,
           progress: null,
-          state: control.failAccepted ? "failed" : update.desiredState,
+          state: control.failAccepted ? "failed" : desiredState,
           error: control.failAccepted
             ? { code: "worker_busy", message: "Worker is busy", retryable: true }
             : null,
           version: `version-${requests.length}`,
           execution:
-            update.desiredState === "running"
+            desiredState === "running"
               ? { identity, endpoint: "http://worker.test", token: "worker-token" }
               : null,
         };
         if (control.loseResponse) {
           control.loseResponse = false;
-          return HttpClientResponse.fromWeb(request, Response.json({}, { status: 503 }));
+          return yield* failure();
         }
-      }
-      return HttpClientResponse.fromWeb(
-        request,
-        Response.json(resource, { headers: { etag: `"${resource.version}"` } }),
-      );
-    }),
-  );
+        return resource;
+      }),
+  });
   const construct = () =>
     RuntimeClient.RuntimeClient.pipe(
-      Effect.provide(RuntimeClient.layer),
-      Effect.provideService(HttpClient.HttpClient, http),
-      Effect.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AGENT_RUNTIME_URL: "http://runtime.test", AGENT_RUNTIME_TOKEN: "test-token" },
-          }),
-        ),
-      ),
+      Effect.provide(RuntimeClient.layer.pipe(Layer.provide(poolsLayer()))),
+      Effect.provideService(SandboxLifecycle, lifecycle),
     );
   return {
     sql,
@@ -225,31 +212,33 @@ it.layer(services, { excludeTestServices: true })("durable workspace state submi
     ),
   );
 
-  it.effect("replays the persisted ETag after a failed submission and central restart", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      const runtime = yield* f.construct();
-      yield* withWorkspaceActivity(
-        identity.workspaceId,
-        runtime.stop(f.owner, "suspend", f.options),
-      ).pipe(Effect.flip);
-      expect(f.requests).toHaveLength(0);
-      f.control.fail = true;
-      yield* runtime.stop(f.owner, "suspend", f.options).pipe(Effect.flip);
-      f.control.fail = false;
-      const restarted = yield* f.construct();
-      yield* restarted.stop(f.owner, "suspend", { ...f.options, expectedRevision: 11 });
-      expect(f.requests).toEqual([
-        { version: '"initial"', desiredState: "suspended" },
-        { version: '"initial"', desiredState: "suspended" },
-      ]);
-      const observed = yield* restarted.observeWorkspace(identity.workspaceId);
-      expect(observed.kind === "stopped" && observed.completedStop).toEqual({
-        operationId: "stable-stop",
-        revision: 11,
-        action: "suspend",
-      });
-    }),
+  it.effect(
+    "replays the persisted resource version after a failed submission and central restart",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        const runtime = yield* f.construct();
+        yield* withWorkspaceActivity(
+          identity.workspaceId,
+          runtime.stop(f.owner, "suspend", f.options),
+        ).pipe(Effect.flip);
+        expect(f.requests).toHaveLength(0);
+        f.control.fail = true;
+        yield* runtime.stop(f.owner, "suspend", f.options).pipe(Effect.flip);
+        f.control.fail = false;
+        const restarted = yield* f.construct();
+        yield* restarted.stop(f.owner, "suspend", { ...f.options, expectedRevision: 11 });
+        expect(f.requests).toEqual([
+          { version: "initial", desiredState: "suspended" },
+          { version: "initial", desiredState: "suspended" },
+        ]);
+        const observed = yield* restarted.observeWorkspace(identity.workspaceId);
+        expect(observed.kind === "stopped" && observed.completedStop).toEqual({
+          operationId: "stable-stop",
+          revision: 11,
+          action: "suspend",
+        });
+      }),
   );
   it.effect("recovers a lost acceptance response without submitting another stop", () =>
     Effect.gen(function* () {
@@ -273,7 +262,7 @@ it.layer(services, { excludeTestServices: true })("durable workspace state submi
       f.control.race = true;
       yield* runtime.stop(f.owner, "suspend", f.options).pipe(Effect.flip);
       yield* runtime.stop(f.owner, "suspend", f.options).pipe(Effect.flip);
-      expect(f.requests.map((request) => request.version)).toEqual(['"initial"']);
+      expect(f.requests.map((request) => request.version)).toEqual(["initial"]);
       yield* runtime.forWorkspace(identity.workspaceId);
       yield* runtime.stop(f.owner, "suspend", { ...f.options, expectedRevision: 11 });
       expect(f.requests.map((request) => request.desiredState)).toEqual([
@@ -294,8 +283,8 @@ it.layer(services, { excludeTestServices: true })("durable workspace state submi
       f.control.failAccepted = false;
       yield* runtime.stop(f.owner, "suspend", { ...f.options, expectedRevision: 11 });
       expect(f.requests).toEqual([
-        { version: '"initial"', desiredState: "suspended" },
-        { version: '"version-1"', desiredState: "suspended" },
+        { version: "initial", desiredState: "suspended" },
+        { version: "version-1", desiredState: "suspended" },
       ]);
     }),
   );
@@ -345,7 +334,7 @@ it.layer(services, { excludeTestServices: true })("durable workspace state submi
         yield* runtime.forWorkspace(identity.workspaceId);
         yield* Enrollment.retire(identity.workspaceId, 10, observed.completedStop);
         expect(yield* Enrollment.roots).toEqual([f.owner]);
-        expect(f.requests).toEqual([{ version: '"initial"', desiredState: "running" }]);
+        expect(f.requests).toEqual([{ version: "initial", desiredState: "running" }]);
       }),
   );
   it.effect("replays a queued stop after submission failed and central service restarted", () =>
@@ -407,8 +396,8 @@ it.layer(services, { excludeTestServices: true })("durable workspace state submi
       f.control.failSubmission = false;
       expect(yield* policy.reconcileThread(f.owner)).toBe("suspend-submitted");
       expect(f.requests).toEqual([
-        { version: '"initial"', desiredState: "suspended" },
-        { version: '"queued-version"', desiredState: "suspended" },
+        { version: "initial", desiredState: "suspended" },
+        { version: "queued-version", desiredState: "suspended" },
       ]);
     }).pipe(Effect.scoped),
   );

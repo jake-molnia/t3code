@@ -1,11 +1,23 @@
 # Release deployment images
 
-The fork builds its web and execution images from `main` with `.github/workflows/sandbox-images.yml`. The execution image extends the pinned generic agent-runtime sandbox image in `images/t3/Dockerfile`. Application source, harness configuration, credential helpers, and state migrations are built in this repository.
+The fork builds its web and execution images from `main` with `.github/workflows/sandbox-images.yml`.
+Both images are built from pinned base images in `images/t3/Dockerfile`. This repository owns worker
+startup, provider harnesses, and native Kubernetes sandbox lifecycle.
 
-The workflow verifies each image before publishing `ghcr.io/jake-molnia/t3code-web` and `ghcr.io/jake-molnia/t3code-sandbox`. Its artifacts record the source revision and immutable image digest.
+The workflow verifies each image before publishing `ghcr.io/jake-molnia/t3code-web` and
+`ghcr.io/jake-molnia/t3code-sandbox`. Its artifacts record the source revision and immutable image digest.
 
-Deployment manifests, pool profiles, secrets references, and rollout ordering belong to `jake-molnia/config`. Deploy through a reviewed config PR with passing checks, then verify Flux revisions, mounted pool profiles, migrations, and application behavior. Preserve existing workspace volumes and migration ledgers.
+Render deployment resources with [`deploy/t3/render.mjs`](../../deploy/t3/render.mjs), following the
+[deployment guide](../../deploy/t3/README.md). Review rendered changes in the deployment configuration
+repository before rollout. Keep central SQLite and workspace PVCs. Run one central replica with a
+Recreate rollout so lifecycle transitions have one writer.
 
-Changes to the worker protocol require compatible head and worker images. Publish and verify pool profiles before changing the head's selected profiles. A head-only change can retain the existing worker profile when its protocol and configuration remain compatible.
+Changes to the worker protocol require compatible central and worker images. Native workspace
+placements retain the image selected at first registration. Changing a pool image applies to new
+workspaces; do not edit persisted placements to force an upgrade while compute is active.
 
-The workspace lifecycle API requires matching controller and central T3 versions. Stop the central service for this upgrade, update all pool controllers, then start the new central image. The client has no fallback to the old controller operation API. Execution-worker operations and event transport are unchanged. Complete any unfinished legacy profile-migration ledger with the old images before this API cutover; completed ledgers remain valid.
+For the first native rollout, stop the old central server and release its workers through the old
+lifecycle service. Follow the [retained-workspace cutover](../../deploy/t3/README.md#move-an-existing-installation)
+before enabling native execution. Keep the old volumes and central backup until the new installation
+has passed the isolation and recovery checks. The old profile migration script is only for completing
+legacy migrations before cutover; native execution does not call it.

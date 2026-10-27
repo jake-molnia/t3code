@@ -7850,7 +7850,10 @@ export default function ChatView(props: ChatViewProps) {
         if (event.repeat) return;
         const candidates =
           poolCatalog.snapshot?.pools.filter(
-            (pool) => pool.available && pool.providerDrivers.includes(selectedProvider),
+            (pool) =>
+              pool.available &&
+              (pool.providerDrivers.length === 0 ||
+                pool.providerDrivers.includes(selectedProvider)),
           ) ?? [];
         const index = candidates.findIndex((pool) => pool.id === selectedExecutionPoolId);
         const next = candidates[(index + 1) % candidates.length];
@@ -8982,7 +8985,10 @@ export default function ChatView(props: ChatViewProps) {
         now: Date.now(),
       });
       const pool = poolCatalog.snapshot?.pools.find((entry) => entry.id === executionPoolId);
-      if (!pool || !pool.providerDrivers.includes(provider.driverKind)) {
+      if (
+        !pool ||
+        (pool.providerDrivers.length > 0 && !pool.providerDrivers.includes(provider.driverKind))
+      ) {
         setThreadError(
           threadIdForSend,
           `Choose a compatible pool for ${selection.model} before sending.`,

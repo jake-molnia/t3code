@@ -26,7 +26,6 @@ with tempfile.TemporaryDirectory(prefix='t3-web-smoke-') as temporary:
     env = {'PATH': os.environ['PATH'], 'HOME': temporary,
            'T3CODE_HOME': temporary, 'T3_CLIPROXY_PORT': str(gateway_port),
            'T3_GATEWAY_API_KEY': secrets.token_urlsafe(32),
-           'AGENT_RUNTIME_URL': 'http://127.0.0.1:9', 'AGENT_RUNTIME_TOKEN': secrets.token_urlsafe(32),
            'T3_MCP_ADVERTISED_URL': 'http://example.invalid'}
     if 'T3_CLIPROXY_BINARY' in os.environ:
         env['T3_CLIPROXY_BINARY'] = os.environ['T3_CLIPROXY_BINARY']

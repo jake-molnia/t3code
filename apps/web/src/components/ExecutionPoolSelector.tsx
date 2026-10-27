@@ -116,7 +116,10 @@ export function ExecutionPoolSelector(props: {
             <SelectItem
               key={pool.id}
               value={`pool:${pool.id}`}
-              disabled={!pool.available || !pool.providerDrivers.includes(props.driver)}
+              disabled={
+                !pool.available ||
+                (pool.providerDrivers.length > 0 && !pool.providerDrivers.includes(props.driver))
+              }
             >
               <span className="inline-flex items-center gap-1.5">
                 <EnvironmentMachineIcon kind="cloud" className="size-3" />

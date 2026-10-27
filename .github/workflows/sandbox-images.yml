@@ -81,7 +81,7 @@ jobs:
           assert "T3_SOURCE_REVISION=" + os.environ["T3_SHA"] in config["Env"]
           PYLABEL
           printf 't3=%s\n' "$T3_SHA" > "$RUNNER_TEMP/$TARGET.sources.txt"
-          awk '/^FROM ghcr.io\/jake-molnia\/agent-runtime-sandbox@/ {print "runtime_base=" $2}' images/t3/Dockerfile >> "$RUNNER_TEMP/$TARGET.sources.txt"
+          awk '/^FROM / {for (i=2; i<=NF; i++) if ($i ~ /@sha256:/) print "build_base=" $i}' images/t3/Dockerfile >> "$RUNNER_TEMP/$TARGET.sources.txt"
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:

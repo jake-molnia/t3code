@@ -2,13 +2,16 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { expect, it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import { FetchHttpClient } from "effect/http";
-import { captureRunPromise } from "../execution/EffectHttpBoundary.ts";
-import { listenWorker } from "../execution/WorkerHttpServer.ts";
+import {
+  SandboxLifecycle,
+  SandboxLifecycleError,
+  type WorkspaceResource,
+} from "../sandbox/SandboxLifecycle.ts";
+import { poolsLayer } from "./testkit/Sandbox.ts";
 import * as Runtime from "./RuntimeClient.ts";
 import * as RuntimeSchema from "./Schema.ts";
 import * as Enrollment from "./LifecycleEnrollment.ts";
@@ -24,7 +27,7 @@ const identity = {
   generation: 1,
   incarnation: "incarnation",
   podUid: "pod",
-  protocolVersion: 1,
+  protocolVersion: 1 as const,
 };
 
 it.live(
@@ -40,76 +43,61 @@ it.live(
         acceptedVersion: "stopped",
       });
       yield* sql`INSERT INTO agent_runtime_workspaces(workspace_id,owner_thread_id,admission_revision,execution_requested,lifecycle_request_json) VALUES ('workspace','owner',10,1,${receipt})`;
-      const run = yield* captureRunPromise;
       let posts = 0;
       let ready = false;
-      const controller = yield* Effect.acquireRelease(
-        Effect.promise(() =>
-          listenWorker({
-            host: "127.0.0.1",
-            port: 0,
-            handle: async (request) => {
-              const resource = () =>
-                Response.json(
-                  {
-                    id: "workspace",
-                    pool: "local",
-                    profile: "t3",
-                    desiredState: ready ? "running" : "suspended",
-                    state: ready ? "running" : "suspended",
-                    version: ready ? "ready" : "stopped",
-                    progress: null,
-                    error: null,
-                    identity,
-                    execution: ready
-                      ? { identity, endpoint: "http://worker.test", token: "worker-token" }
-                      : null,
-                  },
-                  { headers: { etag: ready ? '"ready"' : '"stopped"' } },
-                );
-              if (request.method === "PUT" && new URL(request.url).pathname.endsWith("/state")) {
-                posts++;
-                const flags = await run(
-                  sql<{
-                    execution_requested: number;
-                  }>`SELECT execution_requested FROM agent_runtime_workspaces WHERE workspace_id='workspace'`,
-                );
-                expect(flags[0]?.execution_requested).toBe(1);
-                if (posts === 1) {
-                  await run(
-                    Enrollment.retire("workspace", 10, proof).pipe(
-                      Effect.provideService(SqlClient.SqlClient, sql),
-                    ),
-                  );
-                  return Response.json({}, { status: 412 });
-                }
-                ready = true;
-              }
-              if (ready)
-                await run(
-                  Enrollment.retire("workspace", 10, proof).pipe(
-                    Effect.provideService(SqlClient.SqlClient, sql),
-                  ),
-                );
-              return resource();
-            },
+      const resource = (): WorkspaceResource => ({
+        id: "workspace",
+        pool: "local",
+        profile: "t3",
+        desiredState: ready ? "running" : "suspended",
+        state: ready ? "running" : "suspended",
+        version: ready ? "ready" : "stopped",
+        progress: null,
+        error: null,
+        identity,
+        execution: ready
+          ? { identity, endpoint: "http://worker.test", token: "worker-token" }
+          : null,
+      });
+      const observe = () =>
+        Effect.gen(function* () {
+          if (ready)
+            yield* Enrollment.retire("workspace", 10, proof).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+              Effect.orDie,
+            );
+          return resource();
+        });
+      const lifecycle = SandboxLifecycle.of({
+        ensure: observe,
+        observe,
+        setDesiredState: () =>
+          Effect.gen(function* () {
+            posts++;
+            const flags = yield* sql<{
+              execution_requested: number;
+            }>`SELECT execution_requested FROM agent_runtime_workspaces WHERE workspace_id='workspace'`.pipe(
+              Effect.orDie,
+            );
+            expect(flags[0]?.execution_requested).toBe(1);
+            if (posts === 1) {
+              yield* Enrollment.retire("workspace", 10, proof).pipe(
+                Effect.provideService(SqlClient.SqlClient, sql),
+                Effect.orDie,
+              );
+              return yield* new SandboxLifecycleError({
+                operation: "setDesiredState",
+                httpStatus: 412,
+                cause: "retirement race",
+              });
+            }
+            ready = true;
+            return yield* observe();
           }),
-        ),
-        (server) => Effect.promise(server.close),
-      );
+      });
       const runtime = yield* Runtime.RuntimeClient.pipe(
-        Effect.provide(
-          Runtime.layer.pipe(
-            Layer.provide(
-              ConfigProvider.layer(
-                ConfigProvider.fromUnknown({
-                  AGENT_RUNTIME_URL: `http://127.0.0.1:${controller.port}`,
-                  AGENT_RUNTIME_TOKEN: "controller-token",
-                }),
-              ),
-            ),
-          ),
-        ),
+        Effect.provide(Runtime.layer.pipe(Layer.provide(poolsLayer()))),
+        Effect.provideService(SandboxLifecycle, lifecycle),
       );
       const observed = yield* runtime.observeWorkspace("workspace");
       expect(observed.kind).toBe("stopped");

@@ -1,0 +1,20 @@
+--- a/packages/core/src/tool/mcp.ts
++++ b/packages/core/src/tool/mcp.ts
+@@ -17,7 +17,7 @@
+ export const name = (server: string, tool: string) => `${namespace(server)}_${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`
+ 
+ export interface Interface {
+-  /** Wait for the initial MCP tool registration to settle. */
++  /** Refresh connected MCP tools before a session captures its tool snapshot. */
+   readonly flush: Effect.Effect<void>
+ }
+ 
+@@ -141,7 +141,7 @@
+       Stream.runForEach(() => reconcile),
+       Effect.forkScoped({ startImmediately: true }),
+     )
+-    return Service.of({ flush: Effect.asVoid(Fiber.await(initial)) })
++    return Service.of({ flush: Fiber.await(initial).pipe(Effect.andThen(reconcile), Effect.asVoid) })
+   }),
+ )
+ 

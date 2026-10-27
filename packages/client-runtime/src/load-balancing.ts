@@ -49,28 +49,45 @@ export function chooseExecutionPool(
   weights: Readonly<Record<string, number>>,
   now: number,
 ) {
-  const pools = catalog.snapshot?.pools ?? [];
+  if (now - catalog.receivedAt > 15_000 || catalog.receivedAt > now + 5_000) return null;
+  const pools = (catalog.snapshot?.pools ?? []).filter((pool) => {
+    if (
+      !pool.available ||
+      (pool.providerDrivers.length > 0 && !pool.providerDrivers.includes(driver))
+    )
+      return false;
+    const capacity = pool.requestCapacity;
+    return !(
+      capacity &&
+      capacity.availableSlots === 0 &&
+      now - capacity.sampledAt <= 15_000 &&
+      capacity.sampledAt <= now + 5_000
+    );
+  });
   const id = chooseLoadBalancedEnvironment(
-    pools
-      .filter((pool) => {
-        if (!pool.available || !pool.providerDrivers.includes(driver)) return false;
-        const capacity = pool.requestCapacity;
-        return !(
-          capacity &&
-          capacity.availableSlots === 0 &&
-          now - capacity.sampledAt <= 15_000 &&
-          capacity.sampledAt <= now + 5_000
-        );
-      })
-      .map((pool) => ({
-        environmentId: pool.id,
-        resources: pool.resources,
-        receivedAt: catalog.receivedAt,
-        weight: weights[pool.id] ?? 50,
-      })),
+    pools.map((pool) => ({
+      environmentId: pool.id,
+      resources: pool.resources,
+      receivedAt: catalog.receivedAt,
+      weight: weights[pool.id] ?? 50,
+    })),
     now,
   );
-  return pools.find((pool) => pool.id === id)?.id ?? null;
+  const measured = pools.find((pool) => pool.id === id);
+  if (measured) return measured.id;
+
+  // Native Kubernetes pools expose availability without host capacity measurements.
+  // This is a draft preference; the server validates and binds placement on submission.
+  let selected: ExecutionPoolsSnapshot["defaultPoolId"] | null = null;
+  let bestWeight = 0;
+  for (const pool of pools) {
+    const weight = weights[pool.id] ?? 50;
+    if (pool.resources === null && Number.isFinite(weight) && weight > bestWeight) {
+      selected = pool.id;
+      bestWeight = weight;
+    }
+  }
+  return selected;
 }
 
 /** A pinned draft may follow a provider change only while its workspace context is untouched. */
@@ -83,7 +100,10 @@ export function reconcileExecutionPoolProvider(input: {
   balancedPoolId: ExecutionPoolsSnapshot["defaultPoolId"] | null;
 }) {
   const selected = input.snapshot?.pools.find((pool) => pool.id === input.selectedPoolId);
-  const incompatible = selected !== undefined && !selected.providerDrivers.includes(input.driver);
+  const incompatible =
+    selected !== undefined &&
+    selected.providerDrivers.length > 0 &&
+    !selected.providerDrivers.includes(input.driver);
   return {
     incompatible,
     reselect: incompatible && input.automatic && !input.placementLocked,
